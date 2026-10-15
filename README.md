@@ -5,7 +5,7 @@ Aplicación para administrar el inventario y los expedientes individuales del ga
 ## Configurar Supabase
 
 1. Crea un proyecto en [Supabase](https://supabase.com/).
-2. En **SQL Editor**, ejecuta el contenido de [`supabase-schema.sql`](./supabase-schema.sql). Esto crea la tabla protegida por usuario y el almacenamiento privado de fotografías.
+2. En **SQL Editor**, ejecuta el contenido de [`supabase-schema.sql`](./supabase-schema.sql). Esto crea las tablas protegidas por usuario y el almacenamiento privado de fotografías. Si ya configuraste Supabase anteriormente, vuelve a ejecutar el archivo para añadir la tabla de jornadas.
 3. En **Project Settings → API**, copia la **Project URL** y la clave **anon/public**. En [`config.js`](./config.js), colócalas en `supabaseUrl` y `supabaseAnonKey`.
 4. Publica de nuevo estos archivos en Vercel. La clave `anon/public` está diseñada para el navegador y las políticas RLS limitan los datos a la cuenta autenticada. **Nunca pongas una clave `service_role` en `config.js`.**
 5. En **Authentication → URL Configuration**, agrega la URL de la app desplegada como sitio/redirección permitida.
@@ -20,6 +20,10 @@ El archivo `config.js` contiene solo valores públicos del proyecto; no contiene
 - Si el mismo animal cambió en la nube y en el dispositivo desde la última sincronización, Ganadero pregunta qué versión conservar. **Aceptar** sube la versión de este dispositivo; **Cancelar** descarga la versión de la nube. La decisión reemplaza la ficha completa del animal, incluido su historial y sus fotos.
 - Los cambios en animales diferentes se sincronizan por separado. Las eliminaciones también se propagan a los demás dispositivos.
 - Usa **Crear copia de seguridad** periódicamente. Las copias descargadas siguen siendo una protección adicional ante pérdida de acceso a la cuenta.
+
+## Jornadas de manejo
+
+En **Jornadas** puedes crear jornadas de baño, vacunación, desparasitación, inyección, medicamento, pesaje, revisión veterinaria u otra actividad. La lista de animales se toma del inventario al iniciar la jornada. Las marcas y el progreso se guardan automáticamente; puedes cerrar la app y continuar una jornada en progreso después. Al finalizar, solo los animales marcados reciben el evento en su historial; los pendientes se muestran en el resumen. Para las jornadas de pesaje, se registra el peso individual al marcar cada animal. Las jornadas también se incluyen en las copias de seguridad y, al configurar Supabase, se sincronizan con la misma cuenta.
 
 ## Uso local
 

@@ -15,8 +15,11 @@
         <span><strong>Ganadero</strong><small>REGISTRO DE CAMPO</small></span>
       </a>
       <div class="sidebar-label">GESTIÓN</div>
-      <button class="nav-item active" type="button" aria-current="page">
+      <button id="inventory-nav" class="nav-item active" type="button" aria-current="page">
         <span class="nav-icon" aria-hidden="true">▦</span> Inventario
+      </button>
+      <button id="journeys-nav" class="nav-item" type="button" aria-current="false">
+        <span class="nav-icon" aria-hidden="true">✓</span> Jornadas
       </button>
       <div class="sidebar-note">
         <span class="note-icon" aria-hidden="true">✓</span>
@@ -40,6 +43,7 @@
         <input id="restore-input" type="file" accept="application/json,.json" hidden>
       </header>
 
+      <div id="inventory-view">
       <section class="page-heading">
         <div>
           <div class="eyebrow"><span class="live-dot"></span> CONTROL DE INVENTARIO</div>
@@ -113,6 +117,32 @@
           </div>
         </div>
       </section>
+      </div>
+
+      <section id="journeys-view" hidden>
+        <div class="page-heading journey-page-heading">
+          <div>
+            <div class="eyebrow"><span class="live-dot"></span> MANEJO DEL GANADO</div>
+            <h1>Jornadas de manejo</h1>
+            <p class="subtitle">Reúne y registra tratamientos sin perder de vista ningún animal.</p>
+          </div>
+          <button id="new-journey-button" class="button button-primary" type="button"><span aria-hidden="true">＋</span> Nueva jornada</button>
+        </div>
+        <section id="active-journeys-section" class="journey-section" hidden>
+          <div class="journey-section-heading"><div><h2>En progreso</h2><p>Continúa donde lo dejaste.</p></div></div>
+          <div id="active-journeys" class="journey-card-list"></div>
+        </section>
+        <section class="journey-section">
+          <div class="journey-section-heading"><div><h2>Historial de jornadas</h2><p>Consulta jornadas anteriores y sus resultados.</p></div></div>
+          <div class="journey-table-wrap">
+            <table class="journey-table">
+              <thead><tr><th>Fecha</th><th>Actividad</th><th>Atendidos</th><th>Estado</th><th></th></tr></thead>
+              <tbody id="journey-history-rows"></tbody>
+            </table>
+            <p id="journey-history-empty" class="journey-empty" hidden>Todavía no hay jornadas. Crea una para empezar.</p>
+          </div>
+        </section>
+      </section>
       <footer class="page-footer">Los cambios se guardan localmente y se sincronizan con tu cuenta al conectarte.</footer>
     </main>
   </div>
@@ -173,6 +203,43 @@
   <dialog id="photo-dialog" class="modal photo-modal">
     <button class="icon-button photo-close" type="button" data-close="photo-dialog" aria-label="Cerrar">×</button>
     <img id="photo-large" alt="Fotografía del animal">
+  </dialog>
+
+  <dialog id="journey-create-dialog" class="modal compact-modal">
+    <form id="journey-form">
+      <div class="modal-heading">
+        <div><div class="eyebrow">NUEVA JORNADA</div><h2>Preparar manejo</h2></div>
+        <button class="icon-button" type="button" data-close="journey-create-dialog" aria-label="Cerrar">×</button>
+      </div>
+      <div class="form-grid">
+        <label class="full-width">Actividad
+          <select id="journey-type" required>
+            <option value="bath">Baño</option><option value="vaccine">Vacunación</option>
+            <option value="deworm">Desparasitación</option><option value="injection">Inyección</option>
+            <option value="medication">Aplicación de medicamento</option><option value="weight">Pesaje</option>
+            <option value="review">Revisión veterinaria</option><option value="other">Otra</option>
+          </select>
+        </label>
+        <label id="journey-name-field" class="full-width" hidden>Nombre de la actividad
+          <input id="journey-name" maxlength="120" placeholder="Ej. Aplicación de suplemento">
+        </label>
+        <label>Fecha<input id="journey-date" type="date" required></label>
+        <label id="journey-product-field" class="full-width">Producto o vacuna
+          <input id="journey-product" maxlength="120" placeholder="Ej. Bovilis o Ivermectina">
+        </label>
+        <label id="journey-dose-field">Dosis<input id="journey-dose" maxlength="120" placeholder="Ej. 5 ml"></label>
+        <label id="journey-notes-field" class="full-width">Observaciones<textarea id="journey-notes" rows="3" maxlength="2000" placeholder="Opcional"></textarea></label>
+      </div>
+      <p id="journey-no-animals" class="account-error" hidden>Agrega animales al inventario antes de iniciar una jornada.</p>
+      <div class="modal-actions">
+        <button class="button button-outline" type="button" data-close="journey-create-dialog">Cancelar</button>
+        <button id="start-journey-button" class="button button-primary" type="submit">Iniciar jornada</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="journey-dialog" class="modal journey-modal">
+    <div id="journey-content"></div>
   </dialog>
 
   <dialog id="account-dialog" class="modal compact-modal">

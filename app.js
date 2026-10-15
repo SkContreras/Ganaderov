@@ -2,17 +2,31 @@
   "use strict";
 
   const DB_NAME = "ganadero-local";
-  const DB_VERSION = 2;
+  const DB_VERSION = 3;
   const EVENT_TYPES = {
     bath: "Baño",
     weight: "Pesaje",
     vaccine: "Vacuna",
     deworm: "Desparasitación",
-    note: "Observación"
+    note: "Observación",
+    injection: "Inyección",
+    medication: "Medicamento",
+    review: "Revisión veterinaria",
+    other: "Otra actividad"
+  };
+  const JOURNEY_TYPES = {
+    bath: "Baño",
+    vaccine: "Vacunación",
+    deworm: "Desparasitación",
+    injection: "Inyección",
+    medication: "Aplicación de medicamento",
+    weight: "Pesaje",
+    review: "Revisión veterinaria",
+    other: "Otra"
   };
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const state = { animals: [], events: [], photos: [], photoUrls: new Map(), sort: "tag", direction: 1, currentAnimalId: null, animalFormSnapshot: "", toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
+  const state = { animals: [], events: [], photos: [], journeys: [], photoUrls: new Map(), sort: "tag", direction: 1, currentAnimalId: null, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyUpdating: new Set(), animalFormSnapshot: "", toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
   let cloud;
   let currentUser;
@@ -34,6 +48,10 @@
         }
         if (!database.objectStoreNames.contains("syncMeta")) database.createObjectStore("syncMeta", { keyPath: "id" });
         if (!database.objectStoreNames.contains("deletedAnimals")) database.createObjectStore("deletedAnimals", { keyPath: "id" });
+        if (!database.objectStoreNames.contains("journeys")) {
+          const store = database.createObjectStore("journeys", { keyPath: "id" });
+          store.createIndex("updatedAt", "updatedAt", { unique: false });
+        }
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error || new Error("No fue posible abrir el almacenamiento local."));
@@ -104,7 +122,9 @@
   }
 
   async function refresh() {
-    [state.animals, state.events, state.photos] = await Promise.all([getAll("animals"), getAll("events"), getAll("photos")]);
+    [state.animals, state.events, state.photos, state.journeys] = await Promise.all([
+      getAll("animals"), getAll("events"), getAll("photos"), getAll("journeys")
+    ]);
     const photoIds = new Set(state.photos.map(photo => photo.id));
     for (const [id, url] of state.photoUrls) {
       if (!photoIds.has(id)) {
@@ -113,6 +133,7 @@
       }
     }
     renderDashboard();
+    renderJourneys();
   }
 
   function buildLocalBundles(animals, events, photos, deletions) {
@@ -184,6 +205,64 @@
       remoteVersion: remoteVersionValue,
       fingerprint
     });
+  }
+
+  async function syncJourneys(localJourneys) {
+    const { data: remoteRows, error } = await cloud.from("journey_sync_records")
+      .select("journey_id, updated_at, payload");
+    if (error) throw error;
+    const remote = new Map((remoteRows || []).map(record => [record.journey_id, record]));
+    const local = new Map(localJourneys.map(journey => [journey.id, journey]));
+    const journeyIds = new Set([...local.keys(), ...remote.keys()]);
+
+    for (const journeyId of journeyIds) {
+      const localJourney = local.get(journeyId);
+      const remoteRecord = remote.get(journeyId);
+      const metadata = await getOne("syncMeta", `journey:${journeyId}`);
+      const localFingerprint = localJourney ? JSON.stringify(stableValue(localJourney)) : null;
+      const remoteFingerprintValue = remoteRecord ? JSON.stringify(stableValue(remoteRecord.payload)) : null;
+      if (localJourney && remoteRecord && localFingerprint === remoteFingerprintValue) {
+        await put("syncMeta", {
+          id: `journey:${journeyId}`, fingerprint: localFingerprint, remoteVersion: remoteRecord.updated_at
+        });
+        continue;
+      }
+      const localChanged = Boolean(localJourney && (!metadata || localFingerprint !== metadata.fingerprint));
+      const remoteChanged = Boolean(remoteRecord && (!metadata || remoteRecord.updated_at !== metadata.remoteVersion));
+      let useLocal = Boolean(localJourney && (!remoteRecord || localChanged));
+      if (localJourney && remoteRecord && localChanged && remoteChanged) {
+        useLocal = confirm(
+          `La jornada «${journeyName(localJourney)}» también cambió en otro dispositivo.\n\n` +
+          "Aceptar: conservar la versión de este dispositivo.\nCancelar: conservar la versión de la nube."
+        );
+      } else if (!localJourney && remoteRecord) {
+        useLocal = false;
+      } else if (!localJourney || !remoteRecord) {
+        useLocal = Boolean(localJourney);
+      } else if (!localChanged && remoteChanged) {
+        useLocal = false;
+      }
+
+      if (useLocal && localJourney) {
+        const { data, error: saveError } = await cloud.from("journey_sync_records").upsert({
+          owner_id: currentUser.id,
+          journey_id: journeyId,
+          payload: localJourney
+        }, { onConflict: "owner_id,journey_id" }).select("updated_at").single();
+        if (saveError) throw saveError;
+        await put("syncMeta", {
+          id: `journey:${journeyId}`, fingerprint: localFingerprint, remoteVersion: data.updated_at
+        });
+      } else if (remoteRecord) {
+        const latestLocal = await getOne("journeys", journeyId);
+        const latestFingerprint = latestLocal ? JSON.stringify(stableValue(latestLocal)) : null;
+        if (latestFingerprint !== localFingerprint) continue;
+        await put("journeys", remoteRecord.payload);
+        await put("syncMeta", {
+          id: `journey:${journeyId}`, fingerprint: remoteFingerprintValue, remoteVersion: remoteRecord.updated_at
+        });
+      }
+    }
   }
 
   async function applyRemoteRecord(record, expectedLocalFingerprint) {
@@ -314,8 +393,8 @@
     state.syncing = true;
     setSyncStatus("Sincronizando…");
     try {
-      const [animals, events, photos, deletions] = await Promise.all([
-        getAll("animals"), getAll("events"), getAll("photos"), getAll("deletedAnimals")
+      const [animals, events, photos, deletions, journeys] = await Promise.all([
+        getAll("animals"), getAll("events"), getAll("photos"), getAll("deletedAnimals"), getAll("journeys")
       ]);
       const local = buildLocalBundles(animals, events, photos, deletions);
       const { data: remoteRecords, error } = await cloud.from("animal_sync_records")
@@ -368,11 +447,13 @@
           else pendingChanges++;
         }
       }
+      await syncJourneys(journeys);
       await refresh();
       if ($("#detail-dialog").open && state.currentAnimalId) {
         if (state.animals.some(animal => animal.id === state.currentAnimalId)) openDetail(state.currentAnimalId);
         else $("#detail-dialog").close();
       }
+      if ($("#journey-dialog").open && state.currentJourneyId) renderJourneyDetail();
       setSyncStatus(pendingChanges
         ? `${pendingChanges} cambio(s) pendiente(s) · vuelve a sincronizar`
         : conflicts ? `Sincronizado · ${conflicts} conflicto(s) resuelto(s)` : "Sincronizado");
@@ -478,6 +559,286 @@
       ? "Añade tu primer animal para empezar a organizar su información."
       : "Prueba con otra búsqueda o cambia el filtro seleccionado.";
     $("#empty-add-button").hidden = !isEmptyInventory;
+  }
+
+  function journeyName(journey) {
+    return journey.name || JOURNEY_TYPES[journey.type] || "Jornada";
+  }
+
+  function journeyCounts(journey) {
+    const attended = journey.roster.filter(animal => animal.attended).length;
+    return { attended, expected: journey.roster.length, pending: journey.roster.length - attended };
+  }
+
+  function journeyStatus(journey) {
+    if (journey.status === "in_progress") return "En progreso";
+    return journey.status === "completed" ? "Completada" : "Incompleta";
+  }
+
+  function renderJourneys() {
+    const inProgress = state.journeys.filter(journey => journey.status === "in_progress")
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    $("#active-journeys-section").hidden = inProgress.length === 0;
+    $("#active-journeys").innerHTML = inProgress.map(journey => {
+      const counts = journeyCounts(journey);
+      const percent = counts.expected ? Math.round(counts.attended / counts.expected * 100) : 0;
+      return `<button class="journey-progress-card" type="button" data-open-journey="${escapeHtml(journey.id)}">
+        <span class="journey-progress-main"><strong>${escapeHtml(journeyName(journey))}</strong><span>${formatDate(journey.date)} · ${counts.expected} animales esperados</span></span>
+        <span class="journey-progress-count">${counts.attended}/${counts.expected}<small>atendidos</small></span>
+        <span class="journey-progress-track"><span style="width:${percent}%"></span></span>
+        <span class="journey-progress-pending">${counts.pending} pendientes · Continuar ›</span>
+      </button>`;
+    }).join("");
+
+    const history = state.journeys.slice().sort((a, b) =>
+      (b.completedAt || b.updatedAt).localeCompare(a.completedAt || a.updatedAt));
+    $("#journey-history-rows").innerHTML = history.map(journey => {
+      const counts = journeyCounts(journey);
+      return `<tr>
+        <td>${formatDate(journey.date)}</td>
+        <td><strong>${escapeHtml(journeyName(journey))}</strong>${journey.product ? `<small>${escapeHtml(journey.product)}</small>` : ""}</td>
+        <td>${counts.attended}/${counts.expected}</td>
+        <td><span class="journey-status ${journey.status}">${escapeHtml(journeyStatus(journey))}</span></td>
+        <td><button class="button button-outline button-small" type="button" data-open-journey="${escapeHtml(journey.id)}">Ver jornada</button></td>
+      </tr>`;
+    }).join("");
+    $("#journey-history-empty").hidden = history.length > 0;
+  }
+
+  function setMainView(view) {
+    const journeys = view === "journeys";
+    $("#inventory-view").hidden = journeys;
+    $("#journeys-view").hidden = !journeys;
+    $("#inventory-nav").classList.toggle("active", !journeys);
+    $("#journeys-nav").classList.toggle("active", journeys);
+    $("#inventory-nav").setAttribute("aria-current", journeys ? "false" : "page");
+    $("#journeys-nav").setAttribute("aria-current", journeys ? "page" : "false");
+    renderJourneys();
+  }
+
+  function openJourneyCreateForm() {
+    if (!state.animals.length) {
+      $("#journey-no-animals").hidden = false;
+      $("#start-journey-button").disabled = true;
+    } else {
+      $("#journey-no-animals").hidden = true;
+      $("#start-journey-button").disabled = false;
+    }
+    $("#journey-form").reset();
+    $("#journey-date").value = today();
+    updateJourneyFormFields();
+    $("#journey-create-dialog").showModal();
+  }
+
+  function updateJourneyFormFields() {
+    const type = $("#journey-type").value;
+    $("#journey-name-field").hidden = type !== "other";
+    $("#journey-product-field").hidden = !["vaccine", "deworm", "injection", "medication", "other"].includes(type);
+    $("#journey-dose-field").hidden = !["injection", "medication", "other"].includes(type);
+  }
+
+  async function createJourney(event) {
+    event.preventDefault();
+    if (!state.animals.length) return;
+    const type = $("#journey-type").value;
+    const journey = {
+      id: newId(),
+      type,
+      name: type === "other" ? $("#journey-name").value.trim() : "",
+      date: $("#journey-date").value,
+      product: $("#journey-product").value.trim(),
+      dose: $("#journey-dose").value.trim(),
+      notes: $("#journey-notes").value.trim(),
+      roster: state.animals.map(animal => ({
+        id: animal.id, tag: animal.tag || "", name: animal.name || "", sex: animal.sex || "",
+        color: animal.color || "", status: animal.status || "", attended: false
+      })),
+      status: "in_progress",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      completedAt: null
+    };
+    if (!journey.date || (type === "other" && !journey.name)) return;
+    try {
+      await put("journeys", journey);
+      $("#journey-create-dialog").close();
+      await refresh();
+      setMainView("journeys");
+      openJourney(journey.id);
+      scheduleSync();
+    } catch (error) {
+      showToast(`No se pudo iniciar la jornada: ${error.message}`);
+    }
+  }
+
+  function openJourney(journeyId) {
+    const journey = state.journeys.find(item => item.id === journeyId);
+    if (!journey) return;
+    state.currentJourneyId = journeyId;
+    state.journeyFilter = "all";
+    state.journeySearch = "";
+    renderJourneyDetail();
+    if (!$("#journey-dialog").open) $("#journey-dialog").showModal();
+  }
+
+  function renderJourneyDetail() {
+    const journey = state.journeys.find(item => item.id === state.currentJourneyId);
+    if (!journey) return;
+    const counts = journeyCounts(journey);
+    const percent = counts.expected ? Math.round(counts.attended / counts.expected * 100) : 0;
+    const finished = journey.status !== "in_progress";
+    const query = state.journeySearch.trim().toLocaleLowerCase("es-MX");
+    const roster = journey.roster.filter(animal => {
+      if (state.journeyFilter === "attended" && !animal.attended) return false;
+      if (state.journeyFilter === "pending" && animal.attended) return false;
+      const search = [animal.tag, animal.name, animal.sex, animal.color].filter(Boolean).join(" ").toLocaleLowerCase("es-MX");
+      return !query || search.includes(query);
+    });
+    const details = [
+      journey.product && `Producto: ${journey.product}`,
+      journey.dose && `Dosis: ${journey.dose}`,
+      journey.notes && `Observaciones: ${journey.notes}`
+    ].filter(Boolean);
+
+    $("#journey-content").innerHTML = `
+      <div class="journey-detail-header">
+        <div class="journey-detail-top">
+          <div><div class="eyebrow">JORNADA DE MANEJO</div><h2>${escapeHtml(journeyName(journey))}</h2><p>${formatDate(journey.date)} · ${counts.expected} animales esperados</p></div>
+          <button class="icon-button" type="button" data-close="journey-dialog" aria-label="Cerrar">×</button>
+        </div>
+        <div class="journey-summary">
+          <div><strong>${counts.attended} de ${counts.expected}</strong><span>animales atendidos</span></div>
+          <div><strong>${counts.pending}</strong><span>pendientes</span></div>
+          <div><strong>${percent}%</strong><span>${finished ? journeyStatus(journey) : "del progreso"}</span></div>
+        </div>
+        <div class="journey-progress-track journey-progress-large"><span style="width:${percent}%"></span></div>
+        ${details.length ? `<p class="journey-meta">${details.map(escapeHtml).join(" · ")}</p>` : ""}
+      </div>
+      <div class="journey-detail-body">
+        ${finished ? `<div class="journey-finish-message ${counts.pending ? "warning" : "success"}">${counts.pending ? `⚠ ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}. No recibirán el registro de esta jornada.` : "✓ Jornada completada. El historial de los animales atendidos fue actualizado."}</div>` : ""}
+        <div class="journey-roster-tools">
+          <label class="search-box"><span aria-hidden="true">⌕</span><input id="journey-search" type="search" placeholder="Buscar arete o nombre..." value="${escapeHtml(state.journeySearch)}" autocomplete="off"></label>
+          <div class="journey-filter" role="group" aria-label="Filtrar animales">
+            <button type="button" data-journey-filter="all" class="${state.journeyFilter === "all" ? "selected" : ""}">Todos</button>
+            <button type="button" data-journey-filter="attended" class="${state.journeyFilter === "attended" ? "selected" : ""}">Atendidos</button>
+            <button id="journey-filter-pending" type="button" data-journey-filter="pending" class="${state.journeyFilter === "pending" ? "selected" : ""}">Pendientes${counts.pending ? ` (${counts.pending})` : ""}</button>
+          </div>
+        </div>
+        <div class="journey-roster" aria-label="Animales de la jornada">
+          ${roster.length ? roster.map(animal => `
+            <button class="journey-animal ${animal.attended ? "attended" : "pending"}" type="button"
+              data-toggle-attendance="${escapeHtml(animal.id)}" ${finished ? "disabled" : ""}
+              aria-pressed="${animal.attended}" aria-label="${animal.attended ? "Atendido" : "Pendiente"}: arete ${escapeHtml(animal.tag || "sin arete")}, ${escapeHtml(animal.name || "sin nombre")}">
+              <span class="journey-check" aria-hidden="true">${animal.attended ? "✓" : ""}</span>
+              <span class="journey-animal-id">${escapeHtml(animal.tag || "Sin arete")}</span>
+              <span class="journey-animal-name">${escapeHtml(animal.name || "Sin nombre")}</span>
+              <span class="journey-animal-description">${escapeHtml([animal.sex, animal.color].filter(Boolean).join(" · ") || "Datos sin registrar")}</span>
+              <span class="journey-animal-state">${animal.attended ? "Atendido" : "Pendiente"}</span>
+            </button>`).join("") : '<p class="journey-empty">No hay animales en este filtro.</p>'}
+        </div>
+        ${!finished && counts.pending ? `<p class="journey-pending-alert">⚠ Faltan ${counts.pending} ${counts.pending === 1 ? "animal" : "animales"} por atender. Se muestran en el filtro «Pendientes».</p>` : ""}
+        ${finished && counts.pending ? `<section class="journey-pending-summary"><h3>Animales pendientes (${counts.pending})</h3><p>${journey.roster.filter(animal => !animal.attended).map(animal => `${animal.tag || "Sin arete"} · ${animal.name || "Sin nombre"}`).map(escapeHtml).join("  |  ")}</p></section>` : ""}
+        <div class="journey-modal-actions">
+          <span class="journey-status ${journey.status}">${escapeHtml(journeyStatus(journey))}</span>
+          ${!finished ? '<button class="button button-primary journey-finish-button" type="button" data-finish-journey>Finalizar jornada</button>' : ""}
+        </div>
+      </div>`;
+    const search = $("#journey-search");
+    search.addEventListener("input", () => {
+      const selectionStart = search.selectionStart;
+      state.journeySearch = search.value;
+      renderJourneyDetail();
+      const nextSearch = $("#journey-search");
+      nextSearch.focus();
+      nextSearch.setSelectionRange(selectionStart, selectionStart);
+    });
+  }
+
+  async function toggleJourneyAnimal(animalId) {
+    const journey = state.journeys.find(item => item.id === state.currentJourneyId);
+    if (!journey || journey.status !== "in_progress" || state.journeyUpdating.has(animalId)) return;
+    const selectedAnimal = journey.roster.find(animal => animal.id === animalId);
+    if (!selectedAnimal) return;
+    state.journeyUpdating.add(animalId);
+    try {
+      let weight;
+      if (journey.type === "weight" && !selectedAnimal.attended) {
+        const input = prompt(`Peso (kg) del animal ${selectedAnimal.tag || selectedAnimal.name || ""}:`);
+        if (input === null) return;
+        weight = Number(input);
+        if (!input.trim() || !Number.isFinite(weight) || weight < 0) {
+          showToast("Escribe un peso válido mayor o igual a 0 kg.");
+          return;
+        }
+      }
+      const roster = journey.roster.map(animal => animal.id === animalId
+        ? { ...animal, attended: !animal.attended, ...(journey.type === "weight" ? { weight: animal.attended ? null : weight } : {}) }
+        : animal);
+      if (roster.every((animal, index) => animal.attended === journey.roster[index].attended)) return;
+      await put("journeys", { ...journey, roster, updatedAt: new Date().toISOString() });
+      await refresh();
+      renderJourneyDetail();
+      scheduleSync();
+    } catch (error) {
+      showToast(`No se pudo actualizar la jornada: ${error.message}`);
+    } finally {
+      state.journeyUpdating.delete(animalId);
+    }
+  }
+
+  async function finishJourney() {
+    const journey = state.journeys.find(item => item.id === state.currentJourneyId);
+    if (!journey || journey.status !== "in_progress") return;
+    const counts = journeyCounts(journey);
+    if (counts.pending && !confirm(`⚠ Todavía hay ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}.\n\n¿Está seguro de que desea finalizar la jornada? Solo se registrarán los animales atendidos.`)) return;
+    const completedAt = new Date().toISOString();
+    const finishedJourney = {
+      ...journey,
+      status: counts.pending ? "incomplete" : "completed",
+      completedAt,
+      updatedAt: completedAt
+    };
+    try {
+      await transaction(["journeys", "events", "animals"], "readwrite", tx => {
+        tx.objectStore("journeys").put(finishedJourney);
+        const animalsStore = tx.objectStore("animals");
+        const eventsStore = tx.objectStore("events");
+        journey.roster.filter(animal => animal.attended).forEach(rosterAnimal => {
+          const animalRequest = animalsStore.get(rosterAnimal.id);
+          animalRequest.onsuccess = () => {
+            const animal = animalRequest.result;
+            if (animal) animalsStore.put({ ...animal, updatedAt: nextModifiedAt(animal.updatedAt) });
+          };
+          const eventType = journey.type;
+          const fields = {
+            journeyId: journey.id,
+            label: journey.type === "other" ? journey.name : journey.product,
+            product: journey.type === "other" ? journey.product : "",
+            dose: journey.dose,
+            notes: journey.notes,
+            createdAt: completedAt
+          };
+          if (journey.type === "weight") fields.weight = rosterAnimal.weight;
+          eventsStore.put({
+            id: `journey:${journey.id}:${rosterAnimal.id}`,
+            animalId: rosterAnimal.id,
+            type: eventType,
+            date: journey.date,
+            ...fields
+          });
+        });
+      });
+      await refresh();
+      renderJourneyDetail();
+      scheduleSync();
+      if (counts.pending) {
+        state.journeyFilter = "pending";
+        renderJourneyDetail();
+      }
+      showToast(counts.pending ? `Jornada finalizada. ${counts.attended} animales actualizados; ${counts.pending} pendientes.` : `Jornada completada. ${counts.attended} animales actualizados.`);
+    } catch (error) {
+      showToast(`No se pudo finalizar la jornada: ${error.message}`);
+    }
   }
 
   function sortValue(animal, key) {
@@ -654,7 +1015,7 @@
           <div class="detail-fact"><span>Producto</span><strong>${eventSummary(latestDeworm)}</strong></div>
         </div>
         <section class="detail-section">
-          <div class="detail-section-head"><h3>Historial de manejo</h3><button class="add-link" type="button" data-add-record="bath">＋ Añadir registro</button></div>
+          <div class="detail-section-head"><h3>Historial sanitario y de manejo</h3><button class="add-link" type="button" data-add-record="bath">＋ Añadir registro</button></div>
           <div class="history-list">${renderHistory(animalEvents.filter(record => record.type !== "note"))}</div>
         </section>
         <section class="detail-section">
@@ -678,8 +1039,10 @@
     return records.map(record => {
       const value = record.type === "weight" ? `<strong>${escapeHtml(record.weight)} kg</strong>`
         : record.type === "note" ? escapeHtml(record.notes)
-          : `<strong>${escapeHtml(EVENT_TYPES[record.type])}</strong>${record.label ? ` · ${escapeHtml(record.label)}` : ""}${record.notes ? ` · ${escapeHtml(record.notes)}` : ""}`;
-      return `<div class="history-item"><div class="history-date">${formatDate(record.date)}</div><div class="history-description">${value}</div><button class="history-delete" data-delete-event="${escapeHtml(record.id)}" type="button" aria-label="Eliminar registro">×</button></div>`;
+          : `<strong>${escapeHtml(EVENT_TYPES[record.type] || "Registro")}</strong>${record.label ? ` · ${escapeHtml(record.label)}` : ""}${record.product ? ` · Producto: ${escapeHtml(record.product)}` : ""}${record.dose ? ` · Dosis: ${escapeHtml(record.dose)}` : ""}${record.notes ? ` · ${escapeHtml(record.notes)}` : ""}`;
+      const journeyLink = record.journeyId && state.journeys.some(journey => journey.id === record.journeyId)
+        ? `<button class="history-journey-link" data-open-journey="${escapeHtml(record.journeyId)}" type="button">Ver jornada</button>` : "";
+      return `<div class="history-item"><div class="history-date">${formatDate(record.date)}</div><div class="history-description">${value}${record.type === "weight" && record.notes ? ` · ${escapeHtml(record.notes)}` : ""}${journeyLink}</div><button class="history-delete" data-delete-event="${escapeHtml(record.id)}" type="button" aria-label="Eliminar registro">×</button></div>`;
     }).join("");
   }
 
@@ -841,7 +1204,10 @@
 
   async function backup() {
     try {
-      const payload = { format: "ganadero-backup", version: 1, exportedAt: new Date().toISOString(), animals: state.animals, events: state.events, photos: [] };
+      const payload = {
+        format: "ganadero-backup", version: 1, exportedAt: new Date().toISOString(),
+        animals: state.animals, events: state.events, journeys: state.journeys, photos: []
+      };
       payload.photos = await Promise.all(state.photos.map(async photo => ({
         id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
         primary: photo.primary, createdAt: photo.createdAt, data: await blobToDataUrl(photo.blob)
@@ -880,6 +1246,11 @@
       if (!confirm("Importar esta copia reemplazará todos los datos guardados actualmente en este dispositivo. ¿Continuar?")) return;
       const previousAnimals = await getAll("animals");
       const animals = payload.animals.map(animal => ({ ...animal, updatedAt: nextModifiedAt(animal.updatedAt) }));
+      const journeys = payload.journeys === undefined ? state.journeys : payload.journeys;
+      if (!Array.isArray(journeys) || journeys.some(journey =>
+        !journey || typeof journey.id !== "string" || !Array.isArray(journey.roster) ||
+        !["in_progress", "completed", "incomplete"].includes(journey.status)
+      )) throw new Error("La copia contiene una jornada con formato inválido.");
       const animalIds = new Set(animals.map(animal => animal.id));
       const events = payload.events;
       const photos = await Promise.all(payload.photos.map(async item => {
@@ -891,8 +1262,9 @@
       if (events.some(record => !animalIds.has(record.animalId))) throw new Error("La copia contiene registros asociados a animales inexistentes.");
       for (const url of state.photoUrls.values()) URL.revokeObjectURL(url);
       state.photoUrls.clear();
-      await transaction(["animals", "events", "photos", "deletedAnimals"], "readwrite", tx => {
+      await transaction(["animals", "events", "photos", "deletedAnimals", "journeys"], "readwrite", tx => {
         for (const name of ["animals", "events", "photos"]) tx.objectStore(name).clear();
+        tx.objectStore("journeys").clear();
         const deletions = tx.objectStore("deletedAnimals");
         previousAnimals.filter(animal => !animalIds.has(animal.id)).forEach(animal => {
           deletions.put({ id: animal.id, deletedAt: nextModifiedAt(animal.updatedAt) });
@@ -901,6 +1273,7 @@
         animals.forEach(item => deletions.delete(item.id));
         events.forEach(item => tx.objectStore("events").put(item));
         photos.forEach(item => tx.objectStore("photos").put(item));
+        journeys.forEach(item => tx.objectStore("journeys").put(item));
       });
       await refresh();
       scheduleSync();
@@ -917,6 +1290,11 @@
     $("#empty-add-button").addEventListener("click", () => openAnimalForm());
     $("#animal-form").addEventListener("submit", saveAnimal);
     $("#record-form").addEventListener("submit", saveRecord);
+    $("#journey-form").addEventListener("submit", createJourney);
+    $("#journey-type").addEventListener("change", updateJourneyFormFields);
+    $("#inventory-nav").addEventListener("click", () => setMainView("inventory"));
+    $("#journeys-nav").addEventListener("click", () => setMainView("journeys"));
+    $("#new-journey-button").addEventListener("click", openJourneyCreateForm);
     $("#search-input").addEventListener("input", renderDashboard);
     $("#status-filter").addEventListener("change", renderDashboard);
     $$(".sort-button").forEach(button => button.addEventListener("click", () => {
@@ -976,6 +1354,14 @@
       const target = event.target.closest("button, img, label");
       if (!target) return;
       if (target.dataset.close) { requestClose(target.dataset.close); return; }
+      if (target.dataset.openJourney) { openJourney(target.dataset.openJourney); return; }
+      if (target.dataset.toggleAttendance) { toggleJourneyAnimal(target.dataset.toggleAttendance); return; }
+      if (target.dataset.journeyFilter) {
+        state.journeyFilter = target.dataset.journeyFilter;
+        renderJourneyDetail();
+        return;
+      }
+      if (target.dataset.finishJourney !== undefined) { finishJourney(); return; }
       if (target.dataset.openAnimal) { openDetail(target.dataset.openAnimal); return; }
       if (target.dataset.editAnimal) {
         const animal = state.animals.find(item => item.id === target.dataset.editAnimal);
@@ -1004,7 +1390,7 @@
         $("#search-input").focus();
       }
     });
-    [$("#animal-dialog"), $("#detail-dialog"), $("#record-dialog"), $("#photo-dialog")].forEach(dialog => {
+    [$("#animal-dialog"), $("#detail-dialog"), $("#record-dialog"), $("#photo-dialog"), $("#journey-create-dialog"), $("#journey-dialog")].forEach(dialog => {
       dialog.addEventListener("click", event => {
         if (event.target === dialog) requestClose(dialog.id);
       });

@@ -27,6 +27,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .sidebar-label, .eyebrow { color: #91978e; font-size: 10px; line-height: 1.4; font-weight: 700; letter-spacing: 1.25px; }
 .sidebar-label { padding: 0 12px; margin-bottom: 12px; }
 .nav-item { height: 43px; border: 0; border-radius: 9px; background: transparent; padding: 0 12px; color: #747c73; text-align: left; font-weight: 600; }
+.sidebar > .nav-item { width: 100%; }
 .nav-item.active { background: var(--green-soft); color: var(--green); }
 .nav-icon { margin-right: 12px; font-size: 17px; vertical-align: -1px; }
 .sidebar-note { margin-top: auto; border: 1px solid #e8ede5; background: #fafbf8; border-radius: 12px; padding: 16px 14px; }
@@ -107,6 +108,72 @@ td { height: 61px; border-top: 1px solid #f0f1ed; padding: 8px 14px; color: #687
 .empty-state p { max-width: 350px; margin: 0 auto 18px; color: #858d83; font-size: 12px; line-height: 1.6; }
 .empty-state .button { min-height: 36px; font-size: 11px; }
 .page-footer { text-align: center; padding-top: 20px; color: #a2a89f; font-size: 10px; }
+.journey-page-heading { margin-top: 40px; }
+.journey-section { margin-bottom: 23px; background: white; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.journey-section-heading { padding: 19px 21px; border-bottom: 1px solid #f0f1ed; }
+.journey-section-heading h2 { margin: 0 0 4px; font: 700 15px Manrope, sans-serif; }
+.journey-section-heading p { margin: 0; color: var(--muted); font-size: 11px; }
+.journey-card-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 12px; padding: 15px; }
+.journey-progress-card { display: grid; grid-template-columns: 1fr auto; gap: 9px 12px; padding: 15px; text-align: left; border: 1px solid #e5e9e1; border-radius: 10px; color: var(--ink); background: #fbfcfa; }
+.journey-progress-card:hover { border-color: #b8c5b4; background: #f7faf5; }
+.journey-progress-main { display: grid; gap: 5px; }
+.journey-progress-main strong { font-size: 13px; }
+.journey-progress-main > span, .journey-progress-pending { color: #828b80; font-size: 10px; }
+.journey-progress-count { color: var(--green); font-size: 18px; font-weight: 800; text-align: right; }
+.journey-progress-count small { display: block; color: #858d83; font-size: 9px; font-weight: 500; }
+.journey-progress-track { height: 7px; grid-column: 1 / -1; overflow: hidden; border-radius: 99px; background: #e9ede6; }
+.journey-progress-track > span { display: block; height: 100%; border-radius: inherit; background: #6e9a68; transition: width .15s; }
+.journey-progress-pending { grid-column: 1 / -1; }
+.journey-table-wrap { overflow-x: auto; }
+.journey-table { min-width: 570px; }
+.journey-table td { height: 57px; }
+.journey-table td strong, .journey-table td small { display: block; }
+.journey-table td small { margin-top: 3px; color: #939a90; }
+.journey-status { display: inline-flex; align-items: center; padding: 6px 9px; border-radius: 99px; background: #edf1eb; color: #737d71; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.journey-status.in_progress { color: #8a6e30; background: #faf3df; }
+.journey-status.completed { color: #4c7950; background: #edf4eb; }
+.journey-status.incomplete { color: #a26843; background: #fbf0e8; }
+.journey-empty { margin: 0; padding: 25px; text-align: center; color: #8a9287; font-size: 12px; }
+.journey-modal { width: min(920px, calc(100vw - 30px)); max-height: min(92vh, 1000px); padding: 0; }
+.journey-detail-header { padding: 22px 25px 18px; color: white; background: linear-gradient(118deg, #2d573a, #3a6848); }
+.journey-detail-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
+.journey-detail-header .eyebrow { color: #c1d3c1; }
+.journey-detail-header h2 { margin: 7px 0 4px; font: 800 23px Manrope, sans-serif; }
+.journey-detail-header p { margin: 0; color: #d0ddd0; font-size: 11px; }
+.journey-detail-header .icon-button { flex: 0 0 auto; background: rgba(255,255,255,.13); color: white; }
+.journey-summary { display: flex; gap: 30px; margin: 20px 0 14px; }
+.journey-summary > div { display: grid; gap: 3px; }
+.journey-summary strong { font-size: 19px; }
+.journey-summary span { color: #d0ddd0; font-size: 10px; }
+.journey-progress-large { height: 9px; background: rgba(255,255,255,.24); }
+.journey-progress-large > span { background: #b4d89c; }
+.journey-meta { margin: 12px 0 0 !important; color: #e4ede2 !important; line-height: 1.6; }
+.journey-detail-body { padding: 17px 22px 20px; }
+.journey-roster-tools { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.journey-roster-tools .search-box { max-width: 310px; }
+.journey-filter { display: flex; gap: 3px; padding: 3px; border-radius: 8px; background: #f1f3ef; }
+.journey-filter button { min-height: 34px; padding: 0 11px; border: 0; border-radius: 6px; background: transparent; color: #6e776c; font-size: 10px; font-weight: 700; }
+.journey-filter button.selected { background: white; color: var(--green); box-shadow: 0 1px 4px rgba(35,50,36,.1); }
+.journey-roster { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-height: 44vh; overflow-y: auto; padding: 1px 3px 1px 1px; }
+.journey-animal { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 3px 10px; min-height: 66px; padding: 9px 11px; border: 1px solid #e5e9e1; border-radius: 9px; text-align: left; color: var(--ink); background: white; }
+.journey-animal:not(:disabled):hover { border-color: #9eb69b; background: #f9fbf7; }
+.journey-animal.attended { border-color: #c9dfc6; background: #f2f8f0; }
+.journey-animal:disabled { cursor: default; }
+.journey-check { display: grid; place-items: center; width: 29px; height: 29px; grid-row: 1 / span 2; border: 2px solid #c3cbc0; border-radius: 8px; color: white; font-size: 18px; font-weight: 800; }
+.journey-animal.attended .journey-check { border-color: #568456; background: #568456; }
+.journey-animal-id { overflow: hidden; color: #657161; font-size: 10px; text-overflow: ellipsis; }
+.journey-animal-name { overflow: hidden; font-size: 13px; font-weight: 800; text-overflow: ellipsis; }
+.journey-animal-description { grid-column: 2; color: #8a9288; font-size: 10px; }
+.journey-animal-state { grid-column: 3; grid-row: 1 / span 3; color: #9b7040; font-size: 10px; font-weight: 700; }
+.journey-animal.attended .journey-animal-state { color: #4e7b50; }
+.journey-pending-alert, .journey-finish-message { margin: 13px 0 0; padding: 11px 13px; border-radius: 8px; color: #876a2d; background: #fbf5e5; font-size: 11px; line-height: 1.5; }
+.journey-finish-message.success { color: #4b714c; background: #eef5ec; }
+.journey-finish-message.warning { color: #8c643b; background: #fbf2e9; }
+.journey-pending-summary { margin-top: 14px; padding: 12px; border: 1px solid #f0e5d6; border-radius: 8px; background: #fdfaf6; }
+.journey-pending-summary h3 { margin: 0 0 7px; font-size: 11px; }
+.journey-pending-summary p { margin: 0; color: #777e74; font-size: 10px; line-height: 1.7; }
+.journey-modal-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 13px; border-top: 1px solid #edf0e9; }
+.journey-finish-button { min-height: 45px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 .modal { width: min(640px, calc(100vw - 30px)); max-height: min(90vh, 900px); padding: 25px; border: 1px solid #e8ebe4; border-radius: 14px; background: white; color: var(--ink); box-shadow: 0 25px 90px rgba(25,40,27,.23); overflow-y: auto; }
@@ -153,6 +220,8 @@ td { height: 61px; border-top: 1px solid #f0f1ed; padding: 8px 14px; color: #687
 .history-date { flex: 0 0 78px; color: #818a7e; font-size: 10px; }
 .history-description { flex: 1; color: #4d574c; font-size: 10px; line-height: 1.5; }
 .history-description strong { font-weight: 700; }
+.history-journey-link { margin-left: 8px; padding: 0; border: 0; background: none; color: var(--green); font-size: 10px; font-weight: 700; }
+.history-journey-link:hover { text-decoration: underline; }
 .history-delete { border: 0; background: none; color: #a6aca4; padding: 0 3px; font-size: 14px; }
 .history-delete:hover { color: #a34d4d; }
 .history-empty { margin: 0; color: #a2a89f; font-size: 10px; }
@@ -183,8 +252,8 @@ td { height: 61px; border-top: 1px solid #f0f1ed; padding: 8px 14px; color: #687
 @media (max-width: 780px) {
   .sidebar { width: 67px; padding: 21px 9px 14px; align-items: center; }
   .brand { margin: 0 0 36px; }
-  .brand > span:last-child, .sidebar-label, .nav-item:not(.active), .sidebar-note, .sidebar-foot { display: none; }
-  .nav-item { width: 47px; padding: 0; text-align: center; font-size: 0; }
+  .brand > span:last-child, .sidebar-label, .sidebar-note, .sidebar-foot { display: none; }
+  .sidebar > .nav-item { width: 47px; padding: 0; text-align: center; font-size: 0; }
   .nav-icon { margin: 0; font-size: 19px; }
   .main-content { margin-left: 67px; padding: 0 17px 28px; }
   .topbar { height: 59px; }
@@ -198,6 +267,7 @@ td { height: 61px; border-top: 1px solid #f0f1ed; padding: 8px 14px; color: #687
   .table-tools { width: 100%; }
   .search-box { flex: 1; width: auto; }
   .detail-basic { grid-template-columns: repeat(2, 1fr); }
+  .journey-roster { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
   .sidebar { width: 55px; padding-left: 5px; padding-right: 5px; }
@@ -218,5 +288,15 @@ td { height: 61px; border-top: 1px solid #f0f1ed; padding: 8px 14px; color: #687
   .detail-actions { flex-wrap: wrap; }
   .form-grid { gap: 11px 9px; }
   .gallery { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .journey-page-heading { display: flex; }
+  .journey-page-heading > .button { margin-top: 0; padding: 0 10px; font-size: 10px; }
+  .journey-summary { gap: 18px; }
+  .journey-summary strong { font-size: 16px; }
+  .journey-roster-tools { align-items: stretch; flex-direction: column; }
+  .journey-roster-tools .search-box { max-width: none; width: 100%; }
+  .journey-filter button { flex: 1; padding: 0 7px; }
+  .journey-detail-body { padding: 14px 13px 16px; }
+  .journey-detail-header { padding: 18px 16px 15px; }
+  .journey-modal { padding: 0; }
   kbd { display: none; }
 }

@@ -86,3 +86,44 @@ create policy "Users can delete their animal photos"
     bucket_id = 'animal-photos'
     and (storage.foldername(name))[1] = auth.uid()::text
   );
+
+create table if not exists public.journey_sync_records (
+  owner_id uuid not null references auth.users (id) on delete cascade,
+  journey_id text not null,
+  updated_at timestamptz not null default now(),
+  payload jsonb not null,
+  primary key (owner_id, journey_id)
+);
+
+alter table public.journey_sync_records enable row level security;
+
+create or replace function public.set_journey_sync_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists set_journey_sync_updated_at on public.journey_sync_records;
+create trigger set_journey_sync_updated_at
+  before update on public.journey_sync_records
+  for each row execute function public.set_journey_sync_updated_at();
+
+drop policy if exists "Users can read their journeys" on public.journey_sync_records;
+create policy "Users can read their journeys"
+  on public.journey_sync_records for select
+  using (auth.uid() = owner_id);
+
+drop policy if exists "Users can create their journeys" on public.journey_sync_records;
+create policy "Users can create their journeys"
+  on public.journey_sync_records for insert
+  with check (auth.uid() = owner_id);
+
+drop policy if exists "Users can update their journeys" on public.journey_sync_records;
+create policy "Users can update their journeys"
+  on public.journey_sync_records for update
+  using (auth.uid() = owner_id)
+  with check (auth.uid() = owner_id);
