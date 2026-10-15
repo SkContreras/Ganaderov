@@ -21,6 +21,9 @@
       <button id="journeys-nav" class="nav-item" type="button" aria-current="false">
         <span class="nav-icon" aria-hidden="true">✓</span> Jornadas
       </button>
+      <button id="calculator-nav" class="nav-item" type="button" aria-current="false">
+        <span class="nav-icon" aria-hidden="true">⌗</span> Calculadora
+      </button>
       <div class="sidebar-note">
         <span class="note-icon" aria-hidden="true">✓</span>
         <strong>Tus datos, bajo tu control</strong>
@@ -32,7 +35,7 @@
 
     <main class="main-content">
       <header class="topbar">
-        <div class="breadcrumb">Gestión del rancho <span>/</span> <strong>Ganado</strong></div>
+        <div class="breadcrumb">Gestión del rancho <span>/</span> <strong id="breadcrumb-current">Ganado</strong></div>
         <div class="account-controls">
           <span id="account-label" class="account-label">Sin sesión</span>
           <button id="sync-button" class="button button-outline button-small" type="button" disabled>Sincronizar</button>
@@ -143,6 +146,75 @@
           </div>
         </section>
       </section>
+      <section id="calculator-view" hidden>
+        <div class="page-heading calculator-page-heading">
+          <div>
+            <div class="eyebrow"><span class="live-dot"></span> PLANEACIÓN DE VENTA</div>
+            <h1>Calculadora de peso y valor</h1>
+            <p class="subtitle">Compara una venta hoy con un escenario de espera usando tus pesajes y las cotizaciones que captures.</p>
+          </div>
+        </div>
+        <div class="calculator-layout">
+          <form id="calculator-form" class="calculator-card">
+            <section class="calculator-group">
+              <h2>Animal y crecimiento</h2>
+              <div class="calculator-fields">
+                <label class="full-width">Animal del inventario
+                  <select id="calculator-animal">
+                    <option value="">Sin seleccionar · captura manual</option>
+                  </select>
+                </label>
+                <label>Peso actual (kg)<input id="calculator-weight" type="number" min="0" step="0.1" placeholder="Ej. 188" inputmode="decimal"></label>
+                <label>Fecha base del peso<input id="calculator-baseline-date" type="date"></label>
+                <label>GMD reciente (kg/día)<input id="calculator-gain" type="number" step="0.01" placeholder="Calculada con dos pesajes o captura manual" inputmode="decimal"></label>
+                <p id="calculator-weight-note" class="calculator-note full-width">Selecciona un animal para cargar sus pesajes. La GMD reciente usa las fechas distintas dentro de los últimos 30 días de pesajes.</p>
+                <label>Días que esperas<input id="calculator-days" type="number" min="0" step="1" value="30" inputmode="numeric"></label>
+                <label>Costo diario por animal (MXN)<input id="calculator-cost" type="number" min="0" step="0.01" value="0" inputmode="decimal"></label>
+              </div>
+            </section>
+            <section class="calculator-group">
+              <div class="calculator-group-heading">
+                <div><h2>Cotización de hoy</h2><p>Captura los precios de la categoría que corresponda.</p></div>
+                <a href="https://www.mexicoganadero.com/precios/" target="_blank" rel="noopener noreferrer">Consultar fuente ↗</a>
+              </div>
+              <div class="calculator-fields">
+                <label>Categoría y rango actual<input id="calculator-current-category" maxlength="100" placeholder="Ej. Becerro CN, 151–180 kg"></label>
+                <label>Fecha de la cotización<input id="calculator-price-date" type="date"></label>
+                <label>Precio mínimo (MXN/kg)<input id="calculator-current-min" type="number" min="0" step="0.01" placeholder="Opcional" inputmode="decimal"></label>
+                <label>Precio promedio (MXN/kg)<input id="calculator-current-average" type="number" min="0" step="0.01" placeholder="Requerido para calcular" inputmode="decimal"></label>
+                <label>Precio máximo (MXN/kg)<input id="calculator-current-max" type="number" min="0" step="0.01" placeholder="Opcional" inputmode="decimal"></label>
+              </div>
+            </section>
+            <section class="calculator-group">
+              <div class="calculator-group-heading">
+                <div><h2>Siguiente rango de peso</h2><p>Opcional; permite estimar el valor con otra categoría.</p></div>
+              </div>
+              <div class="calculator-fields">
+                <label>Categoría<input id="calculator-next-category" maxlength="100" placeholder="Ej. Becerro CN, 181–200 kg"></label>
+                <label>Desde este peso (kg)<input id="calculator-next-threshold" type="number" min="0" step="0.1" placeholder="Ej. 181" inputmode="decimal"></label>
+                <label>Precio mínimo (MXN/kg)<input id="calculator-next-min" type="number" min="0" step="0.01" placeholder="Opcional" inputmode="decimal"></label>
+                <label>Precio promedio (MXN/kg)<input id="calculator-next-average" type="number" min="0" step="0.01" placeholder="Opcional" inputmode="decimal"></label>
+                <label>Precio máximo (MXN/kg)<input id="calculator-next-max" type="number" min="0" step="0.01" placeholder="Opcional" inputmode="decimal"></label>
+                <label class="full-width">Precio futuro supuesto (MXN/kg)<input id="calculator-future-price" type="number" min="0" step="0.01" placeholder="Opcional · reemplaza el precio del siguiente rango"></label>
+              </div>
+            </section>
+          </form>
+          <section class="calculator-results" aria-live="polite">
+            <div class="calculator-result-heading"><div class="eyebrow">COMPARACIÓN ESTIMADA</div><h2>Escenarios de venta</h2></div>
+            <p id="calculator-result-message" class="calculator-result-message">Selecciona un animal o captura el peso, la GMD y una cotización promedio para calcular.</p>
+            <div id="calculator-result-values" class="calculator-result-values">
+              <article class="calculator-result-card"><span>Peso proyectado</span><strong id="calculator-projected-weight">—</strong><small id="calculator-projection-detail">Ingresa peso, GMD y días.</small></article>
+              <article class="calculator-result-card"><span>Venta hoy · precio promedio</span><strong id="calculator-current-value">—</strong><small id="calculator-current-range">Captura una cotización para valorar.</small></article>
+              <article class="calculator-result-card"><span>Venta al esperar · bruta</span><strong id="calculator-future-value">—</strong><small id="calculator-future-detail">Depende del peso y precio del escenario.</small></article>
+              <article class="calculator-result-card calculator-result-highlight"><span>Diferencia tras costo estimado</span><strong id="calculator-net-difference">—</strong><small>Compara ingreso bruto futuro menos venta de hoy y costos diarios indicados.</small></article>
+            </div>
+            <button id="calculator-save-forecast" class="button button-primary calculator-save-forecast" type="button" disabled>Guardar estimación para evaluar después</button>
+            <p id="calculator-forecast-save-note" class="calculator-note">Selecciona un animal para guardar la estimación en su expediente y compararla con una pesada posterior.</p>
+            <p id="calculator-category-note" class="calculator-note"></p>
+            <p class="calculator-disclaimer">Estimación, no cotización ni garantía de crecimiento o precio. El precio futuro solo usa el supuesto o la cotización del rango que captures. No incluye transporte, comisiones, mermas ni otros gastos. Las cotizaciones y costos capturados no se guardan ni sincronizan; se pierden al recargar la aplicación.</p>
+          </section>
+        </div>
+      </section>
       <footer class="page-footer">Los cambios se guardan localmente y se sincronizan con tu cuenta al conectarte.</footer>
     </main>
   </div>
@@ -161,7 +233,10 @@
           <label>Nombre <span class="optional">Opcional</span><input id="animal-name" name="name" maxlength="100" placeholder="Ej. Luna"></label>
           <label>Sexo<select id="animal-sex" name="sex"><option value="">No registrado</option><option>Hembra</option><option>Macho</option></select></label>
           <label>Color<input id="animal-color" name="color" maxlength="100" placeholder="Ej. Blanca"></label>
-          <label>Fecha de nacimiento<input id="animal-birth" name="birthDate" type="date"></label>
+          <label>Fecha de nacimiento confirmada<input id="animal-birth" name="birthDate" type="date"></label>
+          <label>Edad aproximada · años<input id="animal-age-years" type="number" min="0" step="1" placeholder="Ej. 2" inputmode="numeric"></label>
+          <label>Edad aproximada · meses<input id="animal-age-months" type="number" min="0" max="11" step="1" placeholder="0–11" inputmode="numeric"></label>
+          <p class="calculator-note full-width">Usa la fecha confirmada o una edad aproximada. La edad estimada se guarda como tal y no se convierte en una fecha de nacimiento inventada.</p>
           <label>Estado<select id="animal-status" name="status"><option>Activo</option><option>Vendido</option><option>Fallecido</option><option>Otro</option></select></label>
         </div>
       </div>

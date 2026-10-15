@@ -2,7 +2,7 @@
   "use strict";
 
   const DB_NAME = "ganadero-local";
-  const DB_VERSION = 3;
+  const DB_VERSION = 4;
   const EVENT_TYPES = {
     bath: "Baño",
     weight: "Pesaje",
@@ -26,7 +26,7 @@
   };
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const state = { animals: [], events: [], photos: [], journeys: [], photoUrls: new Map(), sort: "tag", direction: 1, currentAnimalId: null, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyUpdating: new Set(), animalFormSnapshot: "", toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
+  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), sort: "tag", direction: 1, currentAnimalId: null, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyUpdating: new Set(), animalFormSnapshot: "", calculatorProjection: null, calculatorMeasuredGain: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
   let cloud;
   let currentUser;
@@ -51,6 +51,11 @@
         if (!database.objectStoreNames.contains("journeys")) {
           const store = database.createObjectStore("journeys", { keyPath: "id" });
           store.createIndex("updatedAt", "updatedAt", { unique: false });
+        }
+        if (!database.objectStoreNames.contains("growthForecasts")) {
+          const store = database.createObjectStore("growthForecasts", { keyPath: "id" });
+          store.createIndex("animalId", "animalId", { unique: false });
+          store.createIndex("targetDate", "targetDate", { unique: false });
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -122,8 +127,8 @@
   }
 
   async function refresh() {
-    [state.animals, state.events, state.photos, state.journeys] = await Promise.all([
-      getAll("animals"), getAll("events"), getAll("photos"), getAll("journeys")
+    [state.animals, state.events, state.photos, state.journeys, state.forecasts] = await Promise.all([
+      getAll("animals"), getAll("events"), getAll("photos"), getAll("journeys"), getAll("growthForecasts")
     ]);
     const photoIds = new Set(state.photos.map(photo => photo.id));
     for (const [id, url] of state.photoUrls) {
@@ -134,14 +139,16 @@
     }
     renderDashboard();
     renderJourneys();
+    renderCalculatorAnimalOptions();
   }
 
-  function buildLocalBundles(animals, events, photos, deletions) {
+  function buildLocalBundles(animals, events, photos, forecasts, deletions) {
     const bundles = new Map();
-    animals.forEach(animal => bundles.set(animal.id, { animal, events: [], photos: [], deletedAt: null }));
+    animals.forEach(animal => bundles.set(animal.id, { animal, events: [], photos: [], forecasts: [], deletedAt: null }));
     events.forEach(record => bundles.get(record.animalId)?.events.push(record));
     photos.forEach(photo => bundles.get(photo.animalId)?.photos.push(photo));
-    deletions.forEach(deletion => bundles.set(deletion.id, { animal: null, events: [], photos: [], deletedAt: deletion.deletedAt }));
+    forecasts.forEach(forecast => bundles.get(forecast.animalId)?.forecasts.push(forecast));
+    deletions.forEach(deletion => bundles.set(deletion.id, { animal: null, events: [], photos: [], forecasts: [], deletedAt: deletion.deletedAt }));
     return bundles;
   }
 
@@ -163,35 +170,39 @@
       primary: Boolean(photo.primary), createdAt: photo.createdAt
     })).sort((a, b) => a.id.localeCompare(b.id));
     const events = bundle.events.slice().sort((a, b) => a.id.localeCompare(b.id));
+    const forecasts = (bundle.forecasts || []).slice().sort((a, b) => a.id.localeCompare(b.id));
     return JSON.stringify(stableValue({
       deletedAt,
       animal: bundle.animal,
       events,
+      forecasts,
       photos
     }));
   }
 
   function remoteFingerprint(record) {
-    if (record.deleted_at) return bundleFingerprint({ animal: null, events: [], photos: [], deletedAt: record.deleted_at });
+    if (record.deleted_at) return bundleFingerprint({ animal: null, events: [], photos: [], forecasts: [], deletedAt: record.deleted_at });
     const payload = record.payload || {};
     return bundleFingerprint({
       animal: payload.animal,
       events: payload.events || [],
+      forecasts: payload.forecasts || [],
       photos: payload.photos || [],
       deletedAt: null
     });
   }
 
   async function getLocalBundle(animalId) {
-    const [animal, events, photos, deletion] = await Promise.all([
+    const [animal, events, photos, forecasts, deletion] = await Promise.all([
       getOne("animals", animalId),
       getAllByIndex("events", "animalId", animalId),
       getAllByIndex("photos", "animalId", animalId),
+      getAllByIndex("growthForecasts", "animalId", animalId),
       getOne("deletedAnimals", animalId)
     ]);
-    if (deletion) return { animal: null, events: [], photos: [], deletedAt: deletion.deletedAt };
+    if (deletion) return { animal: null, events: [], photos: [], forecasts: [], deletedAt: deletion.deletedAt };
     if (!animal) return null;
-    return { animal, events, photos, deletedAt: null };
+    return { animal, events, photos, forecasts, deletedAt: null };
   }
 
   function remoteVersion(record) {
@@ -270,7 +281,8 @@
     let downloaded = null;
     if (!deletedAt) {
       const { animal, events, photos } = record.payload || {};
-      if (!animal || animal.id !== record.animal_id || !Array.isArray(events) || !Array.isArray(photos)) {
+      const forecasts = record.payload?.forecasts || [];
+      if (!animal || animal.id !== record.animal_id || !Array.isArray(events) || !Array.isArray(photos) || !Array.isArray(forecasts)) {
         throw new Error(`Los datos sincronizados del animal ${record.animal_id} no son válidos.`);
       }
       const storedPhotos = await Promise.all(photos.map(async photo => {
@@ -278,7 +290,7 @@
         if (error) throw error;
         return { ...photo, blob: data };
       }));
-      downloaded = { animal, events, photos: storedPhotos };
+      downloaded = { animal, events, photos: storedPhotos, forecasts };
     }
     const currentBundle = await getLocalBundle(record.animal_id);
     const currentFingerprint = currentBundle ? bundleFingerprint(currentBundle) : null;
@@ -289,10 +301,11 @@
       if (url) URL.revokeObjectURL(url);
       state.photoUrls.delete(photo.id);
     });
-    await transaction(["animals", "events", "photos", "deletedAnimals"], "readwrite", tx => {
+    await transaction(["animals", "events", "photos", "growthForecasts", "deletedAnimals"], "readwrite", tx => {
       const animalStore = tx.objectStore("animals");
       const eventStore = tx.objectStore("events");
       const photoStore = tx.objectStore("photos");
+      const forecastStore = tx.objectStore("growthForecasts");
       const deleteChildren = store => {
         const request = store.index("animalId").openCursor(IDBKeyRange.only(record.animal_id));
         request.onsuccess = () => {
@@ -305,6 +318,7 @@
       };
       deleteChildren(eventStore);
       deleteChildren(photoStore);
+      deleteChildren(forecastStore);
       animalStore.delete(record.animal_id);
       if (deletedAt) {
         tx.objectStore("deletedAnimals").put({ id: record.animal_id, deletedAt });
@@ -313,6 +327,7 @@
         animalStore.put(downloaded.animal);
         downloaded.events.forEach(item => eventStore.put(item));
         downloaded.photos.forEach(item => photoStore.put(item));
+        downloaded.forecasts.forEach(item => forecastStore.put(item));
       }
     });
     return true;
@@ -359,6 +374,7 @@
       payload = {
         animal: bundle.animal,
         events: bundle.events,
+        forecasts: bundle.forecasts || [],
         photos
       };
     }
@@ -393,10 +409,10 @@
     state.syncing = true;
     setSyncStatus("Sincronizando…");
     try {
-      const [animals, events, photos, deletions, journeys] = await Promise.all([
-        getAll("animals"), getAll("events"), getAll("photos"), getAll("deletedAnimals"), getAll("journeys")
+      const [animals, events, photos, forecasts, deletions, journeys] = await Promise.all([
+        getAll("animals"), getAll("events"), getAll("photos"), getAll("growthForecasts"), getAll("deletedAnimals"), getAll("journeys")
       ]);
-      const local = buildLocalBundles(animals, events, photos, deletions);
+      const local = buildLocalBundles(animals, events, photos, forecasts, deletions);
       const { data: remoteRecords, error } = await cloud.from("animal_sync_records")
         .select("animal_id, modified_at, deleted_at, payload");
       if (error) throw error;
@@ -498,6 +514,32 @@
     if (years === 0 && remaining === 0) return "Menos de un mes";
     return [years ? `${years} ${years === 1 ? "año" : "años"}` : "", remaining ? `${remaining} ${remaining === 1 ? "mes" : "meses"}` : ""].filter(Boolean).join(", ");
   }
+  function estimatedAgeMonths(ageEstimate, asOf = today()) {
+    if (!ageEstimate || (!Number.isInteger(ageEstimate.monthsAtRecord) && !Number.isFinite(ageEstimate.daysAtRecord))) return null;
+    const recordedDay = Date.parse(`${ageEstimate.recordedAt}T00:00:00Z`) / 86400000;
+    const currentDay = Date.parse(`${asOf}T00:00:00Z`) / 86400000;
+    if (!Number.isFinite(recordedDay) || !Number.isFinite(currentDay)) return null;
+    const elapsedDays = Math.max(0, currentDay - recordedDay);
+    const recordedMonths = Number.isInteger(ageEstimate.monthsAtRecord)
+      ? ageEstimate.monthsAtRecord
+      : Math.floor((ageEstimate.daysAtRecord + 1e-9) / 30.436875);
+    return recordedMonths + Math.floor((elapsedDays + 1e-9) / 30.436875);
+  }
+  function formatEstimatedAge(ageEstimate) {
+    const months = estimatedAgeMonths(ageEstimate);
+    if (months === null) return "No registrado";
+    if (months === 0) return "0 meses (aproximada)";
+    const years = Math.floor(months / 12);
+    const remaining = months % 12;
+    const label = [years ? `${years} ${years === 1 ? "año" : "años"}` : "", remaining ? `${remaining} ${remaining === 1 ? "mes" : "meses"}` : ""]
+      .filter(Boolean).join(", ");
+    return `${label} (aproximada)`;
+  }
+  function estimatedAgeInputParts(ageEstimate) {
+    const totalMonths = estimatedAgeMonths(ageEstimate);
+    if (totalMonths === null) return { years: "", months: "" };
+    return { years: String(Math.floor(totalMonths / 12)), months: String(totalMonths % 12) };
+  }
   function eventFor(animalId, type) {
     return state.events.filter(event => event.animalId === animalId && event.type === type)
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))[0];
@@ -510,6 +552,499 @@
     if (!photo?.blob) return "";
     if (!state.photoUrls.has(photo.id)) state.photoUrls.set(photo.id, URL.createObjectURL(photo.blob));
     return state.photoUrls.get(photo.id);
+  }
+
+  function weightHistory(animalId) {
+    const weightsByDate = new Map();
+    state.events.filter(record => record.animalId === animalId && record.type === "weight")
+      .forEach(record => {
+        const weight = Number(record.weight);
+        const day = Date.parse(`${record.date}T00:00:00Z`) / 86400000;
+        if (!Number.isFinite(weight) || weight < 0 || !Number.isFinite(day)) return;
+        const records = weightsByDate.get(record.date) || { weights: [], eventIds: [] };
+        records.weights.push(weight);
+        records.eventIds.push(record.id);
+        weightsByDate.set(record.date, records);
+      });
+    return [...weightsByDate.entries()]
+      .map(([date, records]) => ({
+        date,
+        day: Date.parse(`${date}T00:00:00Z`) / 86400000,
+        weight: records.weights.reduce((sum, weight) => sum + weight, 0) / records.weights.length,
+        count: records.weights.length,
+        eventIds: records.eventIds
+      }))
+      .sort((a, b) => a.day - b.day);
+  }
+
+  function recentGrowthBasis(points, windowDays = 30) {
+    if (points.length < 2) return null;
+    const latest = points[points.length - 1];
+    const recent = points.filter(point => point.day >= latest.day - windowDays && point.day <= latest.day);
+    if (recent.length < 2) return null;
+    const first = recent[0];
+    const elapsedDays = latest.day - first.day;
+    if (elapsedDays <= 0) return null;
+    const segmentGains = recent.slice(1).map((point, index) => {
+      const previous = recent[index];
+      return (point.weight - previous.weight) / (point.day - previous.day);
+    });
+    const hasGainAndLoss = segmentGains.some(value => value > 0) && segmentGains.some(value => value < 0);
+    return {
+      first,
+      latest,
+      points: recent,
+      elapsedDays,
+      gainKgPerDay: (latest.weight - first.weight) / elapsedDays,
+      hasGainAndLoss,
+      segmentGains
+    };
+  }
+
+  function projectWeight(weight, gainKgPerDay, days, baselineDate) {
+    const baselineDay = Date.parse(`${baselineDate}T00:00:00Z`) / 86400000;
+    if (!Number.isFinite(weight) || !Number.isFinite(gainKgPerDay) ||
+        !Number.isFinite(days) || days < 0 || !Number.isFinite(baselineDay)) return null;
+    const targetDay = baselineDay + days;
+    return {
+      baselineDate,
+      days,
+      gainKgPerDay,
+      predictedWeight: weight + gainKgPerDay * days,
+      targetDate: new Date(targetDay * 86400000).toISOString().slice(0, 10)
+    };
+  }
+
+  function evaluateForecast(forecast, actualDate, actualWeight) {
+    if (forecast.status !== "pending" || actualDate < forecast.targetDate) return null;
+    const errorKg = actualWeight - forecast.predictedWeight;
+    return {
+      ...forecast,
+      status: "evaluated",
+      actualDate,
+      actualWeight,
+      errorKg,
+      absoluteErrorKg: Math.abs(errorKg),
+      absoluteErrorPercent: forecast.predictedWeight === 0 ? null : Math.abs(errorKg) / Math.abs(forecast.predictedWeight) * 100,
+      evaluatedAt: new Date().toISOString()
+    };
+  }
+
+  function pendingForecastUpdates(forecasts, animalId, weightEvents) {
+    const actualWeights = weightEvents
+      .filter(record => record.animalId === animalId && record.type === "weight" &&
+        Number.isFinite(Number(record.weight)) && Number(record.weight) >= 0)
+      .sort((a, b) => a.date.localeCompare(b.date) ||
+        String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    return forecasts.filter(forecast => forecast.animalId === animalId && forecast.status === "pending")
+      .map(forecast => {
+        const actual = actualWeights.find(record =>
+          record.date >= forecast.targetDate && record.createdAt >= forecast.createdAt);
+        return actual ? evaluateForecast(forecast, actual.date, Number(actual.weight)) : null;
+      })
+      .filter(Boolean);
+  }
+
+  function renderCalculatorAnimalOptions() {
+    const select = $("#calculator-animal");
+    if (!select) return;
+    const selected = select.value;
+    const availableAnimals = state.animals.filter(animal => !["Vendido", "Fallecido", "Baja"].includes(animal.status));
+    select.innerHTML = `<option value="">Sin seleccionar · captura manual</option>${availableAnimals.map(animal => {
+      const label = [animal.tag ? `Arete ${animal.tag}` : "", animal.name || "Sin nombre"].filter(Boolean).join(" · ");
+      return `<option value="${escapeHtml(animal.id)}">${escapeHtml(label)}</option>`;
+    }).join("")}`;
+    if (availableAnimals.some(animal => animal.id === selected)) {
+      select.value = selected;
+    } else {
+      select.value = "";
+      if (selected) {
+        $("#calculator-weight").value = "";
+        $("#calculator-gain").value = "";
+        $("#calculator-weight-note").textContent = "El animal seleccionado ya no está disponible. Selecciona otro o captura los datos manualmente.";
+      }
+    }
+    updateCalculator();
+  }
+
+  function loadCalculatorAnimal() {
+    const animal = state.animals.find(item => item.id === $("#calculator-animal").value);
+    if (!animal) {
+      state.calculatorMeasuredGain = null;
+      $("#calculator-weight").value = "";
+      $("#calculator-baseline-date").value = today();
+      $("#calculator-gain").value = "";
+      $("#calculator-weight-note").textContent = "Captura un peso, fecha base y GMD manual para evaluar un escenario. Una GMD manual es un supuesto, no una medición del crecimiento.";
+      updateCalculator();
+      return;
+    }
+    const points = weightHistory(animal.id);
+    const latest = points[points.length - 1];
+    const basis = recentGrowthBasis(points);
+    const daysSinceLatest = latest
+      ? Math.floor(Date.parse(`${today()}T00:00:00Z`) / 86400000 - latest.day)
+      : null;
+    const staleNotice = daysSinceLatest >= 30
+      ? ` Aviso: esta pesada tiene ${daysSinceLatest} días; la GMD puede no representar el ritmo actual.`
+      : "";
+    state.calculatorMeasuredGain = basis ? { animalId: animal.id, value: Number(basis.gainKgPerDay.toFixed(3)), basis } : null;
+    $("#calculator-weight").value = latest ? latest.weight.toFixed(1) : "";
+    $("#calculator-baseline-date").value = latest?.date || today();
+    $("#calculator-gain").value = basis ? basis.gainKgPerDay.toFixed(3) : "";
+    if (!latest) {
+      $("#calculator-weight-note").textContent = "Este animal no tiene pesajes. Registra uno en su ficha; una GMD manual será un supuesto, no una medición del crecimiento.";
+    } else if (!basis) {
+      $("#calculator-weight-note").textContent = `Última pesada: ${formatDate(latest.date)}. No hay dos fechas distintas en los últimos 30 días de pesajes para calcular una GMD reciente.${staleNotice}`;
+    } else {
+      $("#calculator-weight-note").textContent = `Última pesada: ${formatDate(latest.date)}. GMD calculada con ${basis.points.length} fechas en los últimos 30 días de pesajes, del ${formatDate(basis.first.date)} al ${formatDate(basis.latest.date)} (${basis.elapsedDays} días reales); puedes modificarla.${staleNotice}`;
+    }
+    updateCalculator();
+  }
+
+  function calculatorNumber(id) {
+    const value = $(id).value.trim();
+    if (!value) return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function formatCurrency(value) {
+    return new Intl.NumberFormat("es-MX", {
+      style: "currency", currency: "MXN", maximumFractionDigits: 2
+    }).format(value);
+  }
+
+  function formatProjectedWeight(value) {
+    return `${new Intl.NumberFormat("es-MX", { minimumFractionDigits: 1, maximumFractionDigits: 2 }).format(value)} kg`;
+  }
+
+  function setCalculatorMessage(message, isWarning = false) {
+    const element = $("#calculator-result-message");
+    element.textContent = message;
+    element.classList.toggle("is-warning", isWarning);
+  }
+
+  function updateCalculator() {
+    const weight = calculatorNumber("#calculator-weight");
+    const gain = calculatorNumber("#calculator-gain");
+    const days = calculatorNumber("#calculator-days");
+    const dailyCost = calculatorNumber("#calculator-cost");
+    const baselineDate = $("#calculator-baseline-date").value;
+    const selectedAnimalId = $("#calculator-animal").value;
+    state.calculatorProjection = null;
+    $("#calculator-save-forecast").disabled = true;
+    $("#calculator-forecast-save-note").textContent = "Selecciona un animal para guardar la estimación en su expediente y compararla con una pesada posterior.";
+    const currentAverage = calculatorNumber("#calculator-current-average");
+    const currentMin = calculatorNumber("#calculator-current-min");
+    const currentMax = calculatorNumber("#calculator-current-max");
+    const nextThreshold = calculatorNumber("#calculator-next-threshold");
+    const nextAverage = calculatorNumber("#calculator-next-average");
+    const futurePrice = calculatorNumber("#calculator-future-price");
+    const nextMin = calculatorNumber("#calculator-next-min");
+    const nextMax = calculatorNumber("#calculator-next-max");
+    const resetResults = () => {
+      $("#calculator-projected-weight").textContent = "—";
+      $("#calculator-projection-detail").textContent = "Ingresa peso, GMD y días.";
+      $("#calculator-current-value").textContent = "—";
+      $("#calculator-current-range").textContent = "Captura una cotización para valorar.";
+      $("#calculator-future-value").textContent = "—";
+      $("#calculator-future-detail").textContent = "Depende del peso y precio del escenario.";
+      $("#calculator-net-difference").textContent = "—";
+      $("#calculator-category-note").textContent = "";
+    };
+    resetResults();
+
+    if (weight === null) {
+      setCalculatorMessage("Selecciona un animal o captura manualmente su peso actual.");
+      return;
+    }
+    if (weight < 0 || days === null || days < 0 || dailyCost === null || dailyCost < 0 ||
+        !baselineDate || !Number.isFinite(Date.parse(`${baselineDate}T00:00:00Z`))) {
+      setCalculatorMessage("Ingresa un peso, fecha base, número de días y costo diario válidos.", true);
+      return;
+    }
+    const projection = gain === null ? null : projectWeight(weight, gain, days, baselineDate);
+    const projectedWeight = projection?.predictedWeight ?? null;
+    if (projection) {
+      $("#calculator-projected-weight").textContent = formatProjectedWeight(projectedWeight);
+      $("#calculator-projection-detail").textContent = `${weight.toFixed(1)} kg + (${gain.toFixed(3)} kg/día × ${days.toFixed(0)} días)`;
+      const measuredBasis = state.calculatorMeasuredGain?.animalId === selectedAnimalId &&
+        state.calculatorMeasuredGain.value === gain ? state.calculatorMeasuredGain.basis : null;
+      state.calculatorProjection = {
+        animalId: selectedAnimalId || null,
+        baselineWeight: weight,
+        baselineDate,
+        gainKgPerDay: gain,
+        days,
+        predictedWeight: projectedWeight,
+        targetDate: projection.targetDate,
+        source: measuredBasis ? "recent-measured-gmd" : "manual-gmd",
+        gainStartDate: measuredBasis?.first.date || null,
+        gainEndDate: measuredBasis?.latest.date || null,
+        gainElapsedDays: measuredBasis?.elapsedDays || null,
+        sourceWeightEventIds: measuredBasis ? measuredBasis.points.flatMap(point => point.eventIds) : []
+      };
+      $("#calculator-projection-detail").textContent += ` · fecha objetivo ${formatDate(projection.targetDate)}`;
+    } else {
+      $("#calculator-projection-detail").textContent = "No hay GMD reciente; sin ingresar una GMD manual no se proyecta el crecimiento.";
+    }
+    if (selectedAnimalId && state.calculatorProjection) {
+      $("#calculator-save-forecast").disabled = false;
+      $("#calculator-forecast-save-note").textContent = state.calculatorProjection.source === "manual-gmd"
+        ? "Esta estimación usa una GMD manual. Quedará identificada como supuesto y no como crecimiento medido."
+        : "La estimación guardará sus pesadas de origen y su fecha objetivo para compararla con una pesada real posterior.";
+    } else {
+      $("#calculator-forecast-save-note").textContent = "Selecciona un animal para guardar la estimación en su expediente y compararla con una pesada posterior.";
+    }
+    if (projectedWeight !== null && projectedWeight < 0) {
+      setCalculatorMessage("La GMD negativa se refleja sin corregirla. El peso proyectado queda por debajo de cero y no se calcula valor de mercado; revisa el intervalo, el plazo y las pesadas.", true);
+      return;
+    }
+
+    if (currentAverage === null || currentAverage < 0) {
+      setCalculatorMessage("Captura el precio promedio de hoy para calcular el valor de venta.");
+      return;
+    }
+    if ((currentMin !== null && currentMin < 0) || (currentMax !== null && currentMax < 0) ||
+        (currentMin !== null && currentAverage < currentMin) ||
+        (currentMax !== null && currentAverage > currentMax)) {
+      setCalculatorMessage("La cotización promedio debe quedar entre el mínimo y el máximo capturados.", true);
+      return;
+    }
+    const currentValue = weight * currentAverage;
+    $("#calculator-current-value").textContent = formatCurrency(currentValue);
+    const currentRange = currentMin !== null && currentMax !== null
+      ? `${formatCurrency(weight * currentMin)} – ${formatCurrency(weight * currentMax)}`
+      : currentMin !== null ? `Desde ${formatCurrency(weight * currentMin)} · precio mínimo`
+        : currentMax !== null ? `Hasta ${formatCurrency(weight * currentMax)} · precio máximo`
+          : "Valor bruto con precio promedio";
+    $("#calculator-current-range").textContent = currentRange;
+
+    if (projectedWeight === null) {
+      setCalculatorMessage("Captura una GMD reciente o manual para comparar la venta después de esperar.");
+      return;
+    }
+    if ((nextMin !== null && nextMin < 0) || (nextMax !== null && nextMax < 0) ||
+        (nextAverage !== null && nextAverage < 0) ||
+        (nextThreshold !== null && nextThreshold < 0) ||
+        (futurePrice !== null && futurePrice < 0) ||
+        (nextMin !== null && nextAverage !== null && nextAverage < nextMin) ||
+        (nextMax !== null && nextAverage !== null && nextAverage > nextMax)) {
+      setCalculatorMessage("Revisa la cotización del siguiente rango: el promedio debe quedar entre el mínimo y el máximo.", true);
+      return;
+    }
+    const usesNextRange = nextThreshold !== null && nextAverage !== null && projectedWeight >= nextThreshold;
+    const salePrice = futurePrice !== null ? futurePrice : usesNextRange ? nextAverage : currentAverage;
+    const futureValue = projectedWeight * salePrice;
+    const netDifference = futureValue - currentValue - dailyCost * days;
+    const futureMinPrice = futurePrice !== null ? null : usesNextRange ? nextMin : currentMin;
+    const futureMaxPrice = futurePrice !== null ? null : usesNextRange ? nextMax : currentMax;
+    $("#calculator-future-value").textContent = formatCurrency(futureValue);
+    const futureRange = futureMinPrice !== null && futureMaxPrice !== null
+      ? ` · rango ${formatCurrency(projectedWeight * futureMinPrice)}–${formatCurrency(projectedWeight * futureMaxPrice)}`
+      : futureMinPrice !== null ? ` · desde ${formatCurrency(projectedWeight * futureMinPrice)}`
+        : futureMaxPrice !== null ? ` · hasta ${formatCurrency(projectedWeight * futureMaxPrice)}`
+          : "";
+    $("#calculator-future-detail").textContent = `${formatProjectedWeight(projectedWeight)} × ${formatCurrency(salePrice)}/kg${futureRange}${usesNextRange && futurePrice === null ? ` · ${$("#calculator-next-category").value.trim() || "siguiente rango"}` : futurePrice !== null ? " · precio futuro supuesto por ti" : " · promedio actual como supuesto"}`;
+    $("#calculator-net-difference").textContent = `${netDifference > 0 ? "+" : ""}${formatCurrency(netDifference)}`;
+    $("#calculator-net-difference").classList.toggle("is-negative", netDifference < 0);
+    $("#calculator-net-difference").classList.toggle("is-positive", netDifference >= 0);
+    const quoteDate = $("#calculator-price-date").value;
+    let categoryNote = quoteDate ? `Cotización con fecha ${formatDate(quoteDate)}.` : "Sin fecha de cotización; ingrésala para identificar la vigencia del dato.";
+    if (quoteDate) {
+      const quoteDay = Date.parse(`${quoteDate}T00:00:00Z`) / 86400000;
+      const quoteAge = Math.floor(Date.parse(`${today()}T00:00:00Z`) / 86400000 - quoteDay);
+      if (quoteAge > 30) categoryNote += ` Tiene ${quoteAge} días; conviene actualizarla.`;
+      if (quoteAge < 0) categoryNote += " La fecha de cotización está en el futuro; verifica el dato.";
+    }
+    if (usesNextRange && futurePrice === null) {
+      categoryNote += ` El peso proyectado alcanza el siguiente rango${$("#calculator-next-category").value.trim() ? ` (${$("#calculator-next-category").value.trim()})` : ""}.`;
+    } else if (futurePrice === null && nextThreshold !== null && projectedWeight >= nextThreshold && nextAverage === null) {
+      categoryNote += " El peso proyectado alcanza el siguiente rango, pero falta capturar su precio; se usa el promedio actual.";
+    }
+    $("#calculator-category-note").textContent = categoryNote;
+    setCalculatorMessage(gain < 0
+      ? "La proyección refleja una GMD negativa (pérdida de peso); no se fuerza una ganancia positiva."
+      : "Comparación calculada con los datos ingresados. Puedes modificar la GMD, los costos y el precio supuesto.");
+  }
+
+  async function saveCalculatorForecast() {
+    const projection = state.calculatorProjection;
+    const animalId = $("#calculator-animal").value;
+    if (!projection || !animalId || projection.animalId !== animalId ||
+        !state.animals.some(animal => animal.id === animalId)) {
+      showToast("Selecciona un animal y calcula una proyección válida antes de guardarla.");
+      return;
+    }
+    const forecast = {
+      id: newId(),
+      animalId,
+      status: "pending",
+      method: "linear-gmd",
+      ...projection,
+      createdAt: new Date().toISOString()
+    };
+    try {
+      await put("growthForecasts", forecast);
+      await touchAnimal(animalId);
+      await refresh();
+      $("#calculator-save-forecast").disabled = true;
+      $("#calculator-forecast-save-note").textContent = `Estimación guardada. Se comparará con la primera pesada registrada en o después del ${formatDate(forecast.targetDate)}.`;
+      showToast("Estimación guardada en el expediente del animal.");
+    } catch (error) {
+      showToast(`No se pudo guardar la estimación: ${error.message}`);
+    }
+  }
+
+  function growthTargetValues(animal) {
+    const minValue = animal.targetWeightMin;
+    const maxValue = animal.targetWeightMax;
+    const targetMin = minValue === "" || minValue == null ? NaN : Number(minValue);
+    const targetMax = maxValue === "" || maxValue == null ? NaN : Number(maxValue);
+    return {
+      targetMin,
+      targetMax,
+      hasTarget: Number.isFinite(targetMin) && targetMin >= 0 &&
+        Number.isFinite(targetMax) && targetMax >= targetMin
+    };
+  }
+
+  function renderGrowthTargetForm(animal) {
+    const { targetMin, targetMax, hasTarget } = growthTargetValues(animal);
+    return `<form id="growth-target-form" class="growth-target-form">
+      <label>Peso objetivo mínimo (kg)<input name="targetMin" type="number" min="0" step="0.1" value="${hasTarget ? targetMin : ""}" placeholder="Ej. 160"></label>
+      <label>Peso objetivo máximo (kg)<input name="targetMax" type="number" min="0" step="0.1" value="${hasTarget ? targetMax : ""}" placeholder="Ej. 200"></label>
+      <button class="button button-outline button-small" type="submit">Guardar rango</button>
+      <span class="growth-target-help">Deja ambos campos vacíos para quitar el objetivo.</span>
+    </form>`;
+  }
+
+  function renderGrowthForecastHistory(animalId) {
+    const forecasts = state.forecasts.filter(forecast => forecast.animalId === animalId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 5);
+    if (!forecasts.length) return "";
+    const rows = forecasts.map(forecast => {
+      const source = forecast.source === "recent-measured-gmd"
+        ? `GMD medida · ${forecast.gainElapsedDays} días entre pesajes`
+        : "GMD manual · supuesto";
+      const result = forecast.status === "evaluated"
+        ? `Real: ${formatProjectedWeight(forecast.actualWeight)} el ${formatDate(forecast.actualDate)} · error ${forecast.errorKg > 0 ? "+" : ""}${forecast.errorKg.toFixed(2)} kg (absoluto ${forecast.absoluteErrorKg.toFixed(2)} kg)${forecast.absoluteErrorPercent === null ? "" : ` · ${forecast.absoluteErrorPercent.toFixed(1)}%`}`
+        : `Pendiente de pesada en o después del ${formatDate(forecast.targetDate)}`;
+      return `<div class="growth-forecast-item">
+        <div><strong>${formatProjectedWeight(forecast.predictedWeight)} · ${formatDate(forecast.targetDate)}</strong><span>${escapeHtml(source)} · base ${formatDate(forecast.baselineDate)} · ${forecast.days} días</span></div>
+        <p class="${forecast.status === "evaluated" ? "evaluated" : ""}">${escapeHtml(result)}</p>
+      </div>`;
+    }).join("");
+    return `<div class="growth-forecast-history"><strong>Estimaciones guardadas</strong>${rows}</div>`;
+  }
+
+  function renderGrowthChart(animal, points) {
+    if (!points.length) {
+      return `<section class="detail-section growth-section">
+        <div class="detail-section-head"><h3>Crecimiento y peso objetivo</h3></div>
+        <p class="growth-empty">Registra el primer peso para ver el crecimiento de este animal.</p>
+        <button class="button button-outline button-small growth-first-weighing" type="button" data-add-record="weight">＋ Registrar primer peso</button>
+        ${renderGrowthTargetForm(animal)}
+      </section>`;
+    }
+    const latest = points[points.length - 1];
+    const { targetMin, targetMax, hasTarget } = growthTargetValues(animal);
+    const basis = recentGrowthBasis(points);
+    const todayDay = Date.parse(`${today()}T00:00:00Z`) / 86400000;
+    const daysSinceWeighing = Math.floor(todayDay - latest.day);
+    const staleMessage = daysSinceWeighing >= 30
+      ? `<p class="growth-warning">Conviene volver a pesar este animal. La última pesada fue hace ${daysSinceWeighing} días.</p>` : "";
+    const projectionDays = basis ? 90 : 0;
+    const projectedDay = latest.day + projectionDays;
+    const projectedWeight = basis ? latest.weight + basis.gainKgPerDay * projectionDays : null;
+    let summary;
+    if (!basis) {
+      summary = points.length < 2
+        ? "Una sola fecha no permite calcular crecimiento. Registra otra pesada para comparar."
+        : "No hay dos fechas distintas dentro de los 30 días más recientes de pesajes; no se genera una proyección automática.";
+    } else {
+      const dailyChange = `${basis.gainKgPerDay >= 0 ? "+" : ""}${basis.gainKgPerDay.toFixed(2)} kg/día`;
+      summary = `GMD reciente: ${dailyChange}, entre ${formatDate(basis.first.date)} y ${formatDate(basis.latest.date)} (${basis.elapsedDays} días reales; ${basis.points.length} fechas en la ventana reciente).`;
+      if (basis.hasGainAndLoss) summary += " Los intervalos recientes alternan ganancia y pérdida; la GMD resume el periodo, pero el ritmo es variable.";
+      if (hasTarget) {
+        if (latest.weight >= targetMin && latest.weight <= targetMax) {
+          summary += " El peso más reciente está dentro del rango objetivo.";
+        } else {
+          const targetDays = latest.weight < targetMin && basis.gainKgPerDay > 0
+            ? (targetMin - latest.weight) / basis.gainKgPerDay
+            : latest.weight > targetMax && basis.gainKgPerDay < 0
+              ? (targetMax - latest.weight) / basis.gainKgPerDay
+              : NaN;
+          if (Number.isFinite(targetDays) && targetDays >= 0) {
+            summary += ` Llegada estimada al rango: ${Math.ceil(targetDays)} días, si se mantiene esta tendencia.`;
+          }
+        }
+      }
+    }
+
+    const chartWidth = 640;
+    const chartHeight = 260;
+    const margin = { top: 18, right: 18, bottom: 38, left: 52 };
+    const plotWidth = chartWidth - margin.left - margin.right;
+    const plotHeight = chartHeight - margin.top - margin.bottom;
+    let xMin = points[0].day;
+    let xMax = latest.day + (projectionDays || 30);
+    if (xMin === xMax) xMin -= 15;
+    const chartValues = points.map(point => point.weight);
+    if (basis) chartValues.push(projectedWeight);
+    if (hasTarget) chartValues.push(targetMin, targetMax);
+    const rawMin = Math.min(...chartValues);
+    const rawMax = Math.max(...chartValues);
+    const yPadding = Math.max((rawMax - rawMin) * 0.12, 2);
+    const yMin = rawMin - yPadding;
+    const yMax = rawMax + yPadding || 1;
+    const x = day => margin.left + ((day - xMin) / (xMax - xMin)) * plotWidth;
+    const y = weight => margin.top + ((yMax - weight) / (yMax - yMin)) * plotHeight;
+    const grid = [0, 1, 2, 3].map(index => {
+      const value = yMin + ((yMax - yMin) * index / 3);
+      const position = y(value);
+      return `<line x1="${margin.left}" y1="${position}" x2="${chartWidth - margin.right}" y2="${position}" class="growth-grid-line"></line><text x="${margin.left - 8}" y="${position + 4}" text-anchor="end" class="growth-axis-label">${value.toFixed(0)}</text>`;
+    }).join("");
+    const target = hasTarget
+      ? `<rect x="${margin.left}" y="${y(targetMax)}" width="${plotWidth}" height="${Math.max(2, y(targetMin) - y(targetMax))}" class="growth-target-band"></rect><line x1="${margin.left}" y1="${y(targetMin)}" x2="${chartWidth - margin.right}" y2="${y(targetMin)}" class="growth-target-edge"></line><line x1="${margin.left}" y1="${y(targetMax)}" x2="${chartWidth - margin.right}" y2="${y(targetMax)}" class="growth-target-edge"></line>` : "";
+    const actualLine = points.length > 1
+      ? `<polyline points="${points.map(point => `${x(point.day)},${y(point.weight)}`).join(" ")}" class="growth-actual-line"></polyline>` : "";
+    const projectionLine = basis
+      ? `<line x1="${x(latest.day)}" y1="${y(latest.weight)}" x2="${x(projectedDay)}" y2="${y(projectedWeight)}" class="growth-projection-line"></line>` : "";
+    const dots = points.map(point =>
+      `<circle cx="${x(point.day)}" cy="${y(point.weight)}" r="4.5" class="growth-point"><title>${formatDate(point.date)} · ${point.weight.toFixed(1)} kg</title></circle>`
+    ).join("");
+    const dateLabels = [
+      { day: xMin, label: formatDate(new Date(xMin * 86400000).toISOString().slice(0, 10)) },
+      { day: latest.day, label: formatDate(latest.date) },
+      { day: xMax, label: formatDate(new Date(xMax * 86400000).toISOString().slice(0, 10)) }
+    ].map((item, index) =>
+      `<text x="${x(item.day)}" y="${chartHeight - 10}" text-anchor="${index === 0 ? "start" : index === 2 ? "end" : "middle"}" class="growth-axis-label">${escapeHtml(item.label)}</text>`
+    ).join("");
+    const trendMetrics = basis && basis.points.length >= 3
+      ? `<span>GMD medida <strong>${basis.gainKgPerDay.toFixed(2)} kg/día</strong></span><span>Ventana reciente <strong>${basis.elapsedDays} días · ${basis.points.length} fechas</strong></span>`
+      : basis
+        ? `<span>GMD reciente <strong>${basis.gainKgPerDay.toFixed(2)} kg/día</strong></span><span>Ventana reciente <strong>${basis.elapsedDays} días · ${basis.points.length} fechas</strong></span>`
+        : `<span>Pesajes en la ventana reciente <strong>${points.length}</strong></span>`;
+    const disclaimer = basis
+      ? "Proyección matemática lineal a 90 días desde la última pesada, no garantía de crecimiento. El cálculo usa solo la GMD observada en la ventana reciente; no considera alimentación, genética, salud ni manejo."
+      : "";
+
+    return `<section class="detail-section growth-section">
+      <div class="detail-section-head"><h3>Crecimiento y peso objetivo</h3></div>
+      <div class="growth-summary"><strong>${latest.weight.toFixed(1)} kg</strong><span>Última pesada: ${formatDate(latest.date)}</span></div>
+      ${staleMessage}
+      <svg class="growth-chart" viewBox="0 0 ${chartWidth} ${chartHeight}" role="img" aria-label="Gráfica de pesajes reales y tendencia estimada para ${escapeHtml(animal.name || animal.tag || "el animal")}">
+        ${target}${grid}${actualLine}${projectionLine}${dots}${dateLabels}
+      </svg>
+      <div class="growth-legend"><span><i class="growth-legend-real"></i> Peso real</span>${basis ? '<span><i class="growth-legend-projection"></i> Proyección GMD a 90 días</span>' : ""}${hasTarget ? '<span><i class="growth-legend-target"></i> Rango objetivo</span>' : ""}</div>
+      <div class="growth-metrics">${trendMetrics}</div>
+      <p class="growth-reliability">${escapeHtml(summary)}</p>
+      ${disclaimer ? `<p class="growth-disclaimer">${escapeHtml(disclaimer)}</p>` : ""}
+      ${renderGrowthForecastHistory(animal.id)}
+      ${renderGrowthTargetForm(animal)}
+    </section>`;
   }
 
   function renderDashboard() {
@@ -607,13 +1142,19 @@
 
   function setMainView(view) {
     const journeys = view === "journeys";
-    $("#inventory-view").hidden = journeys;
+    const calculator = view === "calculator";
+    $("#inventory-view").hidden = journeys || calculator;
     $("#journeys-view").hidden = !journeys;
-    $("#inventory-nav").classList.toggle("active", !journeys);
+    $("#calculator-view").hidden = !calculator;
+    $("#inventory-nav").classList.toggle("active", !journeys && !calculator);
     $("#journeys-nav").classList.toggle("active", journeys);
-    $("#inventory-nav").setAttribute("aria-current", journeys ? "false" : "page");
+    $("#calculator-nav").classList.toggle("active", calculator);
+    $("#inventory-nav").setAttribute("aria-current", !journeys && !calculator ? "page" : "false");
     $("#journeys-nav").setAttribute("aria-current", journeys ? "page" : "false");
+    $("#calculator-nav").setAttribute("aria-current", calculator ? "page" : "false");
+    $("#breadcrumb-current").textContent = calculator ? "Calculadora" : journeys ? "Jornadas" : "Ganado";
     renderJourneys();
+    if (calculator) renderCalculatorAnimalOptions();
   }
 
   function openJourneyCreateForm() {
@@ -799,10 +1340,11 @@
       updatedAt: completedAt
     };
     try {
-      await transaction(["journeys", "events", "animals"], "readwrite", tx => {
+      await transaction(["journeys", "events", "animals", "growthForecasts"], "readwrite", tx => {
         tx.objectStore("journeys").put(finishedJourney);
         const animalsStore = tx.objectStore("animals");
         const eventsStore = tx.objectStore("events");
+        const forecastsStore = tx.objectStore("growthForecasts");
         journey.roster.filter(animal => animal.attended).forEach(rosterAnimal => {
           const animalRequest = animalsStore.get(rosterAnimal.id);
           animalRequest.onsuccess = () => {
@@ -819,16 +1361,25 @@
             createdAt: completedAt
           };
           if (journey.type === "weight") fields.weight = rosterAnimal.weight;
-          eventsStore.put({
+          const eventRecord = {
             id: `journey:${journey.id}:${rosterAnimal.id}`,
             animalId: rosterAnimal.id,
             type: eventType,
             date: journey.date,
             ...fields
-          });
+          };
+          eventsStore.put(eventRecord);
+          if (eventType === "weight") {
+            pendingForecastUpdates(state.forecasts, rosterAnimal.id, state.events.concat(eventRecord))
+              .forEach(forecast => forecastsStore.put(forecast));
+          }
         });
       });
       await refresh();
+      const selectedAnimalId = $("#calculator-animal").value;
+      if (journey.type === "weight" && journey.roster.some(animal => animal.attended && animal.id === selectedAnimalId)) {
+        loadCalculatorAnimal();
+      }
       renderJourneyDetail();
       scheduleSync();
       if (counts.pending) {
@@ -860,6 +1411,11 @@
     const date = new Date();
     return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   }
+  function isDateOnly(value) {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00Z`);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  }
   function newId() { return crypto.randomUUID(); }
 
   function openAnimalForm(animal = null) {
@@ -873,6 +1429,9 @@
     $("#animal-sex").value = animal?.sex || "";
     $("#animal-color").value = animal?.color || "";
     $("#animal-birth").value = animal?.birthDate || "";
+    const estimatedAgeParts = estimatedAgeInputParts(animal?.estimatedAge);
+    $("#animal-age-years").value = estimatedAgeParts.years;
+    $("#animal-age-months").value = estimatedAgeParts.months;
     $("#animal-status").value = animal?.status || "Activo";
     $("#initial-records").hidden = Boolean(animal);
     state.animalFormSnapshot = animalFormValues();
@@ -906,12 +1465,37 @@
       $("#animal-tag").setCustomValidity("");
       return;
     }
+    const birthDate = $("#animal-birth").value;
+    const yearsInput = $("#animal-age-years").value.trim();
+    const monthsInput = $("#animal-age-months").value.trim();
+    const ageYears = yearsInput ? Number(yearsInput) : 0;
+    const ageMonths = monthsInput ? Number(monthsInput) : 0;
+    const todayDay = Date.parse(`${today()}T00:00:00Z`);
+    const birthDay = birthDate ? Date.parse(`${birthDate}T00:00:00Z`) : NaN;
+    if (birthDate && (!Number.isFinite(birthDay) || birthDay > todayDay)) {
+      showToast("La fecha de nacimiento confirmada no puede estar en el futuro.");
+      return;
+    }
+    if (birthDate && (yearsInput || monthsInput)) {
+      showToast("Indica la fecha de nacimiento confirmada o una edad aproximada, no ambas.");
+      return;
+    }
+    if ((yearsInput || monthsInput) &&
+        (!Number.isInteger(ageYears) || ageYears < 0 || !Number.isInteger(ageMonths) || ageMonths < 0 || ageMonths > 11)) {
+      showToast("La edad aproximada requiere años enteros y meses entre 0 y 11.");
+      return;
+    }
+    const estimatedAge = yearsInput || monthsInput
+      ? { monthsAtRecord: ageYears * 12 + ageMonths, recordedAt: today() }
+      : null;
     const animal = {
+      ...(existing || {}),
       id, tag, name: $("#animal-name").value.trim(), sex: $("#animal-sex").value,
-      color: $("#animal-color").value.trim(), birthDate: $("#animal-birth").value,
+      color: $("#animal-color").value.trim(), birthDate, ...(estimatedAge ? { estimatedAge } : {}),
       status: $("#animal-status").value, createdAt: existing?.createdAt || new Date().toISOString(),
       updatedAt: nextModifiedAt(existing?.updatedAt)
     };
+    if (!estimatedAge) delete animal.estimatedAge;
     const events = [];
     const photos = [];
     if (!existing) {
@@ -976,6 +1560,8 @@
     const latestBath = eventFor(animalId, "bath");
     const latestVaccine = eventFor(animalId, "vaccine");
     const latestDeworm = eventFor(animalId, "deworm");
+    const growthPoints = weightHistory(animalId);
+    const animalAge = animal.birthDate ? calculateAge(animal.birthDate) : formatEstimatedAge(animal.estimatedAge);
     const animalEvents = state.events.filter(record => record.animalId === animalId)
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
     const photos = state.photos.filter(photo => photo.animalId === animalId);
@@ -1003,8 +1589,8 @@
           <div class="detail-fact"><span>Sexo</span><strong>${display(animal.sex)}</strong></div>
           <div class="detail-fact"><span>Color</span><strong>${display(animal.color)}</strong></div>
           <div class="detail-fact"><span>Última modificación</span><strong>${escapeHtml(formatTimestamp(animal.updatedAt))}</strong></div>
-          <div class="detail-fact"><span>Fecha de nacimiento</span><strong>${formatDate(animal.birthDate)}</strong></div>
-          <div class="detail-fact"><span>Edad</span><strong>${escapeHtml(calculateAge(animal.birthDate))}</strong></div>
+          <div class="detail-fact"><span>Fecha de nacimiento confirmada</span><strong>${formatDate(animal.birthDate)}</strong></div>
+          <div class="detail-fact"><span>Edad${animal.estimatedAge && !animal.birthDate ? " aproximada" : ""}</span><strong>${escapeHtml(animalAge)}</strong></div>
           <div class="detail-fact"><span>Estado</span><strong>${escapeHtml(animal.status)}</strong></div>
           <div class="detail-fact"><span>Último baño</span><strong>${latestBath ? formatDate(latestBath.date) : "No registrado"}</strong></div>
           <div class="detail-fact"><span>Última pesada</span><strong>${latestWeight ? formatDate(latestWeight.date) : "No registrado"}</strong></div>
@@ -1014,6 +1600,7 @@
           <div class="detail-fact"><span>Última desparasitación</span><strong>${latestDeworm ? formatDate(latestDeworm.date) : "No registrado"}</strong></div>
           <div class="detail-fact"><span>Producto</span><strong>${eventSummary(latestDeworm)}</strong></div>
         </div>
+        ${renderGrowthChart(animal, growthPoints)}
         <section class="detail-section">
           <div class="detail-section-head"><h3>Historial sanitario y de manejo</h3><button class="add-link" type="button" data-add-record="bath">＋ Añadir registro</button></div>
           <div class="history-list">${renderHistory(animalEvents.filter(record => record.type !== "note"))}</div>
@@ -1075,14 +1662,60 @@
     if (formData.has("label")) fields.label = String(formData.get("label")).trim();
     if (formData.has("notes")) fields.notes = String(formData.get("notes")).trim();
     try {
-      await put("events", makeEvent($("#record-animal-id").value, type, date, fields));
-      await touchAnimal($("#record-animal-id").value);
+      const animalId = $("#record-animal-id").value;
+      const record = makeEvent(animalId, type, date, fields);
+      const forecastUpdates = type === "weight"
+        ? pendingForecastUpdates(await getAllByIndex("growthForecasts", "animalId", animalId), animalId, state.events.concat(record))
+        : [];
+      await transaction(["events", "growthForecasts"], "readwrite", tx => {
+        tx.objectStore("events").put(record);
+        forecastUpdates.forEach(forecast => tx.objectStore("growthForecasts").put(forecast));
+      });
+      await touchAnimal(animalId);
       $("#record-dialog").close();
       await refresh();
+      if (type === "weight" && $("#calculator-animal").value === animalId) loadCalculatorAnimal();
       openDetail(state.currentAnimalId);
       showToast("Registro guardado en el historial.");
     } catch (error) {
       showToast(`No se pudo guardar: ${error.message}`);
+    }
+  }
+
+  async function saveGrowthTarget(event) {
+    event.preventDefault();
+    const animal = state.animals.find(item => item.id === state.currentAnimalId);
+    if (!animal) return;
+    const formData = new FormData(event.target);
+    const minValue = String(formData.get("targetMin") || "").trim();
+    const maxValue = String(formData.get("targetMax") || "").trim();
+    if (Boolean(minValue) !== Boolean(maxValue)) {
+      showToast("Ingresa ambos límites del rango o deja los dos vacíos.");
+      return;
+    }
+    const targetMin = Number(minValue);
+    const targetMax = Number(maxValue);
+    if (minValue && (!Number.isFinite(targetMin) || !Number.isFinite(targetMax) ||
+        targetMin < 0 || targetMax < targetMin)) {
+      showToast("Revisa el rango: el mínimo debe ser igual o menor que el máximo.");
+      return;
+    }
+    const updated = { ...animal, updatedAt: nextModifiedAt(animal.updatedAt) };
+    if (minValue) {
+      updated.targetWeightMin = targetMin;
+      updated.targetWeightMax = targetMax;
+    } else {
+      delete updated.targetWeightMin;
+      delete updated.targetWeightMax;
+    }
+    try {
+      await put("animals", updated);
+      scheduleSync();
+      await refresh();
+      openDetail(animal.id);
+      showToast(minValue ? "Rango de peso objetivo guardado." : "Rango de peso objetivo eliminado.");
+    } catch (error) {
+      showToast(`No se pudo guardar el objetivo: ${error.message}`);
     }
   }
 
@@ -1178,10 +1811,10 @@
     if (!animal || !confirm(`¿Eliminar definitivamente a ${animal.name || animal.tag || "este animal"} y todo su historial y fotografías? Esta acción no se puede deshacer.`)) return;
     try {
       const deletedAt = nextModifiedAt(animal.updatedAt);
-      await transaction(["animals", "events", "photos", "deletedAnimals"], "readwrite", tx => {
+      await transaction(["animals", "events", "photos", "growthForecasts", "deletedAnimals"], "readwrite", tx => {
         tx.objectStore("animals").delete(animalId);
         tx.objectStore("deletedAnimals").put({ id: animalId, deletedAt });
-        for (const name of ["events", "photos"]) {
+        for (const name of ["events", "photos", "growthForecasts"]) {
           const store = tx.objectStore(name);
           const request = store.index("animalId").openCursor(IDBKeyRange.only(animalId));
           request.onsuccess = () => {
@@ -1206,7 +1839,8 @@
     try {
       const payload = {
         format: "ganadero-backup", version: 1, exportedAt: new Date().toISOString(),
-        animals: state.animals, events: state.events, journeys: state.journeys, photos: []
+        animals: state.animals, events: state.events, journeys: state.journeys,
+        forecasts: state.forecasts, photos: []
       };
       payload.photos = await Promise.all(state.photos.map(async photo => ({
         id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
@@ -1253,6 +1887,20 @@
       )) throw new Error("La copia contiene una jornada con formato inválido.");
       const animalIds = new Set(animals.map(animal => animal.id));
       const events = payload.events;
+      const forecasts = payload.forecasts === undefined ? [] : payload.forecasts;
+      if (!Array.isArray(forecasts) || forecasts.some(forecast =>
+        !forecast || typeof forecast.id !== "string" || !animalIds.has(forecast.animalId) ||
+        !["pending", "evaluated"].includes(forecast.status) ||
+        !isDateOnly(forecast.targetDate) || !isDateOnly(forecast.baselineDate) ||
+        !Number.isFinite(forecast.baselineWeight) || !Number.isFinite(forecast.gainKgPerDay) ||
+        !Number.isFinite(forecast.days) || !Number.isFinite(forecast.predictedWeight) ||
+        !Array.isArray(forecast.sourceWeightEventIds) ||
+        !["recent-measured-gmd", "manual-gmd"].includes(forecast.source) ||
+        (forecast.status === "evaluated" && (!isDateOnly(forecast.actualDate) ||
+          !Number.isFinite(forecast.actualWeight) || !Number.isFinite(forecast.errorKg) ||
+          !Number.isFinite(forecast.absoluteErrorKg) ||
+          (forecast.absoluteErrorPercent !== null && !Number.isFinite(forecast.absoluteErrorPercent))))
+      )) throw new Error("La copia contiene una estimación de crecimiento con formato inválido.");
       const photos = await Promise.all(payload.photos.map(async item => {
         if (!animalIds.has(item.animalId) || typeof item.data !== "string" || !item.data.startsWith("data:")) throw new Error("La copia contiene una fotografía o asociación inválida.");
         const response = await fetch(item.data);
@@ -1262,8 +1910,8 @@
       if (events.some(record => !animalIds.has(record.animalId))) throw new Error("La copia contiene registros asociados a animales inexistentes.");
       for (const url of state.photoUrls.values()) URL.revokeObjectURL(url);
       state.photoUrls.clear();
-      await transaction(["animals", "events", "photos", "deletedAnimals", "journeys"], "readwrite", tx => {
-        for (const name of ["animals", "events", "photos"]) tx.objectStore(name).clear();
+      await transaction(["animals", "events", "photos", "growthForecasts", "deletedAnimals", "journeys"], "readwrite", tx => {
+        for (const name of ["animals", "events", "photos", "growthForecasts"]) tx.objectStore(name).clear();
         tx.objectStore("journeys").clear();
         const deletions = tx.objectStore("deletedAnimals");
         previousAnimals.filter(animal => !animalIds.has(animal.id)).forEach(animal => {
@@ -1272,6 +1920,7 @@
         animals.forEach(item => tx.objectStore("animals").put(item));
         animals.forEach(item => deletions.delete(item.id));
         events.forEach(item => tx.objectStore("events").put(item));
+        forecasts.forEach(item => tx.objectStore("growthForecasts").put(item));
         photos.forEach(item => tx.objectStore("photos").put(item));
         journeys.forEach(item => tx.objectStore("journeys").put(item));
       });
@@ -1290,10 +1939,19 @@
     $("#empty-add-button").addEventListener("click", () => openAnimalForm());
     $("#animal-form").addEventListener("submit", saveAnimal);
     $("#record-form").addEventListener("submit", saveRecord);
+    document.addEventListener("submit", event => {
+      if (event.target.id === "growth-target-form") saveGrowthTarget(event);
+    });
     $("#journey-form").addEventListener("submit", createJourney);
     $("#journey-type").addEventListener("change", updateJourneyFormFields);
     $("#inventory-nav").addEventListener("click", () => setMainView("inventory"));
     $("#journeys-nav").addEventListener("click", () => setMainView("journeys"));
+    $("#calculator-nav").addEventListener("click", () => setMainView("calculator"));
+    $("#calculator-form").addEventListener("submit", event => event.preventDefault());
+    $("#calculator-form").addEventListener("input", updateCalculator);
+    $("#calculator-gain").addEventListener("input", () => { state.calculatorMeasuredGain = null; });
+    $("#calculator-animal").addEventListener("change", loadCalculatorAnimal);
+    $("#calculator-save-forecast").addEventListener("click", saveCalculatorForecast);
     $("#new-journey-button").addEventListener("click", openJourneyCreateForm);
     $("#search-input").addEventListener("input", renderDashboard);
     $("#status-filter").addEventListener("change", renderDashboard);
@@ -1412,6 +2070,7 @@
     try {
       db = await openDatabase();
       registerEvents();
+      $("#calculator-price-date").value = today();
       await refresh();
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
         navigator.serviceWorker.register("./service-worker.js").catch(error => {

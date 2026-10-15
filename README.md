@@ -25,6 +25,28 @@ El archivo `config.js` contiene solo valores públicos del proyecto; no contiene
 
 En **Jornadas** puedes crear jornadas de baño, vacunación, desparasitación, inyección, medicamento, pesaje, revisión veterinaria u otra actividad. La lista de animales se toma del inventario al iniciar la jornada. Las marcas y el progreso se guardan automáticamente; puedes cerrar la app y continuar una jornada en progreso después. Al finalizar, solo los animales marcados reciben el evento en su historial; los pendientes se muestran en el resumen. Para las jornadas de pesaje, se registra el peso individual al marcar cada animal. Las jornadas también se incluyen en las copias de seguridad y, al configurar Supabase, se sincronizan con la misma cuenta.
 
+## Crecimiento y peso objetivo
+
+La ficha individual muestra los pesajes reales y la fecha de la última pesada. Para estimar la ganancia media diaria (GMD), Ganaderov toma todas las fechas distintas dentro de los 30 días anteriores a la pesada más reciente, promedia las mediciones hechas en el mismo día y calcula el cambio entre el primer y el último peso de esa ventana dividido por los días reales transcurridos. Con una sola pesada, fechas repetidas o sin dos fechas distintas en la ventana no se calcula una GMD automática. Si hay varios intervalos recientes con aumentos y pérdidas, se advierte que la GMD resume un ritmo variable.
+
+Cuando hay GMD reciente, la ficha muestra su proyección lineal a 90 días. Una GMD negativa permanece negativa y puede producir una estimación de pérdida de peso; la app no la sustituye por una ganancia positiva. Si pasan 30 días o más desde la última pesada, la ficha y la calculadora muestran un aviso para recordar que la información puede ser antigua. La proyección es una estimación matemática, no una garantía, y no considera alimentación, genética, salud o manejo. No se usan modelos de Brody, Gompertz o Richards.
+
+En la ficha se puede indicar fecha de nacimiento confirmada o, en su lugar, una edad aproximada en años y meses. La edad aproximada se guarda con la fecha en que fue registrada, se conserva como estimación y nunca se convierte en una fecha de nacimiento inventada.
+
+El rango de peso objetivo se configura por animal, se guarda en su ficha y se sincroniza junto con los datos existentes. Es opcional y puede quitarse dejando vacíos ambos límites. Ningún rango de mercado se impone como universal.
+
+No se utiliza todavía un modelo de Brody, Gompertz o Richards. La aplicación no estima parámetros de crecimiento ni trata una edad aproximada como fecha de nacimiento confirmada; un modelo por edad requiere primero datos de edad confiables y validación adecuada para el hato.
+
+## Calculadora de peso y valor de mercado
+
+En **Gestión → Calculadora** puedes seleccionar un animal y cargar su última pesada. Si hay dos o más fechas distintas en los 30 días anteriores a la última pesada, propone la GMD calculada con las fechas y los días reales de esa ventana; esta GMD se puede modificar. Una pesada por sí sola no produce una tendencia. También acepta peso y GMD manuales, pero estos valores se identifican como supuestos y no como crecimiento medido. Al indicar los días de espera, estima el peso futuro con `peso actual + GMD × días`. Una proyección inferior a cero se muestra como tal y no se utiliza para estimar valor de mercado.
+
+Puedes guardar una estimación para un animal desde la calculadora, incluso sin completar una cotización. Se conserva el peso y fecha base, GMD y su origen, las pesadas usadas, el plazo, el peso estimado y la fecha objetivo. Una pesada individual posterior o una jornada de pesaje compara la primera pesada registrada después de la estimación que tenga fecha igual o posterior a la fecha objetivo, y registra el peso real, la fecha de esa pesada, el error firmado (`real − estimado`), el error absoluto y el error porcentual absoluto cuando se puede calcular. Este registro permite comparar estimaciones con resultados reales; no modifica los pesajes ni representa una validación científica del modelo.
+
+La cotización se captura manualmente: categoría actual, fecha y precios mínimo, promedio y máximo por kg. Opcionalmente puedes ingresar el siguiente rango de peso y sus precios; si el peso proyectado alcanza el umbral, se usa el precio promedio de esa categoría, a menos que se capture un precio futuro supuesto. La pantalla compara el valor bruto de vender hoy con el bruto del escenario de espera y resta el costo diario por el plazo indicado. No incluye transporte, comisiones, mermas ni otros gastos.
+
+La calculadora enlaza a [México Ganadero](https://www.mexicoganadero.com/precios/) como referencia, pero no descarga sus datos automáticamente: la página consultada no ofrece una respuesta estructurada accesible para integrarla con fiabilidad desde esta aplicación estática. Verifica la categoría, clasificación, fecha y región antes de capturar precios. Las cotizaciones, precios futuros y costos se usan solo durante la sesión de la calculadora; no se guardan, sincronizan ni incluyen en las copias de seguridad. Las estimaciones de crecimiento guardadas sí se conservan en el dispositivo, se incluyen en la sincronización por animal y en las copias de seguridad. Son referencias editables, no ofertas ni predicciones de mercado.
+
 ## Uso local
 
 Abre `index.html` en una versión reciente de Chrome o Edge. Sin configurar Supabase, la app conserva el modo local de un solo dispositivo. Las fotos se almacenan en IndexedDB cuando está sin conexión y en el bucket privado de Supabase al sincronizar.
