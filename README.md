@@ -5,7 +5,7 @@ Aplicación para administrar el inventario y los expedientes individuales del ga
 ## Configurar Supabase
 
 1. Crea un proyecto en [Supabase](https://supabase.com/).
-2. En **SQL Editor**, ejecuta el contenido de [`supabase-schema.sql`](./supabase-schema.sql). Esto crea las tablas protegidas por usuario y el almacenamiento privado de fotografías. Si ya configuraste Supabase anteriormente, vuelve a ejecutar el archivo para añadir la tabla de jornadas.
+2. En un proyecto nuevo, en **SQL Editor**, ejecuta [`supabase-schema.sql`](./supabase-schema.sql). Para un proyecto ya configurado que contiene datos, crea primero una copia de seguridad y prueba la migración aditiva [`supabase-ranch-access-migration.sql`](./supabase-ranch-access-migration.sql) en una instancia de pruebas restaurada desde esa copia. Esta migración cambia las políticas RLS existentes para permitir miembros aprobados; no borra filas ni fotos, pero sí cambia el acceso al aplicarla. No la ejecutes directamente en producción sin validar antes todas las cuentas y políticas.
 3. En **Project Settings → API**, copia la **Project URL** y la clave **anon/public**. En [`config.js`](./config.js), colócalas en `supabaseUrl` y `supabaseAnonKey`.
 4. Publica de nuevo estos archivos en Vercel. La clave `anon/public` está diseñada para el navegador y las políticas RLS limitan los datos a la cuenta autenticada. **Nunca pongas una clave `service_role` en `config.js`.**
 5. En **Authentication → URL Configuration**, agrega la URL de la app desplegada como sitio/redirección permitida.
@@ -19,7 +19,7 @@ El archivo `config.js` contiene solo valores públicos del proyecto; no contiene
 - Los cambios se guardan en IndexedDB en el dispositivo y se envían cuando hay conexión. La app debe haberse abierto al menos una vez con conexión para instalar el modo sin conexión.
 - Si el mismo animal cambió en la nube y en el dispositivo desde la última sincronización, Ganadero pregunta qué versión conservar. **Aceptar** sube la versión de este dispositivo; **Cancelar** descarga la versión de la nube. La decisión reemplaza la ficha completa del animal, incluido su historial y sus fotos.
 - Los cambios en animales diferentes se sincronizan por separado. Las eliminaciones también se propagan a los demás dispositivos.
-- Usa **Crear copia de seguridad** periódicamente. Las copias descargadas siguen siendo una protección adicional ante pérdida de acceso a la cuenta.
+- Usa **Crear copia de seguridad** periódicamente. El archivo JSON incluye animales, historial, jornadas, estimaciones, fotos codificadas dentro del archivo y tombstones de animales eliminados. Las fotos pueden hacer crecer considerablemente la copia. **Importar copia** reemplaza los datos locales del dispositivo; las eliminaciones se propagan a la nube en la siguiente sincronización.
 
 ## Jornadas de manejo
 
@@ -31,21 +31,31 @@ Cada marca guarda la hora y la cuenta autenticada disponible. Sin sesión, queda
 
 Para proteger el historial, un animal que tenga registros o esté incluido en una jornada no se puede eliminar definitivamente desde la interfaz; se puede dar de baja manteniendo su ficha y participación. Las jornadas se incluyen en las copias de seguridad.
 
-## Acceso y usuarios del rancho: estado actual
+## Acceso y usuarios del rancho
 
 La pantalla de acceso permite iniciar sesión, crear una cuenta con confirmación de contraseña y solicitar recuperación por correo. Las contraseñas deben tener al menos 8 caracteres y cumplir también la política configurada en Supabase. Si la confirmación por correo está habilitada, el usuario verá un mensaje que le indica que confirme la dirección antes de iniciar sesión; el enlace de recuperación permite definir y confirmar una contraseña nueva. Para que estos enlaces regresen a Ganaderov, agrega el origen y la URL desplegada en **Authentication → URL Configuration → Redirect URLs** de Supabase.
 
-El alta de una cuenta de acceso no crea ni concede automáticamente un perfil de trabajador o permisos sobre otro rancho. Actualmente el esquema de sincronización sigue aislando filas por la cuenta propietaria; todavía no hay solicitudes de acceso aprobables, perfiles de trabajadores ni roles por rancho. El campo «Atendido por» registra la cuenta autenticada si existe, pero no sustituye una autorización por rancho. La operación sin conexión conserva los datos locales, pero no establece por sí misma quién es el usuario ni sus permisos.
+Después de iniciar sesión, el usuario puede crear el primer perfil y rancho, o solicitar acceso con un código compartido por el propietario. La solicitud no concede acceso hasta que el propietario la apruebe. El propietario puede revisar solicitudes, retirar trabajadores y consultar los perfiles del rancho. Una cuenta solo puede pertenecer a un rancho activo. El rol trabajador puede registrar pesos, tratamientos y jornadas, pero no editar fichas, borrar registros, administrar permisos ni modificar fotografías. El propietario conserva la administración completa. Una vez aplicada la migración, sus políticas RLS y triggers hacen cumplir estas restricciones en el servidor, además de los controles de interfaz.
 
-Los formularios y las llamadas de acceso/recuperación están implementados en el cliente. La entrega del correo y el flujo con credenciales reales dependen de la configuración y políticas del proyecto Supabase y deben verificarse allí; no se consideran validados solo por probar la interfaz local.
+El almacenamiento local se separa por identificador del rancho. Al asociar por primera vez una cuenta, los datos locales anteriores se copian al almacén aislado de ese rancho y solo se vacía el almacén anterior después de confirmar la copia local. Conserva una copia de seguridad antes de ese primer cambio como protección adicional. Una sesión offline previamente reconocida reutiliza el perfil cacheado del rancho; al reconectar, Ganadero consulta de nuevo la membresía y Supabase vuelve a aplicar RLS.
 
-### Modelo multiusuario acordado, pendiente de implementación
+### Aplicar la migración de usuarios en forma segura
 
-- Una cuenta pertenece a un solo rancho.
-- Una cuenta nueva solicita acceso y el propietario/admin del rancho debe aprobarla.
-- El rol trabajador podrá registrar pesos, tratamientos y jornadas, pero no administrar usuarios ni permisos.
+1. Descarga una copia desde la aplicación y conserva el archivo original fuera del navegador.
+2. Restaura una copia de la base de datos/proyecto en Supabase Staging, o crea un proyecto temporal y migra allí los datos actuales.
+3. Ejecuta `supabase-ranch-access-migration.sql` en staging. Verifica que las filas de `animal_sync_records`, `journey_sync_records` y los objetos del bucket `animal-photos` permanezcan intactos.
+4. Con dos cuentas de prueba, comprueba que el propietario pueda crear el perfil, que un trabajador solicite acceso, que la aprobación habilite solo ese rancho y que una cuenta de otro rancho no pueda leer datos, jornadas ni fotos.
+5. Comprueba también que el trabajador pueda añadir pesajes, tratamientos y jornadas, pero no alterar datos base del animal, borrar eventos, cambiar fotos, dar de baja animales ni modificar roles.
+6. Solo después de verificar el respaldo, las políticas y las cuentas, programa la ejecución del mismo archivo en producción. La aplicación no ejecuta la migración por sí sola.
 
-Estas decisiones todavía no están aplicadas al esquema ni a las políticas RLS. Hasta implementar y probar las membresías, cada cuenta Supabase conserva el aislamiento actual por `owner_id`; registrarse no permite acceder a los datos de otra cuenta.
+La migración solo añade tablas y funciones y reemplaza las políticas indicadas; no ejecuta `DELETE`, `TRUNCATE`, `DROP TABLE` ni modifica los `owner_id` existentes. Las cuentas que ya tienen datos conservan su `owner_id`: después de crear su perfil de rancho, ese mismo identificador funciona como propietario y mantiene sus filas. Hasta aplicar la migración, la aplicación reconoce el esquema anterior y no habilita la administración multiusuario.
+
+### Estado de validación y publicación
+
+- El código de perfiles/rancho y la migración están preparados localmente. La migración no se ha ejecutado en Supabase ni se ha validado contra PostgreSQL en un proyecto de pruebas.
+- No se han probado cuentas reales, confirmaciones o recuperación por correo, separación RLS entre dos ranchos, ni la aprobación/revocación con trabajadores reales.
+- No se ha comprobado sincronización entre dos dispositivos, pérdida y restauración de conexión, ni respaldo/restauración de una fotografía real.
+- Los cambios de esta etapa no están publicados en Vercel; antes de publicarlos hay que completar las pruebas de staging y autorizar el despliegue.
 
 ## Crecimiento y peso objetivo
 

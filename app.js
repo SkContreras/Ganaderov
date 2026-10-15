@@ -26,14 +26,17 @@
   };
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), sort: "tag", direction: 1, currentAnimalId: null, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyUpdating: new Set(), animalFormSnapshot: "", calculatorProjection: null, calculatorMeasuredGain: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
+  const hasRanchAccess = () => !currentUser || state.legacyAccount || ["owner", "admin", "worker"].includes(state.ranchRole);
+  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), sort: "tag", direction: 1, currentAnimalId: null, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyUpdating: new Set(), animalFormSnapshot: "", calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
   let cloud;
   let currentUser;
+  const canManageRanch = () => !currentUser || state.legacyAccount || ["owner", "admin"].includes(state.ranchRole);
+  const isRanchWorker = () => Boolean(currentUser && !state.legacyAccount && state.ranchRole === "worker");
 
-  function openDatabase() {
+  function openDatabase(name = DB_NAME) {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      const request = indexedDB.open(name, DB_VERSION);
       request.onupgradeneeded = () => {
         const database = request.result;
         if (!database.objectStoreNames.contains("animals")) database.createObjectStore("animals", { keyPath: "id" });
@@ -99,10 +102,266 @@
   const put = (store, value) => transaction([store], "readwrite", tx => tx.objectStore(store).put(value));
   const remove = (store, key) => transaction([store], "readwrite", tx => tx.objectStore(store).delete(key));
 
+  function readDatabaseStore(database, storeName) {
+    return new Promise((resolve, reject) => {
+      const request = database.transaction(storeName, "readonly").objectStore(storeName).getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async function switchRanchDatabase(ownerId) {
+    const scopedName = `${DB_NAME}-ranch-${ownerId}`;
+    if (db.name === scopedName) return false;
+    const previous = db;
+    const target = await openDatabase(scopedName);
+    const stores = ["animals", "events", "photos", "syncMeta", "deletedAnimals", "journeys", "growthForecasts"];
+    const targetRows = await Promise.all(stores.map(store => readDatabaseStore(target, store)));
+    const targetEmpty = targetRows.every(rows => rows.length === 0);
+    const scopeMarker = targetRows[stores.indexOf("syncMeta")].find(item => item.id === "local-ranch-scope");
+    if (!scopeMarker && targetEmpty) {
+      let sourceRows = null;
+      if (previous.name === DB_NAME) {
+        sourceRows = await Promise.all(stores.map(store => readDatabaseStore(previous, store)));
+      }
+      const tx = target.transaction(stores, "readwrite");
+      if (sourceRows) {
+        stores.forEach((store, index) => sourceRows[index].forEach(item => tx.objectStore(store).put(item)));
+      }
+      tx.objectStore("syncMeta").put({ id: "local-ranch-scope", ownerId });
+      await new Promise((resolve, reject) => {
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error || new Error("No se pudo aislar el almacenamiento de este rancho."));
+        tx.onabort = () => reject(tx.error || new Error("Se canceló el aislamiento del almacenamiento local."));
+      });
+      if (sourceRows) {
+        const sourceTx = previous.transaction(stores, "readwrite");
+        stores.forEach(store => sourceTx.objectStore(store).clear());
+        await new Promise((resolve, reject) => {
+          sourceTx.oncomplete = resolve;
+          sourceTx.onerror = () => reject(sourceTx.error || new Error("No se pudo separar el almacenamiento anterior."));
+          sourceTx.onabort = () => reject(sourceTx.error || new Error("Se canceló la separación del almacenamiento anterior."));
+        });
+      }
+    } else if (!scopeMarker) {
+      await new Promise((resolve, reject) => {
+        const tx = target.transaction("syncMeta", "readwrite");
+        tx.objectStore("syncMeta").put({ id: "local-ranch-scope", ownerId });
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error || new Error("No se pudo registrar el ámbito del almacenamiento local."));
+        tx.onabort = () => reject(tx.error || new Error("Se canceló el registro del ámbito local."));
+      });
+    }
+    db = target;
+    if (previous !== target) previous.close();
+    await refresh();
+    return true;
+  }
+
+  async function switchGuestDatabase() {
+    if (db.name === DB_NAME) return;
+    const previous = db;
+    db = await openDatabase(DB_NAME);
+    previous.close();
+    await refresh();
+  }
+
   function setSyncStatus(message) {
     $("#sync-label").textContent = message.toLocaleUpperCase("es-MX");
-    $("#account-label").textContent = currentUser ? currentUser.email : "Sin sesión";
+    $("#account-label").textContent = currentUser
+      ? `${state.ranchContext?.display_name || currentUser.email}${state.ranchContext?.ranch_name ? ` · ${state.ranchContext.ranch_name}` : ""}`
+      : "Sin sesión";
     $("#sync-button").disabled = !cloud || !currentUser || !navigator.onLine || state.syncing;
+  }
+
+  function setRanchContext(context) {
+    state.ranchContext = context;
+    state.ranchOwnerId = context?.status === "active" ? context.owner_id : null;
+    state.ranchRole = context?.status === "active" ? context.role : null;
+    state.ranchReady = true;
+    $("#ranch-button").hidden = !currentUser;
+    $("#ranch-button").textContent = context?.status === "active" ? "Rancho y usuarios" : "Configurar rancho";
+    $("#account-label").textContent = currentUser
+      ? `${context?.display_name || currentUser.email} · ${context?.ranch_name || "Sin rancho"}`
+      : "Sin sesión";
+    if (currentUser && context?.status === "active") {
+      localStorage.setItem(`ganadero-ranch-context:${currentUser.id}`, JSON.stringify(context));
+    } else if (currentUser) {
+      localStorage.removeItem(`ganadero-ranch-context:${currentUser.id}`);
+    }
+  }
+
+  async function loadRanchContext() {
+    state.ranchReady = false;
+    if (!currentUser) {
+      state.legacyAccount = false;
+      state.ranchOwnerId = null;
+      state.ranchRole = null;
+      setRanchContext(null);
+      return;
+    }
+
+    if (!navigator.onLine) {
+      const cached = localStorage.getItem(`ganadero-ranch-context:${currentUser.id}`);
+      if (cached) {
+        const context = JSON.parse(cached);
+        if (context.status === "active" && context.owner_id) {
+          state.legacyAccount = false;
+          setRanchContext(context);
+          await switchRanchDatabase(context.owner_id);
+          return;
+        }
+      }
+      state.ranchReady = false;
+      return;
+    }
+
+    const { data, error } = await cloud.rpc("get_my_ranch_context");
+    if (error) {
+      if (!navigator.onLine) return loadRanchContext();
+      if (error.code === "PGRST202" || /get_my_ranch_context|schema cache|could not find the function/i.test(error.message || "")) {
+        state.legacyAccount = true;
+        setRanchContext({
+          status: "legacy",
+          owner_id: currentUser.id,
+          display_name: currentUser.email || "Propietario",
+          ranch_name: "Cuenta personal"
+        });
+        return;
+      }
+      state.ranchReady = false;
+      setSyncStatus(`No se pudieron comprobar los permisos: ${error.message}`);
+      throw error;
+    }
+
+    state.legacyAccount = false;
+    const context = data || { status: "unassigned" };
+    setRanchContext(context);
+    if (context.status === "active" && context.owner_id) {
+      await switchRanchDatabase(context.owner_id);
+    } else {
+      if (db.name !== DB_NAME) await switchGuestDatabase();
+      state.animals = [];
+      state.events = [];
+      state.photos = [];
+      state.journeys = [];
+      state.forecasts = [];
+      renderDashboard();
+      renderJourneys();
+      renderCalculatorAnimalOptions();
+    }
+  }
+
+  function renderRanchDialog() {
+    const context = state.ranchContext;
+    const host = $("#ranch-content");
+    if (!context) {
+      host.innerHTML = '<p class="account-help">Inicia sesión para consultar o administrar el rancho.</p>';
+      return;
+    }
+    if (state.legacyAccount) {
+      host.innerHTML = `<p class="account-help">La cuenta aún usa el aislamiento anterior por cuenta. Para habilitar perfiles y solicitudes de acceso, primero aplica en Supabase el archivo <strong>supabase-ranch-access-migration.sql</strong>. La migración es aditiva; no la ejecutes en producción hasta probarla en una copia o proyecto de pruebas.</p>`;
+      return;
+    }
+    if (context.status === "unassigned") {
+      host.innerHTML = `
+        <p class="account-help">Tu cuenta todavía no pertenece a un rancho. Crea el rancho del que serás propietario o solicita acceso con el código que te comparta su propietario. Una cuenta solo puede pertenecer a un rancho activo.</p>
+        <form id="create-ranch-form" class="ranch-form">
+          <h3>Crear el primer usuario y rancho</h3>
+          <label>Nombre del rancho<input name="ranchName" maxlength="120" required></label>
+          <label>Tu nombre<input name="displayName" maxlength="120" required></label>
+          <button class="button button-primary" type="submit">Crear rancho como propietario</button>
+        </form>
+        <form id="request-ranch-form" class="ranch-form">
+          <h3>Solicitar acceso a un rancho</h3>
+          <label>Código compartido por el propietario<input name="joinCode" minlength="6" maxlength="40" autocomplete="off" required></label>
+          <label>Tu nombre<input name="displayName" maxlength="120" required></label>
+          <button class="button button-outline" type="submit">Enviar solicitud</button>
+        </form>`;
+      return;
+    }
+    if (context.status === "pending") {
+      host.innerHTML = `<div class="ranch-callout"><strong>Solicitud pendiente</strong><p>El propietario todavía debe aprobar tu acceso. No se sincronizarán datos del rancho mientras tanto.</p></div>
+        <button class="button button-outline button-small" type="button" data-refresh-ranch>Actualizar estado</button>`;
+      return;
+    }
+
+    const isAdmin = ["owner", "admin"].includes(context.role);
+    const requests = (context.requests || []).map(request => `
+      <li><span><strong>${escapeHtml(request.display_name)}</strong><small>Solicitado ${escapeHtml(formatTimestamp(request.requested_at))}</small></span>
+        <span class="ranch-request-actions"><button class="button button-primary button-small" type="button" data-review-request="${escapeHtml(request.id)}" data-approve="true">Aprobar</button>
+        <button class="button button-outline button-small" type="button" data-review-request="${escapeHtml(request.id)}" data-approve="false">Rechazar</button></span></li>`).join("");
+    const members = (context.members || []).map(member => `
+      <li><span><strong>${escapeHtml(member.display_name)}</strong><small>${escapeHtml(member.role === "owner" ? "Propietario" : member.role === "admin" ? "Administrador" : "Trabajador")}</small></span>
+        ${isAdmin && member.role === "worker" ? `<button class="button button-outline button-small" type="button" data-revoke-member="${escapeHtml(member.user_id)}">Retirar acceso</button>` : ""}</li>`).join("");
+    host.innerHTML = `
+      <div class="ranch-summary"><span>Rancho</span><strong>${escapeHtml(context.ranch_name)}</strong><span>Tu perfil</span><strong>${escapeHtml(context.display_name)} · ${escapeHtml(context.role === "owner" ? "Propietario" : context.role === "admin" ? "Administrador" : "Trabajador")}</strong></div>
+      ${isAdmin ? `<section class="ranch-section"><h3>Código para solicitar acceso</h3><p>Comparte este código con la persona. El código solo permite enviar una solicitud; tú debes aprobarla.</p><div class="ranch-code"><code>${escapeHtml(context.join_code || "")}</code><button class="button button-outline button-small" type="button" data-copy-ranch-code>Copiar</button></div></section>
+        <button class="button button-outline button-small" type="button" data-refresh-ranch>Actualizar solicitudes</button>
+        <section class="ranch-section"><h3>Solicitudes pendientes (${(context.requests || []).length})</h3><ul class="ranch-list">${requests || "<li>No hay solicitudes pendientes.</li>"}</ul></section>
+        <section class="ranch-section"><h3>Personas autorizadas</h3><ul class="ranch-list">${members || "<li>No hay perfiles activos.</li>"}</ul></section>` :
+        '<p class="account-help">Como trabajador puedes registrar pesajes, tratamientos y jornadas. No puedes editar fichas, fotografías, usuarios ni permisos.</p>'}`;
+  }
+
+  async function refreshRanchContext(showDialog = false) {
+    try {
+      await loadRanchContext();
+      if (showDialog) {
+        renderRanchDialog();
+        if (!$("#ranch-dialog").open) $("#ranch-dialog").showModal();
+      }
+      return true;
+    } catch (error) {
+      showToast(`No se pudieron cargar los permisos del rancho: ${error.message}`);
+      return false;
+    }
+  }
+
+  async function submitRanchForm(event, rpcName, parameters, successMessage) {
+    event.preventDefault();
+    if (!cloud || !currentUser) return;
+    const button = event.currentTarget.querySelector('button[type="submit"]');
+    button.disabled = true;
+    try {
+      const { error } = await cloud.rpc(rpcName, parameters);
+      if (error) throw error;
+      await loadRanchContext();
+      renderRanchDialog();
+      scheduleSync();
+      showToast(successMessage);
+    } catch (error) {
+      showToast(`No se pudo completar la solicitud: ${error.message}`);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function reviewRanchRequest(requestId, approve) {
+    try {
+      const { error } = await cloud.rpc("review_ranch_access_request", {
+        p_request_id: requestId,
+        p_approve: approve
+      });
+      if (error) throw error;
+      await loadRanchContext();
+      renderRanchDialog();
+      if (approve) await syncData();
+      showToast(approve ? "Solicitud aprobada; el trabajador ya puede sincronizar." : "Solicitud rechazada.");
+    } catch (error) {
+      showToast(`No se pudo revisar la solicitud: ${error.message}`);
+    }
+  }
+
+  async function revokeRanchWorker(userId) {
+    try {
+      const { error } = await cloud.rpc("revoke_ranch_worker", { p_user_id: userId });
+      if (error) throw error;
+      await loadRanchContext();
+      renderRanchDialog();
+      showToast("Se retiró el acceso del trabajador.");
+    } catch (error) {
+      showToast(`No se pudo retirar el acceso: ${error.message}`);
+    }
   }
 
   function showAccountView(view, message = "", success = false) {
@@ -172,7 +431,7 @@
 
   async function touchAnimal(animalId) {
     const animal = await getOne("animals", animalId);
-    if (animal) await put("animals", { ...animal, updatedAt: nextModifiedAt(animal.updatedAt) });
+    if (animal && !isRanchWorker()) await put("animals", { ...animal, updatedAt: nextModifiedAt(animal.updatedAt) });
     scheduleSync();
   }
 
@@ -306,7 +565,7 @@
 
       if (useLocal && localJourney) {
         const { data, error: saveError } = await cloud.from("journey_sync_records").upsert({
-          owner_id: currentUser.id,
+          owner_id: state.ranchOwnerId,
           journey_id: journeyId,
           payload: localJourney
         }, { onConflict: "owner_id,journey_id" }).select("updated_at").single();
@@ -385,7 +644,7 @@
 
   async function removeUnusedRemotePhotos(animalId, retainedPaths) {
     const bucket = cloud.storage.from("animal-photos");
-    const prefix = `${currentUser.id}/${animalId}`;
+    const prefix = `${state.ranchOwnerId}/${animalId}`;
     const removePaths = [];
     for (let offset = 0; ; offset += 100) {
       const { data, error } = await bucket.list(prefix, { limit: 100, offset });
@@ -409,12 +668,14 @@
     let payload = null;
     if (!deletedAt) {
       const photos = await Promise.all(bundle.photos.map(async photo => {
-        const storagePath = `${currentUser.id}/${animalId}/${photo.id}`;
-        const { error } = await cloud.storage.from("animal-photos").upload(storagePath, photo.blob, {
-          contentType: photo.mime,
-          upsert: true
-        });
-        if (error) throw error;
+        const storagePath = `${state.ranchOwnerId}/${animalId}/${photo.id}`;
+        if (!isRanchWorker()) {
+          const { error } = await cloud.storage.from("animal-photos").upload(storagePath, photo.blob, {
+            contentType: photo.mime,
+            upsert: true
+          });
+          if (error) throw error;
+        }
         retainedPaths.add(storagePath);
         return {
           id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
@@ -428,14 +689,24 @@
         photos
       };
     }
-    const { data, error } = await cloud.from("animal_sync_records").upsert({
-      owner_id: currentUser.id,
-      animal_id: animalId,
-      deleted_at: deletedAt,
-      payload
-    }, { onConflict: "owner_id,animal_id" }).select("modified_at").single();
+    const saveQuery = isRanchWorker()
+      ? deletedAt
+        ? Promise.reject(new Error("Los trabajadores no pueden eliminar fichas de animales."))
+        : cloud.from("animal_sync_records")
+          .update({ payload })
+          .eq("owner_id", state.ranchOwnerId)
+          .eq("animal_id", animalId)
+          .select("modified_at")
+          .single()
+      : cloud.from("animal_sync_records").upsert({
+          owner_id: state.ranchOwnerId,
+          animal_id: animalId,
+          deleted_at: deletedAt,
+          payload
+        }, { onConflict: "owner_id,animal_id" }).select("modified_at").single();
+    const { data, error } = await saveQuery;
     if (error) throw error;
-    await removeUnusedRemotePhotos(animalId, retainedPaths);
+    if (!isRanchWorker()) await removeUnusedRemotePhotos(animalId, retainedPaths);
     return data.modified_at;
   }
 
@@ -448,8 +719,24 @@
       setSyncStatus("Inicia sesión para sincronizar");
       return;
     }
+    if (!state.ranchReady) {
+      setSyncStatus("Comprobando acceso al rancho…");
+      return;
+    }
+    if (!state.ranchOwnerId) {
+      setSyncStatus(state.ranchContext?.status === "pending"
+        ? "Solicitud de acceso pendiente"
+        : "Crea un rancho o solicita acceso para sincronizar");
+      return;
+    }
     if (!navigator.onLine) {
       setSyncStatus("Sin conexión · cambios guardados aquí");
+      return;
+    }
+    try {
+      await loadRanchContext();
+    } catch (error) {
+      setSyncStatus(`No se pudo comprobar el acceso: ${error.message}`);
       return;
     }
     if (state.syncing) {
@@ -896,6 +1183,7 @@
     state.calculatorProjection = null;
     renderCalculatorChart(weight, gain, days, baselineDate);
     $("#calculator-save-forecast").disabled = true;
+    $("#calculator-save-forecast").hidden = !canManageRanch();
     $("#calculator-forecast-save-note").textContent = "Selecciona un animal para guardar la estimación en su expediente y compararla con una pesada posterior.";
     const currentAverage = calculatorNumber("#calculator-current-average");
     const currentMin = calculatorNumber("#calculator-current-min");
@@ -954,6 +1242,7 @@
     }
     if (selectedAnimalId && state.calculatorProjection) {
       $("#calculator-save-forecast").disabled = false;
+      $("#calculator-save-forecast").hidden = !canManageRanch();
       $("#calculator-forecast-save-note").textContent = state.calculatorProjection.source === "manual-gmd"
         ? "Esta estimación usa una GMD manual. Quedará identificada como supuesto y no como crecimiento medido."
         : "La estimación guardará sus pesadas de origen y su fecha objetivo para compararla con una pesada real posterior.";
@@ -1033,6 +1322,10 @@
   }
 
   async function saveCalculatorForecast() {
+    if (!canManageRanch()) {
+      showToast("Solo el propietario o administrador puede guardar estimaciones.");
+      return;
+    }
     const projection = state.calculatorProjection;
     const animalId = $("#calculator-animal").value;
     if (!projection || !animalId || projection.animalId !== animalId ||
@@ -1074,6 +1367,7 @@
   }
 
   function renderGrowthTargetForm(animal) {
+    if (!canManageRanch()) return "";
     const { targetMin, targetMax, hasTarget } = growthTargetValues(animal);
     return `<form id="growth-target-form" class="growth-target-form">
       <label>Peso objetivo mínimo (kg)<input name="targetMin" type="number" min="0" step="0.1" value="${hasTarget ? targetMin : ""}" placeholder="Ej. 160"></label>
@@ -1212,6 +1506,8 @@
   }
 
   function renderDashboard() {
+    $("#add-animal-button").hidden = !canManageRanch();
+    $("#empty-add-button").hidden = !canManageRanch();
     $("#stat-total").textContent = String(state.animals.length);
     $("#stat-females").textContent = String(state.animals.filter(animal => animal.sex === "Hembra").length);
     $("#stat-males").textContent = String(state.animals.filter(animal => animal.sex === "Macho").length);
@@ -1257,7 +1553,7 @@
     $("#empty-copy").textContent = isEmptyInventory
       ? "Añade tu primer animal para empezar a organizar su información."
       : "Prueba con otra búsqueda o cambia el filtro seleccionado.";
-    $("#empty-add-button").hidden = !isEmptyInventory;
+    $("#empty-add-button").hidden = !isEmptyInventory || !canManageRanch();
   }
 
   function journeyName(journey) {
@@ -1322,6 +1618,10 @@
   }
 
   function openJourneyCreateForm() {
+    if (!hasRanchAccess()) {
+      showToast("Crea un rancho o espera a que aprueben tu solicitud para registrar jornadas.");
+      return;
+    }
     if (!state.animals.length) {
       $("#journey-no-animals").hidden = false;
       $("#start-journey-button").disabled = true;
@@ -1331,6 +1631,7 @@
     }
     $("#journey-form").reset();
     $("#journey-date").value = today();
+    $("#journey-type").querySelector('option[value="other"]').hidden = isRanchWorker();
     updateJourneyFormFields();
     $("#journey-create-dialog").showModal();
   }
@@ -1344,8 +1645,16 @@
 
   async function createJourney(event) {
     event.preventDefault();
+    if (!hasRanchAccess()) {
+      showToast("Crea un rancho o espera a que aprueben tu solicitud para registrar jornadas.");
+      return;
+    }
     if (!state.animals.length) return;
     const type = $("#journey-type").value;
+    if (isRanchWorker() && type === "other") {
+      showToast("El perfil de trabajador no puede registrar actividades personalizadas.");
+      return;
+    }
     const journey = {
       id: newId(),
       type,
@@ -1389,7 +1698,11 @@
 
   function journeyActor() {
     return currentUser
-      ? { authUserId: currentUser.id, email: currentUser.email || "", label: currentUser.email || "Usuario autenticado" }
+      ? {
+          authUserId: currentUser.id,
+          email: currentUser.email || "",
+          label: state.ranchContext?.display_name || currentUser.email || "Usuario autenticado"
+        }
       : { authUserId: null, email: "", label: "Usuario local (sin sesión)" };
   }
 
@@ -1497,7 +1810,11 @@
 
   async function toggleJourneyAnimal(animalId) {
     const journey = state.journeys.find(item => item.id === state.currentJourneyId);
-    if (!journey || journey.status !== "in_progress" || state.journeyUpdating.has(animalId)) return;
+    if (!hasRanchAccess() || !journey || journey.status !== "in_progress" || state.journeyUpdating.has(animalId)) return;
+    if (isRanchWorker() && journey.type === "other") {
+      showToast("El perfil de trabajador no puede registrar actividades personalizadas.");
+      return;
+    }
     const selectedAnimal = journey.roster.find(animal => animal.id === animalId);
     if (!selectedAnimal || selectedAnimal.attended) return;
     if (journey.type === "weight") {
@@ -1530,7 +1847,7 @@
 
   async function addJourneyAnimals(journeyId) {
     const journey = state.journeys.find(item => item.id === journeyId);
-    if (!journey || journey.status !== "in_progress") return;
+    if (!hasRanchAccess() || !journey || journey.status !== "in_progress") return;
     const selectedIds = [...$$('input[name="journey-animal-to-add"]:checked')].map(input => input.value);
     if (!selectedIds.length) {
       showToast("Selecciona al menos un animal para agregar.");
@@ -1565,7 +1882,11 @@
 
   async function reopenJourney(journeyId) {
     const journey = state.journeys.find(item => item.id === journeyId);
-    if (!journey || journey.status !== "incomplete" || !journeyCounts(journey).pending) return;
+    if (!hasRanchAccess() || !journey || journey.status !== "incomplete" || !journeyCounts(journey).pending) return;
+    if (isRanchWorker() && journey.type === "other") {
+      showToast("El perfil de trabajador no puede reabrir actividades personalizadas.");
+      return;
+    }
     try {
       await put("journeys", {
         ...journey,
@@ -1632,16 +1953,18 @@
             });
           }
         };
-        const animalStore = tx.objectStore("animals");
-        const animalRequest = animalStore.get(animalId);
-        animalRequest.onsuccess = () => {
-          if (animalRequest.result) {
-            animalStore.put({
-              ...animalRequest.result,
-              updatedAt: nextModifiedAt(animalRequest.result.updatedAt)
-            });
-          }
-        };
+        if (!isRanchWorker()) {
+          const animalStore = tx.objectStore("animals");
+          const animalRequest = animalStore.get(animalId);
+          animalRequest.onsuccess = () => {
+            if (animalRequest.result) {
+              animalStore.put({
+                ...animalRequest.result,
+                updatedAt: nextModifiedAt(animalRequest.result.updatedAt)
+              });
+            }
+          };
+        }
       });
       state.journeyWeightTargetId = null;
       await refresh();
@@ -1657,7 +1980,11 @@
 
   async function finishJourney() {
     const journey = state.journeys.find(item => item.id === state.currentJourneyId);
-    if (!journey || journey.status !== "in_progress") return;
+    if (!hasRanchAccess() || !journey || journey.status !== "in_progress") return;
+    if (isRanchWorker() && journey.type === "other") {
+      showToast("El perfil de trabajador no puede finalizar actividades personalizadas.");
+      return;
+    }
     const counts = journeyCounts(journey);
     if (counts.pending && !confirm(`⚠ Todavía hay ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}.\n\n¿Está seguro de que desea finalizar la jornada? Solo se registrarán los animales atendidos.`)) return;
     const completedAt = new Date().toISOString();
@@ -1675,11 +2002,13 @@
         const eventsStore = tx.objectStore("events");
         const forecastsStore = tx.objectStore("growthForecasts");
         journey.roster.filter(animal => animal.attended).forEach(rosterAnimal => {
-          const animalRequest = animalsStore.get(rosterAnimal.id);
-          animalRequest.onsuccess = () => {
-            const animal = animalRequest.result;
-            if (animal) animalsStore.put({ ...animal, updatedAt: nextModifiedAt(animal.updatedAt) });
-          };
+          if (!isRanchWorker()) {
+            const animalRequest = animalsStore.get(rosterAnimal.id);
+            animalRequest.onsuccess = () => {
+              const animal = animalRequest.result;
+              if (animal) animalsStore.put({ ...animal, updatedAt: nextModifiedAt(animal.updatedAt) });
+            };
+          }
           const eventType = journey.type;
           const fields = {
             journeyId: journey.id,
@@ -1704,7 +2033,7 @@
             ...fields
           };
           eventsStore.put(eventRecord);
-          if (eventType === "weight" && Number.isFinite(Number(rosterAnimal.weight))) {
+          if (!isRanchWorker() && eventType === "weight" && Number.isFinite(Number(rosterAnimal.weight))) {
             pendingForecastUpdates(state.forecasts, rosterAnimal.id, state.events.concat(eventRecord))
               .forEach(forecast => forecastsStore.put(forecast));
           }
@@ -1755,6 +2084,10 @@
   function newId() { return crypto.randomUUID(); }
 
   function openAnimalForm(animal = null) {
+    if (!canManageRanch()) {
+      showToast("Solo el propietario o administrador puede crear o editar fichas de animales.");
+      return;
+    }
     const form = $("#animal-form");
     form.reset();
     $("#animal-id").value = animal?.id || "";
@@ -1787,11 +2120,16 @@
   }
 
   function makeEvent(animalId, type, date, fields = {}) {
-    return { id: newId(), animalId, type, date, createdAt: new Date().toISOString(), ...fields };
+    const performedAt = new Date().toISOString();
+    return { id: newId(), animalId, type, date, createdAt: performedAt, performedAt, performedBy: journeyActor(), ...fields };
   }
 
   async function saveAnimal(event) {
     event.preventDefault();
+    if (!canManageRanch()) {
+      showToast("Solo el propietario o administrador puede crear o editar fichas de animales.");
+      return;
+    }
     const id = $("#animal-id").value || newId();
     const existing = state.animals.find(animal => animal.id === id);
     const tag = $("#animal-tag").value.trim();
@@ -1901,11 +2239,24 @@
     const animalEvents = state.events.filter(record => record.animalId === animalId)
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
     const photos = state.photos.filter(photo => photo.animalId === animalId);
+    const manager = canManageRanch();
+    const worker = isRanchWorker();
     const gallery = photos.map(photo => `<div class="photo-tile">
       <img src="${photoUrl(photo)}" alt="Fotografía de ${escapeHtml(animal.name || animal.tag || "animal")}" data-view-photo="${escapeHtml(photo.id)}">
-      <button class="photo-star ${photo.primary ? "primary" : ""}" data-primary-photo="${escapeHtml(photo.id)}" type="button" aria-label="${photo.primary ? "Fotografía principal" : "Elegir como fotografía principal"}">★</button>
-      <button class="photo-remove" data-delete-photo="${escapeHtml(photo.id)}" type="button" aria-label="Eliminar fotografía">×</button>
+      ${manager ? `<button class="photo-star ${photo.primary ? "primary" : ""}" data-primary-photo="${escapeHtml(photo.id)}" type="button" aria-label="${photo.primary ? "Fotografía principal" : "Elegir como fotografía principal"}">★</button>
+      <button class="photo-remove" data-delete-photo="${escapeHtml(photo.id)}" type="button" aria-label="Eliminar fotografía">×</button>` : ""}
     </div>`).join("");
+    const recordButtons = manager
+      ? `<button class="button button-outline" type="button" data-add-record="weight">＋ Pesaje</button>
+          <button class="button button-outline" type="button" data-add-record="vaccine">＋ Vacuna</button>
+          <button class="button button-outline" type="button" data-add-record="deworm">＋ Desparasitación</button>
+          <button class="button button-outline" type="button" data-add-record="bath">＋ Baño</button>`
+      : worker
+        ? `<button class="button button-outline" type="button" data-add-record="weight">＋ Pesaje</button>
+          <button class="button button-outline" type="button" data-add-record="vaccine">＋ Vacuna</button>
+          <button class="button button-outline" type="button" data-add-record="deworm">＋ Desparasitación</button>
+          <button class="button button-outline" type="button" data-add-record="bath">＋ Baño</button>`
+        : "";
 
     $("#detail-content").innerHTML = `
       <div class="detail-header">
@@ -1913,11 +2264,8 @@
           <button class="icon-button" type="button" data-close="detail-dialog" aria-label="Cerrar">×</button>
         </div>
         <div class="detail-actions">
-          <button class="button button-outline" type="button" data-edit-animal="${escapeHtml(animal.id)}">✎ Actualizar información</button>
-          <button class="button button-outline" type="button" data-add-record="weight">＋ Pesaje</button>
-          <button class="button button-outline" type="button" data-add-record="vaccine">＋ Vacuna</button>
-          <button class="button button-outline" type="button" data-add-record="deworm">＋ Desparasitación</button>
-          <button class="button button-outline" type="button" data-add-record="bath">＋ Baño</button>
+          ${manager ? `<button class="button button-outline" type="button" data-edit-animal="${escapeHtml(animal.id)}">✎ Actualizar información</button>` : ""}
+          ${recordButtons}
         </div>
       </div>
       <div class="detail-body">
@@ -1938,26 +2286,26 @@
         </div>
         ${renderGrowthChart(animal, growthPoints)}
         <section class="detail-section">
-          <div class="detail-section-head"><h3>Historial sanitario y de manejo</h3><button class="add-link" type="button" data-add-record="bath">＋ Añadir registro</button></div>
-          <div class="history-list">${renderHistory(animalEvents.filter(record => record.type !== "note"))}</div>
+          <div class="detail-section-head"><h3>Historial sanitario y de manejo</h3>${manager || worker ? '<button class="add-link" type="button" data-add-record="bath">＋ Añadir registro</button>' : ""}</div>
+          <div class="history-list">${renderHistory(animalEvents.filter(record => record.type !== "note"), manager)}</div>
         </section>
         <section class="detail-section">
-          <div class="detail-section-head"><h3>Comentarios y observaciones</h3><button class="add-link" type="button" data-add-record="note">＋ Añadir observación</button></div>
-          <div class="history-list">${renderHistory(animalEvents.filter(record => record.type === "note"))}</div>
+          <div class="detail-section-head"><h3>Comentarios y observaciones</h3>${manager ? '<button class="add-link" type="button" data-add-record="note">＋ Añadir observación</button>' : ""}</div>
+          <div class="history-list">${renderHistory(animalEvents.filter(record => record.type === "note"), manager)}</div>
         </section>
         <section class="detail-section">
           <div class="detail-section-head"><h3>Galería de fotografías <span class="muted">(${photos.length})</span></h3></div>
-          <div class="gallery">${gallery}<label class="photo-add" title="Añadir fotografías" aria-label="Añadir fotografías">＋<input id="photo-input" type="file" accept="image/*" multiple hidden></label></div>
+          <div class="gallery">${gallery}${manager ? '<label class="photo-add" title="Añadir fotografías" aria-label="Añadir fotografías">＋<input id="photo-input" type="file" accept="image/*" multiple hidden></label>' : ""}</div>
         </section>
         <div class="detail-section animal-management">
-          ${animal.status === "Baja" ? "" : `<button class="add-link" type="button" data-deactivate-animal="${escapeHtml(animal.id)}">Dar de baja</button>`}
-          <button class="danger-link" type="button" data-delete-animal="${escapeHtml(animal.id)}">Eliminar definitivamente</button>
+          ${manager && animal.status !== "Baja" ? `<button class="add-link" type="button" data-deactivate-animal="${escapeHtml(animal.id)}">Dar de baja</button>` : ""}
+          ${manager ? `<button class="danger-link" type="button" data-delete-animal="${escapeHtml(animal.id)}">Eliminar definitivamente</button>` : ""}
         </div>
       </div>`;
     if (!$("#detail-dialog").open) $("#detail-dialog").showModal();
   }
 
-  function renderHistory(records) {
+  function renderHistory(records, allowDelete = canManageRanch()) {
     if (!records.length) return '<p class="history-empty">Todavía no hay registros.</p>';
     return records.map(record => {
       const value = record.type === "weight" ? `<strong>${escapeHtml(record.weight)} kg</strong>`
@@ -1969,13 +2317,17 @@
         ? `<small class="history-audit">Atendido por ${escapeHtml(record.performedBy.label)} · ${escapeHtml(formatTimestamp(record.performedAt || record.createdAt))}</small>` : "";
       const correctedBy = record.weightUpdatedBy?.label
         ? `<small class="history-audit">Peso corregido por ${escapeHtml(record.weightUpdatedBy.label)} · ${escapeHtml(formatTimestamp(record.weightUpdatedAt))}</small>` : "";
-      return `<div class="history-item"><div class="history-date">${formatDate(record.date)}</div><div class="history-description">${value}${record.type === "weight" && record.notes ? ` · ${escapeHtml(record.notes)}` : ""}${journeyLink}${performedBy}${correctedBy}</div><button class="history-delete" data-delete-event="${escapeHtml(record.id)}" type="button" aria-label="Eliminar registro">×</button></div>`;
+      return `<div class="history-item"><div class="history-date">${formatDate(record.date)}</div><div class="history-description">${value}${record.type === "weight" && record.notes ? ` · ${escapeHtml(record.notes)}` : ""}${journeyLink}${performedBy}${correctedBy}</div>${allowDelete ? `<button class="history-delete" data-delete-event="${escapeHtml(record.id)}" type="button" aria-label="Eliminar registro">×</button>` : ""}</div>`;
     }).join("");
   }
 
   function openRecordForm(type) {
     const title = EVENT_TYPES[type];
     if (!title || !state.currentAnimalId) return;
+    if (!hasRanchAccess() || (isRanchWorker() && !["weight", "bath", "vaccine", "deworm", "injection", "medication", "review"].includes(type))) {
+      showToast("Tu perfil no tiene permiso para registrar este tipo de información.");
+      return;
+    }
     $("#record-form").reset();
     $("#record-animal-id").value = state.currentAnimalId;
     $("#record-type").value = type;
@@ -1996,6 +2348,10 @@
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     const type = $("#record-type").value;
+    if (!hasRanchAccess() || (isRanchWorker() && !["weight", "bath", "vaccine", "deworm", "injection", "medication", "review"].includes(type))) {
+      showToast("Tu perfil no tiene permiso para registrar este tipo de información.");
+      return;
+    }
     const date = String(formData.get("date") || "");
     const fields = {};
     if (type === "weight") fields.weight = Number(formData.get("weight"));
@@ -2004,7 +2360,7 @@
     try {
       const animalId = $("#record-animal-id").value;
       const record = makeEvent(animalId, type, date, fields);
-      const forecastUpdates = type === "weight"
+      const forecastUpdates = type === "weight" && !isRanchWorker()
         ? pendingForecastUpdates(await getAllByIndex("growthForecasts", "animalId", animalId), animalId, state.events.concat(record))
         : [];
       await transaction(["events", "growthForecasts"], "readwrite", tx => {
@@ -2024,6 +2380,10 @@
 
   async function saveGrowthTarget(event) {
     event.preventDefault();
+    if (!canManageRanch()) {
+      showToast("Solo el propietario o administrador puede cambiar el peso objetivo.");
+      return;
+    }
     const animal = state.animals.find(item => item.id === state.currentAnimalId);
     if (!animal) return;
     const formData = new FormData(event.target);
@@ -2060,6 +2420,10 @@
   }
 
   async function addPhotos(files) {
+    if (!canManageRanch()) {
+      showToast("Solo el propietario o administrador puede modificar fotografías.");
+      return;
+    }
     const animalId = state.currentAnimalId;
     const images = [...files];
     if (!images.length || images.some(file => !file.type.startsWith("image/"))) {
@@ -2085,6 +2449,7 @@
   }
 
   async function choosePrimary(photoId) {
+    if (!canManageRanch()) return;
     const photo = state.photos.find(item => item.id === photoId);
     if (!photo) return;
     const related = state.photos.filter(item => item.animalId === photo.animalId);
@@ -2102,6 +2467,7 @@
   }
 
   async function deletePhoto(photoId) {
+    if (!canManageRanch()) return;
     const photo = state.photos.find(item => item.id === photoId);
     if (!photo || !confirm("¿Está seguro de que desea eliminar esta fotografía?")) return;
     try {
@@ -2118,6 +2484,7 @@
   }
 
   async function deleteEvent(eventId) {
+    if (!canManageRanch()) return;
     const record = state.events.find(item => item.id === eventId);
     if (!record || !confirm("¿Eliminar este registro del historial?")) return;
     try {
@@ -2132,6 +2499,7 @@
   }
 
   async function deactivateAnimal(animalId) {
+    if (!canManageRanch()) return;
     const animal = state.animals.find(item => item.id === animalId);
     if (!animal) return;
     if (!confirm(`¿Deseas dar de baja a ${animal.name || animal.tag || "este animal"}? Su ficha y su historial se conservarán.`)) return;
@@ -2147,6 +2515,7 @@
   }
 
   async function deleteAnimal(animalId) {
+    if (!canManageRanch()) return;
     const animal = state.animals.find(item => item.id === animalId);
     if (!animal) return;
     const hasEvents = state.events.some(record => record.animalId === animalId);
@@ -2201,7 +2570,7 @@
       const payload = {
         format: "ganadero-backup", version: 1, exportedAt: new Date().toISOString(),
         animals: state.animals, events: state.events, journeys: state.journeys,
-        forecasts: state.forecasts, photos: []
+        forecasts: state.forecasts, photos: [], deletedAnimals: await getAll("deletedAnimals")
       };
       payload.photos = await Promise.all(state.photos.map(async photo => ({
         id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
@@ -2213,7 +2582,7 @@
       link.href = url;
       link.download = `ganadero-copia-${today()}.json`;
       link.click();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
       showToast("Copia de seguridad descargada.");
     } catch (error) {
       showToast(`No se pudo crear la copia: ${error.message}`);
@@ -2249,6 +2618,11 @@
       const animalIds = new Set(animals.map(animal => animal.id));
       const events = payload.events;
       const forecasts = payload.forecasts === undefined ? [] : payload.forecasts;
+      const backedUpDeletions = payload.deletedAnimals === undefined ? [] : payload.deletedAnimals;
+      if (!Array.isArray(backedUpDeletions) || backedUpDeletions.some(deletion =>
+        !deletion || typeof deletion.id !== "string" || !deletion.id ||
+        !Number.isFinite(Date.parse(deletion.deletedAt)) || animalIds.has(deletion.id)
+      )) throw new Error("La copia contiene un registro de eliminación con formato inválido.");
       if (!Array.isArray(forecasts) || forecasts.some(forecast =>
         !forecast || typeof forecast.id !== "string" || !animalIds.has(forecast.animalId) ||
         !["pending", "evaluated"].includes(forecast.status) ||
@@ -2263,21 +2637,26 @@
           (forecast.absoluteErrorPercent !== null && !Number.isFinite(forecast.absoluteErrorPercent))))
       )) throw new Error("La copia contiene una estimación de crecimiento con formato inválido.");
       const photos = await Promise.all(payload.photos.map(async item => {
-        if (!animalIds.has(item.animalId) || typeof item.data !== "string" || !item.data.startsWith("data:")) throw new Error("La copia contiene una fotografía o asociación inválida.");
+        if (!item || typeof item.id !== "string" || !animalIds.has(item.animalId) ||
+            typeof item.data !== "string" || !item.data.startsWith("data:")) {
+          throw new Error("La copia contiene una fotografía o asociación inválida.");
+        }
         const response = await fetch(item.data);
         const blob = await response.blob();
         return { id: item.id, animalId: item.animalId, name: item.name, mime: item.mime, primary: Boolean(item.primary), createdAt: item.createdAt, blob };
       }));
       if (events.some(record => !animalIds.has(record.animalId))) throw new Error("La copia contiene registros asociados a animales inexistentes.");
+      const deletionMap = new Map(backedUpDeletions.map(item => [item.id, item]));
+      previousAnimals.filter(animal => !animalIds.has(animal.id)).forEach(animal => {
+        deletionMap.set(animal.id, { id: animal.id, deletedAt: nextModifiedAt(animal.updatedAt) });
+      });
       for (const url of state.photoUrls.values()) URL.revokeObjectURL(url);
       state.photoUrls.clear();
       await transaction(["animals", "events", "photos", "growthForecasts", "deletedAnimals", "journeys"], "readwrite", tx => {
-        for (const name of ["animals", "events", "photos", "growthForecasts"]) tx.objectStore(name).clear();
+        for (const name of ["animals", "events", "photos", "growthForecasts", "deletedAnimals"]) tx.objectStore(name).clear();
         tx.objectStore("journeys").clear();
         const deletions = tx.objectStore("deletedAnimals");
-        previousAnimals.filter(animal => !animalIds.has(animal.id)).forEach(animal => {
-          deletions.put({ id: animal.id, deletedAt: nextModifiedAt(animal.updatedAt) });
-        });
+        deletionMap.forEach(item => deletions.put(item));
         animals.forEach(item => tx.objectStore("animals").put(item));
         animals.forEach(item => deletions.delete(item.id));
         events.forEach(item => tx.objectStore("events").put(item));
@@ -2302,6 +2681,20 @@
     $("#record-form").addEventListener("submit", saveRecord);
     document.addEventListener("submit", event => {
       if (event.target.id === "growth-target-form") saveGrowthTarget(event);
+      if (event.target.id === "create-ranch-form") {
+        const fields = new FormData(event.target);
+        submitRanchForm(event, "create_my_ranch", {
+          p_ranch_name: String(fields.get("ranchName") || "").trim(),
+          p_display_name: String(fields.get("displayName") || "").trim()
+        }, "Rancho creado. Ya puedes compartir el código para recibir solicitudes.");
+      }
+      if (event.target.id === "request-ranch-form") {
+        const fields = new FormData(event.target);
+        submitRanchForm(event, "request_ranch_access", {
+          p_join_code: String(fields.get("joinCode") || "").trim(),
+          p_display_name: String(fields.get("displayName") || "").trim()
+        }, "Solicitud enviada. El propietario debe aprobarla.");
+      }
     });
     $("#journey-form").addEventListener("submit", createJourney);
     $("#journey-type").addEventListener("change", updateJourneyFormFields);
@@ -2328,6 +2721,10 @@
       showAccountView("login");
       if (!cloud) showAccountView("login", "La conexión con Supabase aún no está configurada. Consulta el README para activarla.");
       $("#account-dialog").showModal();
+    });
+    $("#ranch-button").addEventListener("click", () => {
+      renderRanchDialog();
+      $("#ranch-dialog").showModal();
     });
     $("#sign-in-form").addEventListener("submit", async event => {
       event.preventDefault();
@@ -2443,6 +2840,24 @@
       if (!target) return;
       if (target.dataset.close) { requestClose(target.dataset.close); return; }
       if (target.dataset.accountView) { showAccountView(target.dataset.accountView); return; }
+      if (target.dataset.reviewRequest) {
+        reviewRanchRequest(target.dataset.reviewRequest, target.dataset.approve === "true");
+        return;
+      }
+      if (target.dataset.revokeMember) { revokeRanchWorker(target.dataset.revokeMember); return; }
+      if (target.dataset.refreshRanch) { refreshRanchContext(true); return; }
+      if (target.dataset.copyRanchCode !== undefined) {
+        (async () => {
+          try {
+            if (!navigator.clipboard?.writeText) throw new Error("Este navegador no permite copiar al portapapeles; selecciona el código manualmente.");
+            await navigator.clipboard.writeText(state.ranchContext?.join_code || "");
+            showToast("Código copiado.");
+          } catch (error) {
+            showToast(`No se pudo copiar el código: ${error.message}`);
+          }
+        })();
+        return;
+      }
       if (target.dataset.openJourney) { openJourney(target.dataset.openJourney); return; }
       if (target.dataset.toggleAttendance) { toggleJourneyAnimal(target.dataset.toggleAttendance); return; }
       if (target.dataset.addJourneyAnimals) { addJourneyAnimals(target.dataset.addJourneyAnimals); return; }
@@ -2493,9 +2908,9 @@
         if (event.target === dialog) requestClose(dialog.id);
       });
     });
-    $("#account-dialog").addEventListener("click", event => {
-      if (event.target === event.currentTarget) $("#account-dialog").close();
-    });
+    [$("#account-dialog"), $("#ranch-dialog")].forEach(dialog => dialog.addEventListener("click", event => {
+      if (event.target === event.currentTarget) dialog.close();
+    }));
     $("#animal-dialog").addEventListener("cancel", event => {
       event.preventDefault();
       requestClose("animal-dialog");
@@ -2511,7 +2926,6 @@
       db = await openDatabase();
       registerEvents();
       $("#calculator-price-date").value = today();
-      await refresh();
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
         navigator.serviceWorker.register("./service-worker.js").catch(error => {
           console.error("No se pudo habilitar el modo sin conexión.", error);
@@ -2521,27 +2935,68 @@
       if (window.supabase?.createClient && config?.supabaseUrl && config?.supabaseAnonKey) {
         cloud = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
         cloud.auth.onAuthStateChange((event, session) => {
+          if (event === "INITIAL_SESSION") return;
           currentUser = session?.user || null;
           $("#account-button").hidden = Boolean(currentUser);
           $("#sign-out-button").hidden = !currentUser;
-          setSyncStatus(currentUser ? "Sesión lista" : "Inicia sesión para sincronizar");
+          if (!currentUser) {
+            state.ranchContext = null;
+            state.ranchOwnerId = null;
+            state.ranchRole = null;
+            state.ranchReady = true;
+            state.legacyAccount = false;
+            $("#ranch-button").hidden = true;
+            state.animals = [];
+            state.events = [];
+            state.photos = [];
+            state.journeys = [];
+            state.forecasts = [];
+            renderDashboard();
+            renderJourneys();
+            renderCalculatorAnimalOptions();
+            setTimeout(() => switchGuestDatabase().catch(error =>
+              showToast(`No se pudo separar el almacenamiento de la sesión: ${error.message}`)
+            ), 0);
+          }
+          setSyncStatus(currentUser ? "Comprobando acceso al rancho…" : "Inicia sesión para sincronizar");
           if (event === "PASSWORD_RECOVERY") {
             showAccountView("reset-password");
             if (!$("#account-dialog").open) $("#account-dialog").showModal();
           }
-          if (currentUser) setTimeout(() => syncData(), 0);
+          if (currentUser) setTimeout(async () => {
+            if (await refreshRanchContext()) {
+              if (["unassigned", "pending"].includes(state.ranchContext?.status)) {
+                renderRanchDialog();
+                if (!$("#ranch-dialog").open) $("#ranch-dialog").showModal();
+              }
+              await syncData();
+            }
+          }, 0);
         });
         const { data, error } = await cloud.auth.getSession();
         if (error) throw error;
         currentUser = data.session?.user || null;
         $("#account-button").hidden = Boolean(currentUser);
         $("#sign-out-button").hidden = !currentUser;
+        if (currentUser) {
+          await refreshRanchContext();
+          if (["unassigned", "pending"].includes(state.ranchContext?.status)) {
+            renderRanchDialog();
+            if (!$("#ranch-dialog").open) $("#ranch-dialog").showModal();
+          }
+        } else {
+          state.ranchReady = true;
+          state.ranchOwnerId = null;
+          state.ranchRole = null;
+          $("#ranch-button").hidden = true;
+        }
         setSyncStatus(currentUser ? "Sesión lista" : "Inicia sesión para sincronizar");
         if (currentUser && navigator.onLine) await syncData();
       } else {
         setSyncStatus("Solo en este dispositivo · configura Supabase");
         $("#sync-button").disabled = true;
       }
+      await refresh();
       window.addEventListener("online", () => syncData());
       window.addEventListener("offline", () => setSyncStatus("Sin conexión · cambios guardados aquí"));
       document.addEventListener("visibilitychange", () => {

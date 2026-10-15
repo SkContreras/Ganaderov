@@ -41,6 +41,7 @@
           <button id="sync-button" class="button button-outline button-small" type="button" disabled>Sincronizar</button>
           <button id="account-button" class="button button-outline button-small" type="button">Iniciar sesión</button>
           <button id="sign-out-button" class="button button-outline button-small" type="button" hidden>Cerrar sesión</button>
+          <button id="ranch-button" class="button button-outline button-small" type="button" hidden>Rancho y usuarios</button>
           <button id="restore-button" class="button button-outline button-small" type="button">Importar copia</button>
         </div>
         <input id="restore-input" type="file" accept="application/json,.json" hidden>
@@ -378,6 +379,14 @@
       </div>
     </section>
     <p id="account-error" class="account-error" role="alert" hidden></p>
+  </dialog>
+
+  <dialog id="ranch-dialog" class="modal compact-modal">
+    <div class="modal-heading">
+      <div><div class="eyebrow">PERFILES Y PERMISOS</div><h2>Rancho y usuarios</h2></div>
+      <button class="icon-button" type="button" data-close="ranch-dialog" aria-label="Cerrar">×</button>
+    </div>
+    <div id="ranch-content"></div>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
