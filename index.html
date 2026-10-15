@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7f2">
+  <title>Ganadero — Registro de ganado</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="Ganadero, inicio">
+        <span class="brand-mark" aria-hidden="true">G</span>
+        <span><strong>Ganadero</strong><small>REGISTRO DE CAMPO</small></span>
+      </a>
+      <div class="sidebar-label">GESTIÓN</div>
+      <button class="nav-item active" type="button" aria-current="page">
+        <span class="nav-icon" aria-hidden="true">▦</span> Inventario
+      </button>
+      <div class="sidebar-note">
+        <span class="note-icon" aria-hidden="true">✓</span>
+        <strong>Tus datos, bajo tu control</strong>
+        <p>La información se guarda en este dispositivo. Descarga una copia de seguridad periódicamente.</p>
+        <button id="backup-button" class="text-button" type="button">Crear copia de seguridad <span aria-hidden="true">↗</span></button>
+      </div>
+      <div class="sidebar-foot">REGISTRO LOCAL · SIN CONEXIÓN</div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div class="breadcrumb">Gestión del rancho <span>/</span> <strong>Ganado</strong></div>
+        <button id="restore-button" class="button button-outline button-small" type="button">Importar copia</button>
+        <input id="restore-input" type="file" accept="application/json,.json" hidden>
+      </header>
+
+      <section class="page-heading">
+        <div>
+          <div class="eyebrow"><span class="live-dot"></span> CONTROL DE INVENTARIO</div>
+          <h1>Registro de ganado</h1>
+          <p class="subtitle">Toda la información de tus animales, organizada en un solo lugar.</p>
+        </div>
+        <button id="add-animal-button" class="button button-primary" type="button"><span aria-hidden="true">＋</span> Añadir animal</button>
+      </section>
+
+      <section class="stats-grid" aria-label="Resumen del ganado">
+        <article class="stat-card">
+          <div class="stat-top"><span>Total de animales</span><span class="stat-icon green" aria-hidden="true">♧</span></div>
+          <div id="stat-total" class="stat-value">0</div><div class="stat-caption">En el inventario</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top"><span>Hembras</span><span class="stat-icon rose" aria-hidden="true">♀</span></div>
+          <div id="stat-females" class="stat-value">0</div><div class="stat-caption">Animales registrados</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top"><span>Machos</span><span class="stat-icon blue" aria-hidden="true">♂</span></div>
+          <div id="stat-males" class="stat-value">0</div><div class="stat-caption">Animales registrados</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top"><span>Con peso registrado</span><span class="stat-icon gold" aria-hidden="true">⌁</span></div>
+          <div id="stat-weighed" class="stat-value">0</div><div class="stat-caption">Con al menos un pesaje</div>
+        </article>
+      </section>
+
+      <section class="inventory-card">
+        <div class="inventory-heading">
+          <div><h2>Todos los animales</h2><p id="inventory-count" class="muted">0 animales</p></div>
+          <div class="table-tools">
+            <label class="search-box">
+              <span aria-hidden="true">⌕</span>
+              <input id="search-input" type="search" placeholder="Buscar por arete, nombre..." autocomplete="off">
+              <kbd>⌘ K</kbd>
+            </label>
+            <label class="filter-control">
+              <span class="sr-only">Filtrar por estado</span>
+              <select id="status-filter">
+                <option value="">Todos los estados</option>
+                <option value="Activo">Activos</option>
+                <option value="Vendido">Vendidos</option>
+                <option value="Fallecido">Fallecidos</option>
+                <option value="Baja">Bajas</option>
+                <option value="Otro">Otros</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th><button class="sort-button" data-sort="tag" type="button">Animal <span>↕</span></button></th>
+                <th><button class="sort-button" data-sort="sex" type="button">Sexo <span>↕</span></button></th>
+                <th><button class="sort-button" data-sort="color" type="button">Color <span>↕</span></button></th>
+                <th><button class="sort-button" data-sort="weight" type="button">Último peso <span>↕</span></button></th>
+                <th><button class="sort-button" data-sort="weighDate" type="button">Última pesada <span>↕</span></button></th>
+                <th><button class="sort-button" data-sort="status" type="button">Estado <span>↕</span></button></th>
+                <th><span class="sr-only">Acciones</span></th>
+              </tr>
+            </thead>
+            <tbody id="animal-rows"></tbody>
+          </table>
+          <div id="empty-state" class="empty-state" hidden>
+            <div class="empty-illustration" aria-hidden="true">♧</div>
+            <h3 id="empty-title">Tu registro comienza aquí</h3>
+            <p id="empty-copy">Añade tu primer animal para empezar a organizar su información.</p>
+            <button id="empty-add-button" class="button button-primary" type="button">＋ Añadir animal</button>
+          </div>
+        </div>
+      </section>
+      <footer class="page-footer">Los registros se guardan localmente en este dispositivo.</footer>
+    </main>
+  </div>
+
+  <dialog id="animal-dialog" class="modal">
+    <form id="animal-form" method="dialog">
+      <div class="modal-heading">
+        <div><div class="eyebrow">FICHA DE ANIMAL</div><h2 id="animal-dialog-title">Añadir animal</h2></div>
+        <button class="icon-button" type="button" data-close="animal-dialog" aria-label="Cerrar">×</button>
+      </div>
+      <input id="animal-id" type="hidden">
+      <div class="form-section">
+        <h3>Información básica</h3>
+        <div class="form-grid">
+          <label>Número de arete <span class="optional">Opcional</span><input id="animal-tag" name="tag" maxlength="80" placeholder="Ej. 00125"></label>
+          <label>Nombre <span class="optional">Opcional</span><input id="animal-name" name="name" maxlength="100" placeholder="Ej. Luna"></label>
+          <label>Sexo<select id="animal-sex" name="sex"><option value="">No registrado</option><option>Hembra</option><option>Macho</option></select></label>
+          <label>Color<input id="animal-color" name="color" maxlength="100" placeholder="Ej. Blanca"></label>
+          <label>Fecha de nacimiento<input id="animal-birth" name="birthDate" type="date"></label>
+          <label>Estado<select id="animal-status" name="status"><option>Activo</option><option>Vendido</option><option>Fallecido</option><option>Otro</option></select></label>
+        </div>
+      </div>
+      <div id="initial-records" class="form-section">
+        <h3>Registros iniciales <span class="section-hint">Todos son opcionales</span></h3>
+        <div class="form-grid">
+          <label>Fecha de baño<input id="initial-bath-date" type="date"></label>
+          <label>Fecha de pesada<input id="initial-weight-date" type="date"></label>
+          <label>Peso (kg)<input id="initial-weight" type="number" min="0" step="0.1" placeholder="Ej. 420"></label>
+          <label>Vacuna<input id="initial-vaccine" maxlength="120" placeholder="Tipo o nombre"></label>
+          <label>Fecha de vacuna<input id="initial-vaccine-date" type="date"></label>
+          <label>Desparasitación<input id="initial-dewormer" maxlength="120" placeholder="Producto utilizado"></label>
+          <label>Fecha de desparasitación<input id="initial-deworm-date" type="date"></label>
+          <label class="full-width">Observaciones<textarea id="initial-observation" rows="2" maxlength="2000" placeholder="Información importante sobre este animal..."></textarea></label>
+          <label class="full-width">Fotografías <span class="optional">Opcional · Puedes seleccionar varias</span><input id="initial-photos" type="file" accept="image/*" multiple></label>
+        </div>
+      </div>
+      <div class="modal-actions"><button class="button button-outline" type="button" data-close="animal-dialog">Cancelar</button><button class="button button-primary" type="submit">Guardar animal</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="detail-dialog" class="modal detail-modal">
+    <div id="detail-content"></div>
+  </dialog>
+
+  <dialog id="record-dialog" class="modal compact-modal">
+    <form id="record-form" method="dialog">
+      <div class="modal-heading">
+        <div><div class="eyebrow">NUEVO REGISTRO</div><h2 id="record-dialog-title">Añadir registro</h2></div>
+        <button class="icon-button" type="button" data-close="record-dialog" aria-label="Cerrar">×</button>
+      </div>
+      <input id="record-animal-id" type="hidden">
+      <input id="record-type" type="hidden">
+      <div id="record-fields" class="form-grid"></div>
+      <div class="modal-actions"><button class="button button-outline" type="button" data-close="record-dialog">Cancelar</button><button class="button button-primary" type="submit">Guardar registro</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="photo-dialog" class="modal photo-modal">
+    <button class="icon-button photo-close" type="button" data-close="photo-dialog" aria-label="Cerrar">×</button>
+    <img id="photo-large" alt="Fotografía del animal">
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
