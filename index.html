@@ -21,16 +21,22 @@
       <div class="sidebar-note">
         <span class="note-icon" aria-hidden="true">✓</span>
         <strong>Tus datos, bajo tu control</strong>
-        <p>La información se guarda en este dispositivo. Descarga una copia de seguridad periódicamente.</p>
+        <p>Los cambios se guardan en este dispositivo y se sincronizan con tu cuenta al conectarte.</p>
         <button id="backup-button" class="text-button" type="button">Crear copia de seguridad <span aria-hidden="true">↗</span></button>
       </div>
-      <div class="sidebar-foot">REGISTRO LOCAL · SIN CONEXIÓN</div>
+      <div id="sync-label" class="sidebar-foot">SOLO EN ESTE DISPOSITIVO</div>
     </aside>
 
     <main class="main-content">
       <header class="topbar">
         <div class="breadcrumb">Gestión del rancho <span>/</span> <strong>Ganado</strong></div>
-        <button id="restore-button" class="button button-outline button-small" type="button">Importar copia</button>
+        <div class="account-controls">
+          <span id="account-label" class="account-label">Sin sesión</span>
+          <button id="sync-button" class="button button-outline button-small" type="button" disabled>Sincronizar</button>
+          <button id="account-button" class="button button-outline button-small" type="button">Iniciar sesión</button>
+          <button id="sign-out-button" class="button button-outline button-small" type="button" hidden>Cerrar sesión</button>
+          <button id="restore-button" class="button button-outline button-small" type="button">Importar copia</button>
+        </div>
         <input id="restore-input" type="file" accept="application/json,.json" hidden>
       </header>
 
@@ -107,7 +113,7 @@
           </div>
         </div>
       </section>
-      <footer class="page-footer">Los registros se guardan localmente en este dispositivo.</footer>
+      <footer class="page-footer">Los cambios se guardan localmente y se sincronizan con tu cuenta al conectarte.</footer>
     </main>
   </div>
 
@@ -169,7 +175,28 @@
     <img id="photo-large" alt="Fotografía del animal">
   </dialog>
 
+  <dialog id="account-dialog" class="modal compact-modal">
+    <form id="account-form">
+      <div class="modal-heading">
+        <div><div class="eyebrow">SINCRONIZACIÓN ENTRE DISPOSITIVOS</div><h2>Cuenta compartida</h2></div>
+        <button class="icon-button" type="button" data-close="account-dialog" aria-label="Cerrar">×</button>
+      </div>
+      <p class="account-help">Usa la misma cuenta en todos tus dispositivos. Los datos permanecen en este equipo mientras no haya conexión.</p>
+      <div class="form-grid">
+        <label class="full-width">Correo electrónico<input id="account-email" type="email" autocomplete="email" required></label>
+        <label class="full-width">Contraseña<input id="account-password" type="password" autocomplete="current-password" minlength="8" required></label>
+      </div>
+      <p id="account-error" class="account-error" role="alert" hidden></p>
+      <div class="modal-actions">
+        <button id="create-account-button" class="button button-outline" type="button">Crear cuenta</button>
+        <button class="button button-primary" type="submit">Iniciar sesión</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8/dist/umd/supabase.min.js"></script>
+  <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

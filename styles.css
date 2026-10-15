@@ -13,6 +13,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--canvas); color: var(--ink); font-size: 14px; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
@@ -37,6 +38,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .sidebar-foot { margin: 19px 4px 0; text-align: center; color: #a5aaa2; font-size: 9px; letter-spacing: 1px; }
 .main-content { max-width: 1500px; margin-left: 244px; padding: 0 54px 36px; }
 .topbar { height: 70px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+.account-controls { display: flex; align-items: center; gap: 8px; }
+.account-label { color: #778075; font-size: 10px; }
+.account-help { color: #727b70; font-size: 12px; line-height: 1.6; }
+.account-error { margin: 12px 0 0; color: #a14f4f; font-size: 11px; line-height: 1.5; }
 .breadcrumb { color: #91978e; font-size: 12px; }
 .breadcrumb span { margin: 0 9px; color: #c4c9c1; }
 .breadcrumb strong { color: #515a51; font-weight: 600; }
@@ -183,6 +188,8 @@ td { height: 61px; border-top: 1px solid #f0f1ed; padding: 8px 14px; color: #687
   .nav-icon { margin: 0; font-size: 19px; }
   .main-content { margin-left: 67px; padding: 0 17px 28px; }
   .topbar { height: 59px; }
+  .account-controls { gap: 5px; }
+  .account-label { display: none; }
   .page-heading { margin: 29px 0 20px; align-items: flex-start; gap: 12px; }
   h1 { font-size: 25px; }
   .subtitle { max-width: 350px; line-height: 1.5; }

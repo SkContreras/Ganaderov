@@ -2,7 +2,7 @@
   "use strict";
 
   const DB_NAME = "ganadero-local";
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
   const EVENT_TYPES = {
     bath: "Baño",
     weight: "Pesaje",
@@ -12,8 +12,10 @@
   };
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const state = { animals: [], events: [], photos: [], photoUrls: new Map(), sort: "tag", direction: 1, currentAnimalId: null, animalFormSnapshot: "", toastTimer: null };
+  const state = { animals: [], events: [], photos: [], photoUrls: new Map(), sort: "tag", direction: 1, currentAnimalId: null, animalFormSnapshot: "", toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
+  let cloud;
+  let currentUser;
 
   function openDatabase() {
     return new Promise((resolve, reject) => {
@@ -30,6 +32,8 @@
           const store = database.createObjectStore("photos", { keyPath: "id" });
           store.createIndex("animalId", "animalId", { unique: false });
         }
+        if (!database.objectStoreNames.contains("syncMeta")) database.createObjectStore("syncMeta", { keyPath: "id" });
+        if (!database.objectStoreNames.contains("deletedAnimals")) database.createObjectStore("deletedAnimals", { keyPath: "id" });
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error || new Error("No fue posible abrir el almacenamiento local."));
@@ -59,8 +63,45 @@
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+  const getOne = (store, key) => new Promise((resolve, reject) => {
+    const request = db.transaction(store, "readonly").objectStore(store).get(key);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  const getAllByIndex = (store, index, key) => new Promise((resolve, reject) => {
+    const request = db.transaction(store, "readonly").objectStore(store).index(index).getAll(IDBKeyRange.only(key));
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
   const put = (store, value) => transaction([store], "readwrite", tx => tx.objectStore(store).put(value));
   const remove = (store, key) => transaction([store], "readwrite", tx => tx.objectStore(store).delete(key));
+
+  function setSyncStatus(message) {
+    $("#sync-label").textContent = message.toLocaleUpperCase("es-MX");
+    $("#account-label").textContent = currentUser ? currentUser.email : "Sin sesión";
+    $("#sync-button").disabled = !cloud || !currentUser || !navigator.onLine || state.syncing;
+  }
+
+  function scheduleSync() {
+    setSyncStatus(navigator.onLine ? "Cambios guardados · pendientes de sincronizar" : "Sin conexión · cambios guardados aquí");
+    if (state.syncing) {
+      state.syncRequested = true;
+      return;
+    }
+    clearTimeout(state.syncTimer);
+    state.syncTimer = setTimeout(() => syncData(), 900);
+  }
+
+  function nextModifiedAt(previous) {
+    const previousTime = Date.parse(previous || "");
+    return new Date(Math.max(Date.now(), Number.isFinite(previousTime) ? previousTime + 1 : 0)).toISOString();
+  }
+
+  async function touchAnimal(animalId) {
+    const animal = await getOne("animals", animalId);
+    if (animal) await put("animals", { ...animal, updatedAt: nextModifiedAt(animal.updatedAt) });
+    scheduleSync();
+  }
 
   async function refresh() {
     [state.animals, state.events, state.photos] = await Promise.all([getAll("animals"), getAll("events"), getAll("photos")]);
@@ -74,6 +115,280 @@
     renderDashboard();
   }
 
+  function buildLocalBundles(animals, events, photos, deletions) {
+    const bundles = new Map();
+    animals.forEach(animal => bundles.set(animal.id, { animal, events: [], photos: [], deletedAt: null }));
+    events.forEach(record => bundles.get(record.animalId)?.events.push(record));
+    photos.forEach(photo => bundles.get(photo.animalId)?.photos.push(photo));
+    deletions.forEach(deletion => bundles.set(deletion.id, { animal: null, events: [], photos: [], deletedAt: deletion.deletedAt }));
+    return bundles;
+  }
+
+  function stableValue(value) {
+    if (Array.isArray(value)) return value.map(stableValue);
+    if (value && typeof value === "object") {
+      return Object.keys(value).sort().reduce((result, key) => {
+        result[key] = stableValue(value[key]);
+        return result;
+      }, {});
+    }
+    return value;
+  }
+
+  function bundleFingerprint(bundle) {
+    const deletedAt = bundle.deletedAt ? new Date(bundle.deletedAt).toISOString() : null;
+    const photos = bundle.photos.map(photo => ({
+      id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
+      primary: Boolean(photo.primary), createdAt: photo.createdAt
+    })).sort((a, b) => a.id.localeCompare(b.id));
+    const events = bundle.events.slice().sort((a, b) => a.id.localeCompare(b.id));
+    return JSON.stringify(stableValue({
+      deletedAt,
+      animal: bundle.animal,
+      events,
+      photos
+    }));
+  }
+
+  function remoteFingerprint(record) {
+    if (record.deleted_at) return bundleFingerprint({ animal: null, events: [], photos: [], deletedAt: record.deleted_at });
+    const payload = record.payload || {};
+    return bundleFingerprint({
+      animal: payload.animal,
+      events: payload.events || [],
+      photos: payload.photos || [],
+      deletedAt: null
+    });
+  }
+
+  async function getLocalBundle(animalId) {
+    const [animal, events, photos, deletion] = await Promise.all([
+      getOne("animals", animalId),
+      getAllByIndex("events", "animalId", animalId),
+      getAllByIndex("photos", "animalId", animalId),
+      getOne("deletedAnimals", animalId)
+    ]);
+    if (deletion) return { animal: null, events: [], photos: [], deletedAt: deletion.deletedAt };
+    if (!animal) return null;
+    return { animal, events, photos, deletedAt: null };
+  }
+
+  function remoteVersion(record) {
+    return record.deleted_at || record.payload?.animal?.updatedAt || null;
+  }
+
+  async function saveSyncMeta(animalId, localVersion, remoteVersionValue, fingerprint) {
+    await put("syncMeta", {
+      id: `animal:${animalId}`,
+      localVersion,
+      remoteVersion: remoteVersionValue,
+      fingerprint
+    });
+  }
+
+  async function applyRemoteRecord(record, expectedLocalFingerprint) {
+    const deletedAt = record.deleted_at;
+    let downloaded = null;
+    if (!deletedAt) {
+      const { animal, events, photos } = record.payload || {};
+      if (!animal || animal.id !== record.animal_id || !Array.isArray(events) || !Array.isArray(photos)) {
+        throw new Error(`Los datos sincronizados del animal ${record.animal_id} no son válidos.`);
+      }
+      const storedPhotos = await Promise.all(photos.map(async photo => {
+        const { data, error } = await cloud.storage.from("animal-photos").download(photo.storagePath);
+        if (error) throw error;
+        return { ...photo, blob: data };
+      }));
+      downloaded = { animal, events, photos: storedPhotos };
+    }
+    const currentBundle = await getLocalBundle(record.animal_id);
+    const currentFingerprint = currentBundle ? bundleFingerprint(currentBundle) : null;
+    if (currentFingerprint !== expectedLocalFingerprint) return false;
+    const oldPhotos = state.photos.filter(photo => photo.animalId === record.animal_id);
+    oldPhotos.forEach(photo => {
+      const url = state.photoUrls.get(photo.id);
+      if (url) URL.revokeObjectURL(url);
+      state.photoUrls.delete(photo.id);
+    });
+    await transaction(["animals", "events", "photos", "deletedAnimals"], "readwrite", tx => {
+      const animalStore = tx.objectStore("animals");
+      const eventStore = tx.objectStore("events");
+      const photoStore = tx.objectStore("photos");
+      const deleteChildren = store => {
+        const request = store.index("animalId").openCursor(IDBKeyRange.only(record.animal_id));
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (cursor) {
+            cursor.delete();
+            cursor.continue();
+          }
+        };
+      };
+      deleteChildren(eventStore);
+      deleteChildren(photoStore);
+      animalStore.delete(record.animal_id);
+      if (deletedAt) {
+        tx.objectStore("deletedAnimals").put({ id: record.animal_id, deletedAt });
+      } else {
+        tx.objectStore("deletedAnimals").delete(record.animal_id);
+        animalStore.put(downloaded.animal);
+        downloaded.events.forEach(item => eventStore.put(item));
+        downloaded.photos.forEach(item => photoStore.put(item));
+      }
+    });
+    return true;
+  }
+
+  async function removeUnusedRemotePhotos(animalId, retainedPaths) {
+    const bucket = cloud.storage.from("animal-photos");
+    const prefix = `${currentUser.id}/${animalId}`;
+    const removePaths = [];
+    for (let offset = 0; ; offset += 100) {
+      const { data, error } = await bucket.list(prefix, { limit: 100, offset });
+      if (error) throw error;
+      const files = data || [];
+      files.forEach(file => {
+        const path = `${prefix}/${file.name}`;
+        if (!retainedPaths.has(path)) removePaths.push(path);
+      });
+      if (files.length < 100) break;
+    }
+    if (removePaths.length) {
+      const { error } = await bucket.remove(removePaths);
+      if (error) throw error;
+    }
+  }
+
+  async function writeRemoteRecord(animalId, bundle) {
+    const deletedAt = bundle.deletedAt || null;
+    const retainedPaths = new Set();
+    let payload = null;
+    if (!deletedAt) {
+      const photos = await Promise.all(bundle.photos.map(async photo => {
+        const storagePath = `${currentUser.id}/${animalId}/${photo.id}`;
+        const { error } = await cloud.storage.from("animal-photos").upload(storagePath, photo.blob, {
+          contentType: photo.mime,
+          upsert: true
+        });
+        if (error) throw error;
+        retainedPaths.add(storagePath);
+        return {
+          id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
+          primary: Boolean(photo.primary), createdAt: photo.createdAt, storagePath
+        };
+      }));
+      payload = {
+        animal: bundle.animal,
+        events: bundle.events,
+        photos
+      };
+    }
+    const { data, error } = await cloud.from("animal_sync_records").upsert({
+      owner_id: currentUser.id,
+      animal_id: animalId,
+      deleted_at: deletedAt,
+      payload
+    }, { onConflict: "owner_id,animal_id" }).select("modified_at").single();
+    if (error) throw error;
+    await removeUnusedRemotePhotos(animalId, retainedPaths);
+    return data.modified_at;
+  }
+
+  async function syncData() {
+    if (!cloud) {
+      setSyncStatus("Solo en este dispositivo · configura Supabase");
+      return;
+    }
+    if (!currentUser) {
+      setSyncStatus("Inicia sesión para sincronizar");
+      return;
+    }
+    if (!navigator.onLine) {
+      setSyncStatus("Sin conexión · cambios guardados aquí");
+      return;
+    }
+    if (state.syncing) {
+      state.syncRequested = true;
+      return;
+    }
+    state.syncing = true;
+    setSyncStatus("Sincronizando…");
+    try {
+      const [animals, events, photos, deletions] = await Promise.all([
+        getAll("animals"), getAll("events"), getAll("photos"), getAll("deletedAnimals")
+      ]);
+      const local = buildLocalBundles(animals, events, photos, deletions);
+      const { data: remoteRecords, error } = await cloud.from("animal_sync_records")
+        .select("animal_id, modified_at, deleted_at, payload");
+      if (error) throw error;
+      const remote = new Map((remoteRecords || []).map(record => [record.animal_id, record]));
+      const animalIds = new Set([...local.keys(), ...remote.keys()]);
+      let conflicts = 0;
+      let pendingChanges = 0;
+
+      for (const animalId of animalIds) {
+        const localBundle = local.get(animalId);
+        const remoteRecord = remote.get(animalId);
+        if (!localBundle && !remoteRecord) continue;
+        const localVersion = localBundle ? (localBundle.deletedAt || localBundle.animal?.updatedAt) : null;
+        const cloudVersion = remoteRecord ? remoteVersion(remoteRecord) : null;
+        const metadata = await getOne("syncMeta", `animal:${animalId}`);
+        const localFingerprint = localBundle ? bundleFingerprint(localBundle) : null;
+        const cloudFingerprint = remoteRecord ? remoteFingerprint(remoteRecord) : null;
+        const matchingContent = localBundle && remoteRecord && localFingerprint === cloudFingerprint;
+        if (matchingContent) {
+          await saveSyncMeta(animalId, localVersion, remoteRecord.modified_at, localFingerprint);
+          continue;
+        }
+        const localChanged = Boolean(localBundle && (!metadata || localFingerprint !== metadata.fingerprint));
+        const remoteChanged = Boolean(remoteRecord && (!metadata || remoteRecord.modified_at !== metadata.remoteVersion));
+
+        if (localBundle && remoteRecord && localChanged && remoteChanged) {
+          const label = localBundle.animal?.name || localBundle.animal?.tag || animalId;
+          const keepLocal = confirm(
+            `${localBundle.animal ? `El animal ${label}` : `La ficha del animal ${animalId} eliminada en este dispositivo`} también cambió en otro dispositivo.\n\n` +
+            "Aceptar: conservar los cambios de este dispositivo y reemplazar la versión en la nube.\n" +
+            "Cancelar: conservar la versión de la nube y reemplazar los cambios de este dispositivo."
+          );
+          if (keepLocal) {
+            const version = await writeRemoteRecord(animalId, localBundle);
+            await saveSyncMeta(animalId, localVersion, version, localFingerprint);
+          } else {
+            const applied = await applyRemoteRecord(remoteRecord, localFingerprint);
+            if (applied) await saveSyncMeta(animalId, cloudVersion, remoteRecord.modified_at, cloudFingerprint);
+            else pendingChanges++;
+          }
+          conflicts++;
+        } else if (localBundle && (!remoteRecord || localChanged)) {
+          const version = await writeRemoteRecord(animalId, localBundle);
+          await saveSyncMeta(animalId, localVersion, version, localFingerprint);
+        } else if (remoteRecord && (!localBundle || remoteChanged)) {
+          const applied = await applyRemoteRecord(remoteRecord, localFingerprint);
+          if (applied) await saveSyncMeta(animalId, cloudVersion, remoteRecord.modified_at, cloudFingerprint);
+          else pendingChanges++;
+        }
+      }
+      await refresh();
+      if ($("#detail-dialog").open && state.currentAnimalId) {
+        if (state.animals.some(animal => animal.id === state.currentAnimalId)) openDetail(state.currentAnimalId);
+        else $("#detail-dialog").close();
+      }
+      setSyncStatus(pendingChanges
+        ? `${pendingChanges} cambio(s) pendiente(s) · vuelve a sincronizar`
+        : conflicts ? `Sincronizado · ${conflicts} conflicto(s) resuelto(s)` : "Sincronizado");
+    } catch (error) {
+      setSyncStatus("Error de sincronización");
+      showToast(`No se pudo sincronizar: ${error.message}`);
+    } finally {
+      state.syncing = false;
+      $("#sync-button").disabled = !cloud || !currentUser || !navigator.onLine;
+      if (state.syncRequested) {
+        state.syncRequested = false;
+        setTimeout(() => syncData(), 0);
+      }
+    }
+  }
+
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
   }
@@ -82,6 +397,13 @@
     if (!value) return "No registrado";
     const date = new Date(`${value}T12:00:00`);
     return Number.isNaN(date.getTime()) ? "No registrado" : new Intl.DateTimeFormat("es-MX", { day: "2-digit", month: "short", year: "numeric" }).format(date);
+  }
+  function formatTimestamp(value) {
+    if (!value) return "No registrado";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "No registrado" : new Intl.DateTimeFormat("es-MX", {
+      day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"
+    }).format(date);
   }
   function calculateAge(value) {
     if (!value) return "No registrado";
@@ -227,7 +549,7 @@
       id, tag, name: $("#animal-name").value.trim(), sex: $("#animal-sex").value,
       color: $("#animal-color").value.trim(), birthDate: $("#animal-birth").value,
       status: $("#animal-status").value, createdAt: existing?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      updatedAt: nextModifiedAt(existing?.updatedAt)
     };
     const events = [];
     const photos = [];
@@ -271,6 +593,7 @@
       });
       $("#animal-dialog").close();
       await refresh();
+      scheduleSync();
       if (existing) showToast("Cambios guardados.");
       else showToast("Animal añadido al inventario.");
     } catch (error) {
@@ -318,6 +641,7 @@
         <div class="detail-basic">
           <div class="detail-fact"><span>Sexo</span><strong>${display(animal.sex)}</strong></div>
           <div class="detail-fact"><span>Color</span><strong>${display(animal.color)}</strong></div>
+          <div class="detail-fact"><span>Última modificación</span><strong>${escapeHtml(formatTimestamp(animal.updatedAt))}</strong></div>
           <div class="detail-fact"><span>Fecha de nacimiento</span><strong>${formatDate(animal.birthDate)}</strong></div>
           <div class="detail-fact"><span>Edad</span><strong>${escapeHtml(calculateAge(animal.birthDate))}</strong></div>
           <div class="detail-fact"><span>Estado</span><strong>${escapeHtml(animal.status)}</strong></div>
@@ -346,7 +670,7 @@
           <button class="danger-link" type="button" data-delete-animal="${escapeHtml(animal.id)}">Eliminar definitivamente</button>
         </div>
       </div>`;
-    $("#detail-dialog").showModal();
+    if (!$("#detail-dialog").open) $("#detail-dialog").showModal();
   }
 
   function renderHistory(records) {
@@ -389,6 +713,7 @@
     if (formData.has("notes")) fields.notes = String(formData.get("notes")).trim();
     try {
       await put("events", makeEvent($("#record-animal-id").value, type, date, fields));
+      await touchAnimal($("#record-animal-id").value);
       $("#record-dialog").close();
       await refresh();
       openDetail(state.currentAnimalId);
@@ -414,6 +739,7 @@
           primary: existing.length === 0 && index === 0, createdAt: new Date().toISOString()
         }));
       });
+      await touchAnimal(animalId);
       await refresh();
       openDetail(animalId);
       showToast(`${images.length} ${images.length === 1 ? "fotografía añadida" : "fotografías añadidas"}.`);
@@ -431,6 +757,7 @@
         const store = tx.objectStore("photos");
         related.forEach(item => store.put({ ...item, primary: item.id === photoId }));
       });
+      await touchAnimal(photo.animalId);
       await refresh();
       openDetail(photo.animalId);
     } catch (error) {
@@ -445,6 +772,7 @@
       await remove("photos", photoId);
       const remaining = state.photos.filter(item => item.animalId === photo.animalId && item.id !== photoId);
       if (photo.primary && remaining.length) await put("photos", { ...remaining[0], primary: true });
+      await touchAnimal(photo.animalId);
       await refresh();
       openDetail(photo.animalId);
       showToast("Fotografía eliminada.");
@@ -458,6 +786,7 @@
     if (!record || !confirm("¿Eliminar este registro del historial?")) return;
     try {
       await remove("events", eventId);
+      await touchAnimal(record.animalId);
       await refresh();
       openDetail(state.currentAnimalId);
       showToast("Registro eliminado.");
@@ -471,7 +800,8 @@
     if (!animal) return;
     if (!confirm(`¿Deseas dar de baja a ${animal.name || animal.tag || "este animal"}? Su ficha y su historial se conservarán.`)) return;
     try {
-      await put("animals", { ...animal, status: "Baja", updatedAt: new Date().toISOString() });
+      await put("animals", { ...animal, status: "Baja", updatedAt: nextModifiedAt(animal.updatedAt) });
+      scheduleSync();
       $("#detail-dialog").close();
       await refresh();
       showToast("Animal dado de baja; su historial se conservó.");
@@ -484,8 +814,10 @@
     const animal = state.animals.find(item => item.id === animalId);
     if (!animal || !confirm(`¿Eliminar definitivamente a ${animal.name || animal.tag || "este animal"} y todo su historial y fotografías? Esta acción no se puede deshacer.`)) return;
     try {
-      await transaction(["animals", "events", "photos"], "readwrite", tx => {
+      const deletedAt = nextModifiedAt(animal.updatedAt);
+      await transaction(["animals", "events", "photos", "deletedAnimals"], "readwrite", tx => {
         tx.objectStore("animals").delete(animalId);
+        tx.objectStore("deletedAnimals").put({ id: animalId, deletedAt });
         for (const name of ["events", "photos"]) {
           const store = tx.objectStore(name);
           const request = store.index("animalId").openCursor(IDBKeyRange.only(animalId));
@@ -498,6 +830,7 @@
           };
         }
       });
+      scheduleSync();
       $("#detail-dialog").close();
       await refresh();
       showToast("Animal y sus registros eliminados.");
@@ -545,7 +878,8 @@
         throw new Error("El archivo no tiene un formato de copia de Ganadero compatible.");
       }
       if (!confirm("Importar esta copia reemplazará todos los datos guardados actualmente en este dispositivo. ¿Continuar?")) return;
-      const animals = payload.animals;
+      const previousAnimals = await getAll("animals");
+      const animals = payload.animals.map(animal => ({ ...animal, updatedAt: nextModifiedAt(animal.updatedAt) }));
       const animalIds = new Set(animals.map(animal => animal.id));
       const events = payload.events;
       const photos = await Promise.all(payload.photos.map(async item => {
@@ -557,13 +891,19 @@
       if (events.some(record => !animalIds.has(record.animalId))) throw new Error("La copia contiene registros asociados a animales inexistentes.");
       for (const url of state.photoUrls.values()) URL.revokeObjectURL(url);
       state.photoUrls.clear();
-      await transaction(["animals", "events", "photos"], "readwrite", tx => {
+      await transaction(["animals", "events", "photos", "deletedAnimals"], "readwrite", tx => {
         for (const name of ["animals", "events", "photos"]) tx.objectStore(name).clear();
+        const deletions = tx.objectStore("deletedAnimals");
+        previousAnimals.filter(animal => !animalIds.has(animal.id)).forEach(animal => {
+          deletions.put({ id: animal.id, deletedAt: nextModifiedAt(animal.updatedAt) });
+        });
         animals.forEach(item => tx.objectStore("animals").put(item));
+        animals.forEach(item => deletions.delete(item.id));
         events.forEach(item => tx.objectStore("events").put(item));
         photos.forEach(item => tx.objectStore("photos").put(item));
       });
       await refresh();
+      scheduleSync();
       showToast("Copia importada correctamente.");
     } catch (error) {
       showToast(`No se pudo importar la copia: ${error.message}`);
@@ -586,6 +926,50 @@
       renderDashboard();
     }));
     $("#backup-button").addEventListener("click", backup);
+    $("#sync-button").addEventListener("click", syncData);
+    $("#account-button").addEventListener("click", () => {
+      $("#account-error").hidden = Boolean(cloud);
+      $("#account-error").textContent = cloud ? "" : "La conexión con Supabase aún no está configurada. Consulta el README para activarla.";
+      $("#account-dialog").showModal();
+    });
+    $("#account-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      if (!cloud) return;
+      const errorBox = $("#account-error");
+      errorBox.hidden = true;
+      const { error } = await cloud.auth.signInWithPassword({
+        email: $("#account-email").value.trim(),
+        password: $("#account-password").value
+      });
+      if (error) {
+        errorBox.textContent = error.message;
+        errorBox.hidden = false;
+      } else {
+        $("#account-dialog").close();
+      }
+    });
+    $("#create-account-button").addEventListener("click", async () => {
+      if (!cloud) return;
+      const errorBox = $("#account-error");
+      errorBox.hidden = true;
+      const { data, error } = await cloud.auth.signUp({
+        email: $("#account-email").value.trim(),
+        password: $("#account-password").value
+      });
+      if (error) {
+        errorBox.textContent = error.message;
+        errorBox.hidden = false;
+      } else if (data.session) {
+        $("#account-dialog").close();
+      } else {
+        errorBox.textContent = "Cuenta creada. Revisa tu correo para confirmarla y luego inicia sesión en todos tus dispositivos.";
+        errorBox.hidden = false;
+      }
+    });
+    $("#sign-out-button").addEventListener("click", async () => {
+      const { error } = await cloud.auth.signOut();
+      if (error) showToast(`No se pudo cerrar la sesión: ${error.message}`);
+    });
     $("#restore-button").addEventListener("click", () => $("#restore-input").click());
     $("#restore-input").addEventListener("change", event => restore(event.target.files[0]));
     document.addEventListener("click", event => {
@@ -625,6 +1009,9 @@
         if (event.target === dialog) requestClose(dialog.id);
       });
     });
+    $("#account-dialog").addEventListener("click", event => {
+      if (event.target === event.currentTarget) $("#account-dialog").close();
+    });
     $("#animal-dialog").addEventListener("cancel", event => {
       event.preventDefault();
       requestClose("animal-dialog");
@@ -640,6 +1027,37 @@
       db = await openDatabase();
       registerEvents();
       await refresh();
+      if ("serviceWorker" in navigator && location.protocol !== "file:") {
+        navigator.serviceWorker.register("./service-worker.js").catch(error => {
+          console.error("No se pudo habilitar el modo sin conexión.", error);
+        });
+      }
+      const config = window.GANADERO_CONFIG;
+      if (window.supabase?.createClient && config?.supabaseUrl && config?.supabaseAnonKey) {
+        cloud = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+        cloud.auth.onAuthStateChange((_event, session) => {
+          currentUser = session?.user || null;
+          $("#account-button").hidden = Boolean(currentUser);
+          $("#sign-out-button").hidden = !currentUser;
+          setSyncStatus(currentUser ? "Sesión lista" : "Inicia sesión para sincronizar");
+          if (currentUser) setTimeout(() => syncData(), 0);
+        });
+        const { data, error } = await cloud.auth.getSession();
+        if (error) throw error;
+        currentUser = data.session?.user || null;
+        $("#account-button").hidden = Boolean(currentUser);
+        $("#sign-out-button").hidden = !currentUser;
+        setSyncStatus(currentUser ? "Sesión lista" : "Inicia sesión para sincronizar");
+        if (currentUser && navigator.onLine) await syncData();
+      } else {
+        setSyncStatus("Solo en este dispositivo · configura Supabase");
+        $("#sync-button").disabled = true;
+      }
+      window.addEventListener("online", () => syncData());
+      window.addEventListener("offline", () => setSyncStatus("Sin conexión · cambios guardados aquí"));
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") syncData();
+      });
     } catch (error) {
       document.body.innerHTML = `<main style="max-width:600px;margin:80px auto;padding:24px;font:16px sans-serif"><h1>No se pudo abrir Ganadero</h1><p>${escapeHtml(error.message)}</p></main>`;
     }
