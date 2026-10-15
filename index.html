@@ -200,6 +200,9 @@
             </section>
           </form>
           <section class="calculator-results" aria-live="polite">
+            <div id="calculator-chart" class="calculator-chart" role="group" aria-label="Gráfica del historial real de pesos y su proyección">
+              <p class="calculator-chart-empty">Selecciona un animal con pesajes o captura los datos para ver la gráfica.</p>
+            </div>
             <div class="calculator-result-heading"><div class="eyebrow">COMPARACIÓN ESTIMADA</div><h2>Escenarios de venta</h2></div>
             <p id="calculator-result-message" class="calculator-result-message">Selecciona un animal o captura el peso, la GMD y una cotización promedio para calcular.</p>
             <div id="calculator-result-values" class="calculator-result-values">
@@ -318,22 +321,63 @@
   </dialog>
 
   <dialog id="account-dialog" class="modal compact-modal">
-    <form id="account-form">
-      <div class="modal-heading">
-        <div><div class="eyebrow">SINCRONIZACIÓN ENTRE DISPOSITIVOS</div><h2>Cuenta compartida</h2></div>
-        <button class="icon-button" type="button" data-close="account-dialog" aria-label="Cerrar">×</button>
-      </div>
-      <p class="account-help">Usa la misma cuenta en todos tus dispositivos. Los datos permanecen en este equipo mientras no haya conexión.</p>
+    <div class="modal-heading">
+      <div><div class="eyebrow">ACCESO A GANADEROV</div><h2 id="account-title">Iniciar sesión</h2></div>
+      <button class="icon-button" type="button" data-close="account-dialog" aria-label="Cerrar">×</button>
+    </div>
+    <p id="account-help" class="account-help">Usa tu correo y contraseña. Tus datos locales permanecen en este dispositivo aunque no haya conexión.</p>
+    <form id="sign-in-form">
       <div class="form-grid">
         <label class="full-width">Correo electrónico<input id="account-email" type="email" autocomplete="email" required></label>
         <label class="full-width">Contraseña<input id="account-password" type="password" autocomplete="current-password" minlength="8" required></label>
       </div>
-      <p id="account-error" class="account-error" role="alert" hidden></p>
       <div class="modal-actions">
-        <button id="create-account-button" class="button button-outline" type="button">Crear cuenta</button>
         <button class="button button-primary" type="submit">Iniciar sesión</button>
       </div>
+      <div class="account-links">
+        <button class="account-link" type="button" data-account-view="register">Crear cuenta</button>
+        <button class="account-link" type="button" data-account-view="recovery">¿Olvidaste tu contraseña?</button>
+      </div>
     </form>
+    <form id="sign-up-form" hidden>
+      <div class="form-grid">
+        <label class="full-width">Correo electrónico<input id="signup-email" type="email" autocomplete="email" required></label>
+        <label class="full-width">Contraseña<input id="signup-password" type="password" autocomplete="new-password" minlength="8" required></label>
+        <label class="full-width">Confirmar contraseña<input id="signup-password-confirm" type="password" autocomplete="new-password" minlength="8" required></label>
+      </div>
+      <div class="modal-actions">
+        <button class="button button-primary" type="submit">Crear cuenta</button>
+      </div>
+      <div class="account-links">
+        <button class="account-link" type="button" data-account-view="login">Volver a iniciar sesión</button>
+      </div>
+    </form>
+    <form id="recovery-form" hidden>
+      <div class="form-grid">
+        <label class="full-width">Correo electrónico<input id="recovery-email" type="email" autocomplete="email" required></label>
+      </div>
+      <div class="modal-actions">
+        <button class="button button-primary" type="submit">Enviar enlace de recuperación</button>
+      </div>
+      <div class="account-links">
+        <button class="account-link" type="button" data-account-view="login">Volver a iniciar sesión</button>
+      </div>
+    </form>
+    <form id="reset-password-form" hidden>
+      <div class="form-grid">
+        <label class="full-width">Nueva contraseña<input id="reset-password" type="password" autocomplete="new-password" minlength="8" required></label>
+        <label class="full-width">Confirmar nueva contraseña<input id="reset-password-confirm" type="password" autocomplete="new-password" minlength="8" required></label>
+      </div>
+      <div class="modal-actions">
+        <button class="button button-primary" type="submit">Guardar contraseña</button>
+      </div>
+    </form>
+    <section id="account-message-view" hidden>
+      <div class="account-message-actions">
+        <button class="button button-primary" type="button" data-account-view="login">Ir a iniciar sesión</button>
+      </div>
+    </section>
+    <p id="account-error" class="account-error" role="alert" hidden></p>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

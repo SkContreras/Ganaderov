@@ -26,7 +26,7 @@
   };
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), sort: "tag", direction: 1, currentAnimalId: null, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyUpdating: new Set(), animalFormSnapshot: "", calculatorProjection: null, calculatorMeasuredGain: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
+  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), sort: "tag", direction: 1, currentAnimalId: null, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyUpdating: new Set(), animalFormSnapshot: "", calculatorProjection: null, calculatorMeasuredGain: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
   let cloud;
   let currentUser;
@@ -103,6 +103,56 @@
     $("#sync-label").textContent = message.toLocaleUpperCase("es-MX");
     $("#account-label").textContent = currentUser ? currentUser.email : "Sin sesión";
     $("#sync-button").disabled = !cloud || !currentUser || !navigator.onLine || state.syncing;
+  }
+
+  function showAccountView(view, message = "", success = false) {
+    const views = {
+      login: ["Iniciar sesión", "Usa tu correo y contraseña. Tus datos locales permanecen en este dispositivo aunque no haya conexión."],
+      register: ["Crear cuenta", "Registra una cuenta de acceso. Esto no concede permisos sobre los datos de un rancho."],
+      recovery: ["Recuperar contraseña", "Te enviaremos un enlace para definir una contraseña nueva."],
+      "reset-password": ["Crear nueva contraseña", "Elige una contraseña nueva de al menos 8 caracteres."],
+      message: [success ? "Revisa tu correo" : "Información", ""]
+    };
+    const [title, help] = views[view] || views.login;
+    $("#account-title").textContent = title;
+    $("#account-help").textContent = help;
+    $("#account-help").hidden = !help;
+    $("#sign-in-form").hidden = view !== "login";
+    $("#sign-up-form").hidden = view !== "register";
+    $("#recovery-form").hidden = view !== "recovery";
+    $("#reset-password-form").hidden = view !== "reset-password";
+    $("#account-message-view").hidden = view !== "message";
+    const errorBox = $("#account-error");
+    errorBox.textContent = message;
+    errorBox.hidden = !message;
+    errorBox.classList.toggle("account-success", success);
+  }
+
+  function authErrorMessage(error) {
+    const code = String(error?.code || "").toLowerCase();
+    const message = String(error?.message || error || "");
+    const normalized = message.toLowerCase();
+    if (code === "invalid_credentials" || normalized.includes("invalid login credentials")) {
+      return "El correo o la contraseña no son correctos.";
+    }
+    if (code === "email_not_confirmed" || normalized.includes("email not confirmed")) {
+      return "Confirma tu correo electrónico desde el enlace que te enviamos antes de iniciar sesión.";
+    }
+    if (code === "weak_password" || normalized.includes("password should be")) {
+      return "La contraseña no cumple los requisitos de seguridad configurados.";
+    }
+    if (code === "user_already_exists" || normalized.includes("already registered")) {
+      return "Ya existe una cuenta con ese correo. Intenta iniciar sesión o recuperar la contraseña.";
+    }
+    if (normalized.includes("fetch") || normalized.includes("network")) {
+      return "No pudimos conectar con el servicio. Revisa tu conexión e inténtalo de nuevo.";
+    }
+    return message || "No se pudo completar la solicitud. Inténtalo de nuevo.";
+  }
+
+  function authRedirectUrl() {
+    if (location.protocol !== "http:" && location.protocol !== "https:") return undefined;
+    return new URL(location.pathname, location.origin).href;
   }
 
   function scheduleSync() {
@@ -724,6 +774,118 @@
     element.classList.toggle("is-warning", isWarning);
   }
 
+  function renderCalculatorChart(weight, gain, days, baselineDate) {
+    const chart = $("#calculator-chart");
+    const animalId = $("#calculator-animal").value;
+    const actualPoints = animalId ? weightHistory(animalId) : [];
+    const validBaseline = Number.isFinite(weight) && weight >= 0 &&
+      typeof baselineDate === "string" && Number.isFinite(Date.parse(`${baselineDate}T00:00:00Z`));
+    const validProjection = validBaseline && Number.isFinite(gain) &&
+      Number.isFinite(days) && days >= 0;
+    const projection = validProjection ? projectWeight(weight, gain, days, baselineDate) : null;
+    const baselineDay = validBaseline ? Date.parse(`${baselineDate}T00:00:00Z`) / 86400000 : null;
+    const latestActual = actualPoints[actualPoints.length - 1];
+    const baselineMatchesLatest = latestActual && latestActual.date === baselineDate &&
+      Math.abs(latestActual.weight - weight) < 0.0001;
+    const baselinePoint = validBaseline && !baselineMatchesLatest
+      ? { date: baselineDate, day: baselineDay, weight, kind: "baseline" }
+      : null;
+    const projectedPoint = projection
+      ? { date: projection.targetDate, day: baselineDay + days, weight: projection.predictedWeight, kind: "projection" }
+      : null;
+    const points = [
+      ...actualPoints.map(point => ({ ...point, kind: "actual" })),
+      ...(baselinePoint ? [baselinePoint] : []),
+      ...(projectedPoint ? [projectedPoint] : [])
+    ].sort((a, b) => a.day - b.day || ({ actual: 0, baseline: 1, projection: 2 }[a.kind] - { actual: 0, baseline: 1, projection: 2 }[b.kind]));
+    if (!points.length) {
+      chart.setAttribute("aria-label", "Sin datos disponibles para graficar.");
+      chart.innerHTML = '<p class="calculator-chart-empty">Selecciona un animal con pesajes o captura un peso y una fecha base para ver la gráfica.</p>';
+      return;
+    }
+
+    const width = 640;
+    const height = 230;
+    const margin = { top: 18, right: 20, bottom: 38, left: 54 };
+    const plotWidth = width - margin.left - margin.right;
+    const plotHeight = height - margin.top - margin.bottom;
+    let xMin = Math.min(...points.map(point => point.day));
+    let xMax = Math.max(...points.map(point => point.day));
+    if (xMin === xMax) {
+      xMin -= 7;
+      xMax += 7;
+    }
+    let yMin = Math.min(...points.map(point => point.weight));
+    let yMax = Math.max(...points.map(point => point.weight));
+    const yPadding = Math.max((yMax - yMin) * 0.18, Math.max(Math.abs(yMin), Math.abs(yMax), 1) * 0.06, 1);
+    yMin -= yPadding;
+    yMax += yPadding;
+    if (yMin === yMax) yMax += 1;
+    const x = day => margin.left + (day - xMin) / (xMax - xMin) * plotWidth;
+    const y = value => margin.top + (yMax - value) / (yMax - yMin) * plotHeight;
+    const ticks = [0, 1, 2, 3].map(index => {
+      const value = yMax - (yMax - yMin) * index / 3;
+      const position = y(value);
+      return `<line x1="${margin.left}" y1="${position}" x2="${width - margin.right}" y2="${position}" class="calculator-chart-grid"></line><text x="${margin.left - 8}" y="${position + 4}" text-anchor="end" class="calculator-chart-axis">${value.toFixed(1)}</text>`;
+    }).join("");
+    const actual = points.filter(point => point.kind === "actual");
+    const actualLine = actual.length > 1
+      ? `<polyline points="${actual.map(point => `${x(point.day)},${y(point.weight)}`).join(" ")}" class="calculator-chart-actual"></polyline>`
+      : "";
+    const futureLine = projectedPoint
+      ? `<line x1="${x(baselineDay)}" y1="${y(weight)}" x2="${x(projectedPoint.day)}" y2="${y(projectedPoint.weight)}" class="calculator-chart-projection"></line>`
+      : "";
+    const actualDots = actual.map(point => {
+      const isLatest = latestActual && point.date === latestActual.date;
+      return `<circle cx="${x(point.day)}" cy="${y(point.weight)}" r="${isLatest ? 5 : 4}" class="calculator-chart-point${isLatest ? " calculator-chart-point-current" : ""}"><title>${isLatest ? "Último peso real · " : ""}${escapeHtml(formatDate(point.date))}: ${formatProjectedWeight(point.weight)}${point.count > 1 ? ` · promedio de ${point.count} pesajes` : ""}</title></circle>`;
+    }).join("");
+    const markers = [
+      baselinePoint
+        ? `<circle cx="${x(baselinePoint.day)}" cy="${y(baselinePoint.weight)}" r="5" class="calculator-chart-baseline"><title>Peso base: ${escapeHtml(formatDate(baselineDate))} · ${formatProjectedWeight(weight)}</title></circle>`
+        : "",
+      projectedPoint
+        ? `<circle cx="${x(projectedPoint.day)}" cy="${y(projectedPoint.weight)}" r="5" class="calculator-chart-projected"><title>Estimación: ${escapeHtml(formatDate(projectedPoint.date))} · ${formatProjectedWeight(projectedPoint.weight)}</title></circle>`
+        : ""
+    ].join("");
+    const startDate = new Date(xMin * 86400000).toISOString().slice(0, 10);
+    const endDate = new Date(xMax * 86400000).toISOString().slice(0, 10);
+    const labels = [
+      { day: xMin, text: formatDate(startDate), anchor: "start" },
+      ...(baselineDay !== null && baselineDay > xMin && baselineDay < xMax
+        ? [{ day: baselineDay, text: formatDate(baselineDate), anchor: "middle" }] : []),
+      ...(projectedPoint && projectedPoint.day > xMin && projectedPoint.day < xMax
+        ? [{ day: projectedPoint.day, text: formatDate(projectedPoint.date), anchor: "middle" }] : []),
+      ...(xMax > xMin ? [{ day: xMax, text: formatDate(endDate), anchor: "end" }] : [])
+    ].filter((item, index, all) => all.findIndex(candidate => candidate.day === item.day) === index)
+      .map(item => `<text x="${x(item.day)}" y="${height - 12}" text-anchor="${item.anchor}" class="calculator-chart-axis">${escapeHtml(item.text)}</text>`).join("");
+    const labelsLegend = [
+      actual.length ? '<span><i class="calculator-legend-actual"></i>Pesos reales</span>' : "",
+      baselinePoint ? '<span><i class="calculator-legend-baseline"></i>Peso base</span>' : "",
+      projectedPoint ? '<span><i class="calculator-legend-projection"></i>Estimación</span>' : ""
+    ].filter(Boolean).join("");
+    const actualSummary = actual.length
+      ? `${actual.length} fecha${actual.length === 1 ? "" : "s"} de pesaje real`
+      : "Sin historial de pesajes guardado";
+    const baselineSummary = validBaseline
+      ? `Base ${formatDate(baselineDate)} · ${formatProjectedWeight(weight)}`
+      : "Ingresa un peso y fecha base para graficar la estimación";
+    const projectedSummary = projectedPoint
+      ? `Estimado ${formatDate(projectedPoint.date)} · ${formatProjectedWeight(projectedPoint.weight)}`
+      : "Ingresa una GMD y plazo válidos para proyectar";
+    chart.setAttribute("aria-label", `Historial: ${actualSummary}. ${baselineSummary}. ${projectedSummary}.`);
+    chart.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(chart.getAttribute("aria-label"))}">
+        <defs>
+          <linearGradient id="calculator-actual-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#75a477" stop-opacity=".2"></stop>
+            <stop offset="100%" stop-color="#75a477" stop-opacity="0"></stop>
+          </linearGradient>
+        </defs>
+        ${ticks}${actualLine}${futureLine}${actualDots}${markers}${labels}
+      </svg>
+      <div class="calculator-chart-legend">${labelsLegend}</div>
+      <div class="calculator-chart-summary"><span>${escapeHtml(actualSummary)}</span><span>${escapeHtml(baselineSummary)}</span><span>${escapeHtml(projectedSummary)}</span></div>`;
+  }
+
   function updateCalculator() {
     const weight = calculatorNumber("#calculator-weight");
     const gain = calculatorNumber("#calculator-gain");
@@ -732,6 +894,7 @@
     const baselineDate = $("#calculator-baseline-date").value;
     const selectedAnimalId = $("#calculator-animal").value;
     state.calculatorProjection = null;
+    renderCalculatorChart(weight, gain, days, baselineDate);
     $("#calculator-save-forecast").disabled = true;
     $("#calculator-forecast-save-note").textContent = "Selecciona un animal para guardar la estimación en su expediente y compararla con una pesada posterior.";
     const currentAverage = calculatorNumber("#calculator-current-average");
@@ -765,6 +928,7 @@
     }
     const projection = gain === null ? null : projectWeight(weight, gain, days, baselineDate);
     const projectedWeight = projection?.predictedWeight ?? null;
+    renderCalculatorChart(weight, gain, days, baselineDate);
     if (projection) {
       $("#calculator-projected-weight").textContent = formatProjectedWeight(projectedWeight);
       $("#calculator-projection-detail").textContent = `${weight.toFixed(1)} kg + (${gain.toFixed(3)} kg/día × ${days.toFixed(0)} días)`;
@@ -1134,7 +1298,7 @@
         <td><strong>${escapeHtml(journeyName(journey))}</strong>${journey.product ? `<small>${escapeHtml(journey.product)}</small>` : ""}</td>
         <td>${counts.attended}/${counts.expected}</td>
         <td><span class="journey-status ${journey.status}">${escapeHtml(journeyStatus(journey))}</span></td>
-        <td><button class="button button-outline button-small" type="button" data-open-journey="${escapeHtml(journey.id)}">Ver jornada</button></td>
+        <td><button class="button button-outline button-small" type="button" data-open-journey="${escapeHtml(journey.id)}">${journey.status === "incomplete" ? "Abrir y continuar" : "Ver jornada"}</button></td>
       </tr>`;
     }).join("");
     $("#journey-history-empty").hidden = history.length > 0;
@@ -1218,8 +1382,15 @@
     state.currentJourneyId = journeyId;
     state.journeyFilter = "all";
     state.journeySearch = "";
+    state.journeyWeightTargetId = null;
     renderJourneyDetail();
     if (!$("#journey-dialog").open) $("#journey-dialog").showModal();
+  }
+
+  function journeyActor() {
+    return currentUser
+      ? { authUserId: currentUser.id, email: currentUser.email || "", label: currentUser.email || "Usuario autenticado" }
+      : { authUserId: null, email: "", label: "Usuario local (sin sesión)" };
   }
 
   function renderJourneyDetail() {
@@ -1240,6 +1411,19 @@
       journey.dose && `Dosis: ${journey.dose}`,
       journey.notes && `Observaciones: ${journey.notes}`
     ].filter(Boolean);
+    const rosterIds = new Set(journey.roster.map(animal => animal.id));
+    const animalsToAdd = state.animals.filter(animal =>
+      !rosterIds.has(animal.id) && !["Vendido", "Fallecido", "Baja"].includes(animal.status));
+    const addAnimalsControl = !finished && animalsToAdd.length
+      ? `<details class="journey-add-animals">
+          <summary>＋ Agregar animales a esta jornada (${animalsToAdd.length} disponibles)</summary>
+          <div class="journey-add-list">${animalsToAdd.map(animal => `<label>
+            <input type="checkbox" name="journey-animal-to-add" value="${escapeHtml(animal.id)}">
+            <span><strong>${escapeHtml(animal.tag || "Sin arete")}</strong><small>${escapeHtml(animal.name || "Sin nombre")}</small></span>
+          </label>`).join("")}</div>
+          <button class="button button-outline button-small" type="button" data-add-journey-animals="${escapeHtml(journey.id)}">Agregar seleccionados</button>
+        </details>`
+      : "";
 
     $("#journey-content").innerHTML = `
       <div class="journey-detail-header">
@@ -1253,6 +1437,7 @@
           <div><strong>${percent}%</strong><span>${finished ? journeyStatus(journey) : "del progreso"}</span></div>
         </div>
         <div class="journey-progress-track journey-progress-large"><span style="width:${percent}%"></span></div>
+        ${journey.completedAt ? `<p class="journey-meta">Finalizada ${formatTimestamp(journey.completedAt)} · ${escapeHtml(journey.completedBy?.label || "Usuario anterior")}</p>` : ""}
         ${details.length ? `<p class="journey-meta">${details.map(escapeHtml).join(" · ")}</p>` : ""}
       </div>
       <div class="journey-detail-body">
@@ -1265,22 +1450,37 @@
             <button id="journey-filter-pending" type="button" data-journey-filter="pending" class="${state.journeyFilter === "pending" ? "selected" : ""}">Pendientes${counts.pending ? ` (${counts.pending})` : ""}</button>
           </div>
         </div>
+        ${addAnimalsControl}
         <div class="journey-roster" aria-label="Animales de la jornada">
           ${roster.length ? roster.map(animal => `
-            <button class="journey-animal ${animal.attended ? "attended" : "pending"}" type="button"
-              data-toggle-attendance="${escapeHtml(animal.id)}" ${finished ? "disabled" : ""}
-              aria-pressed="${animal.attended}" aria-label="${animal.attended ? "Atendido" : "Pendiente"}: arete ${escapeHtml(animal.tag || "sin arete")}, ${escapeHtml(animal.name || "sin nombre")}">
-              <span class="journey-check" aria-hidden="true">${animal.attended ? "✓" : ""}</span>
-              <span class="journey-animal-id">${escapeHtml(animal.tag || "Sin arete")}</span>
-              <span class="journey-animal-name">${escapeHtml(animal.name || "Sin nombre")}</span>
-              <span class="journey-animal-description">${escapeHtml([animal.sex, animal.color].filter(Boolean).join(" · ") || "Datos sin registrar")}</span>
-              <span class="journey-animal-state">${animal.attended ? "Atendido" : "Pendiente"}</span>
-            </button>`).join("") : '<p class="journey-empty">No hay animales en este filtro.</p>'}
+            <div class="journey-animal-row">
+              <button class="journey-animal ${animal.attended ? "attended" : "pending"}" type="button"
+                data-toggle-attendance="${escapeHtml(animal.id)}" ${finished || animal.attended ? "disabled" : ""}
+                aria-pressed="${animal.attended}" aria-label="${animal.attended ? "Atendido" : "Pendiente"}: arete ${escapeHtml(animal.tag || "sin arete")}, ${escapeHtml(animal.name || "sin nombre")}">
+                <span class="journey-check" aria-hidden="true">${animal.attended ? "✓" : ""}</span>
+                <span class="journey-animal-id">${escapeHtml(animal.tag || "Sin arete")}</span>
+                <span class="journey-animal-name">${escapeHtml(animal.name || "Sin nombre")}</span>
+                <span class="journey-animal-description">${escapeHtml([animal.sex, animal.color].filter(Boolean).join(" · ") || "Datos sin registrar")}</span>
+                <span class="journey-animal-state">${animal.attended ? "Atendido" : "Pendiente"}</span>
+                ${animal.attendedAt ? `<span class="journey-animal-audit">Atendido ${formatTimestamp(animal.attendedAt)} · ${escapeHtml(animal.attendedBy?.label || "Usuario anterior")}</span>` : ""}
+              </button>
+              ${journey.type === "weight" && animal.attended && !finished
+                ? `<button class="journey-weight-edit" type="button" data-edit-journey-weight="${escapeHtml(animal.id)}">Corregir peso · ${escapeHtml(animal.weight)} kg</button>`
+                : journey.type === "weight" && animal.attended
+                  ? `<span class="journey-weight-readonly">${escapeHtml(animal.weight)} kg</span>` : ""}
+              ${journey.type === "weight" && !finished && state.journeyWeightTargetId === animal.id
+                ? `<div class="journey-weight-editor">
+                    <label>Peso (kg)<input id="journey-weight-input" type="number" min="0" step="0.1" value="${animal.attended ? escapeHtml(animal.weight) : ""}" inputmode="decimal" aria-label="Peso en kilogramos"></label>
+                    <button class="button button-primary button-small" type="button" data-save-journey-weight="${escapeHtml(animal.id)}">Guardar</button>
+                    <button class="button button-outline button-small" type="button" data-cancel-journey-weight>Cancelar</button>
+                  </div>` : ""}
+            </div>`).join("") : '<p class="journey-empty">No hay animales en este filtro.</p>'}
         </div>
         ${!finished && counts.pending ? `<p class="journey-pending-alert">⚠ Faltan ${counts.pending} ${counts.pending === 1 ? "animal" : "animales"} por atender. Se muestran en el filtro «Pendientes».</p>` : ""}
         ${finished && counts.pending ? `<section class="journey-pending-summary"><h3>Animales pendientes (${counts.pending})</h3><p>${journey.roster.filter(animal => !animal.attended).map(animal => `${animal.tag || "Sin arete"} · ${animal.name || "Sin nombre"}`).map(escapeHtml).join("  |  ")}</p></section>` : ""}
         <div class="journey-modal-actions">
           <span class="journey-status ${journey.status}">${escapeHtml(journeyStatus(journey))}</span>
+          ${journey.status === "incomplete" ? `<button class="button button-outline" type="button" data-reopen-journey="${escapeHtml(journey.id)}">Reanudar jornada</button>` : ""}
           ${!finished ? '<button class="button button-primary journey-finish-button" type="button" data-finish-journey>Finalizar jornada</button>' : ""}
         </div>
       </div>`;
@@ -1299,29 +1499,157 @@
     const journey = state.journeys.find(item => item.id === state.currentJourneyId);
     if (!journey || journey.status !== "in_progress" || state.journeyUpdating.has(animalId)) return;
     const selectedAnimal = journey.roster.find(animal => animal.id === animalId);
-    if (!selectedAnimal) return;
+    if (!selectedAnimal || selectedAnimal.attended) return;
+    if (journey.type === "weight") {
+      state.journeyWeightTargetId = animalId;
+      renderJourneyDetail();
+      $("#journey-weight-input").focus();
+      return;
+    }
     state.journeyUpdating.add(animalId);
     try {
-      let weight;
-      if (journey.type === "weight" && !selectedAnimal.attended) {
-        const input = prompt(`Peso (kg) del animal ${selectedAnimal.tag || selectedAnimal.name || ""}:`);
-        if (input === null) return;
-        weight = Number(input);
-        if (!input.trim() || !Number.isFinite(weight) || weight < 0) {
-          showToast("Escribe un peso válido mayor o igual a 0 kg.");
-          return;
-        }
-      }
+      const attendedAt = new Date().toISOString();
       const roster = journey.roster.map(animal => animal.id === animalId
-        ? { ...animal, attended: !animal.attended, ...(journey.type === "weight" ? { weight: animal.attended ? null : weight } : {}) }
+        ? {
+            ...animal,
+            attended: true,
+            attendedAt,
+            attendedBy: journeyActor()
+          }
         : animal);
-      if (roster.every((animal, index) => animal.attended === journey.roster[index].attended)) return;
       await put("journeys", { ...journey, roster, updatedAt: new Date().toISOString() });
       await refresh();
       renderJourneyDetail();
       scheduleSync();
     } catch (error) {
       showToast(`No se pudo actualizar la jornada: ${error.message}`);
+    } finally {
+      state.journeyUpdating.delete(animalId);
+    }
+  }
+
+  async function addJourneyAnimals(journeyId) {
+    const journey = state.journeys.find(item => item.id === journeyId);
+    if (!journey || journey.status !== "in_progress") return;
+    const selectedIds = [...$$('input[name="journey-animal-to-add"]:checked')].map(input => input.value);
+    if (!selectedIds.length) {
+      showToast("Selecciona al menos un animal para agregar.");
+      return;
+    }
+    const rosterIds = new Set(journey.roster.map(animal => animal.id));
+    const newRosterAnimals = state.animals
+      .filter(animal => selectedIds.includes(animal.id) && !rosterIds.has(animal.id) &&
+        !["Vendido", "Fallecido", "Baja"].includes(animal.status))
+      .map(animal => ({
+        id: animal.id, tag: animal.tag || "", name: animal.name || "", sex: animal.sex || "",
+        color: animal.color || "", status: animal.status || "", attended: false
+      }));
+    if (!newRosterAnimals.length) {
+      showToast("Los animales seleccionados ya están en la jornada o no están disponibles.");
+      return;
+    }
+    try {
+      await put("journeys", {
+        ...journey,
+        roster: journey.roster.concat(newRosterAnimals),
+        updatedAt: new Date().toISOString()
+      });
+      await refresh();
+      renderJourneyDetail();
+      scheduleSync();
+      showToast(`${newRosterAnimals.length} ${newRosterAnimals.length === 1 ? "animal agregado" : "animales agregados"} a la jornada.`);
+    } catch (error) {
+      showToast(`No se pudieron agregar animales: ${error.message}`);
+    }
+  }
+
+  async function reopenJourney(journeyId) {
+    const journey = state.journeys.find(item => item.id === journeyId);
+    if (!journey || journey.status !== "incomplete" || !journeyCounts(journey).pending) return;
+    try {
+      await put("journeys", {
+        ...journey,
+        status: "in_progress",
+        completedAt: null,
+        updatedAt: new Date().toISOString()
+      });
+      await refresh();
+      renderJourneyDetail();
+      scheduleSync();
+      showToast("Jornada reanudada. Los animales ya atendidos permanecen registrados.");
+    } catch (error) {
+      showToast(`No se pudo reanudar la jornada: ${error.message}`);
+    }
+  }
+
+  function editJourneyWeight(animalId) {
+    const journey = state.journeys.find(item => item.id === state.currentJourneyId);
+    const rosterAnimal = journey?.roster.find(item => item.id === animalId);
+    if (!journey || journey.status !== "in_progress" || journey.type !== "weight" ||
+        !rosterAnimal?.attended || state.journeyUpdating.has(animalId)) return;
+    state.journeyWeightTargetId = animalId;
+    renderJourneyDetail();
+    $("#journey-weight-input").focus();
+  }
+
+  async function saveJourneyWeight(animalId) {
+    const journey = state.journeys.find(item => item.id === state.currentJourneyId);
+    const rosterAnimal = journey?.roster.find(item => item.id === animalId);
+    if (!journey || journey.status !== "in_progress" || journey.type !== "weight" ||
+        !rosterAnimal || state.journeyWeightTargetId !== animalId || state.journeyUpdating.has(animalId)) return;
+    const rawWeight = $("#journey-weight-input").value.trim();
+    const weight = Number(rawWeight);
+    if (!rawWeight || !Number.isFinite(weight) || weight < 0) {
+      showToast("Escribe un peso válido mayor o igual a 0 kg.");
+      return;
+    }
+    const updatedAt = new Date().toISOString();
+    const actor = journeyActor();
+    const roster = journey.roster.map(item => item.id === animalId
+      ? {
+          ...item,
+          attended: true,
+          weight,
+          ...(item.attended
+            ? { weightUpdatedAt: updatedAt, weightUpdatedBy: actor }
+            : { attendedAt: updatedAt, attendedBy: actor, weightUpdatedAt: updatedAt, weightUpdatedBy: actor })
+        }
+      : item);
+    state.journeyUpdating.add(animalId);
+    try {
+      await transaction(["journeys", "events", "animals"], "readwrite", tx => {
+        tx.objectStore("journeys").put({ ...journey, roster, updatedAt });
+        const eventStore = tx.objectStore("events");
+        const eventId = `journey:${journey.id}:${animalId}`;
+        const eventRequest = eventStore.get(eventId);
+        eventRequest.onsuccess = () => {
+          if (eventRequest.result) {
+            eventStore.put({
+              ...eventRequest.result,
+              weight,
+              weightUpdatedAt: updatedAt,
+              weightUpdatedBy: actor
+            });
+          }
+        };
+        const animalStore = tx.objectStore("animals");
+        const animalRequest = animalStore.get(animalId);
+        animalRequest.onsuccess = () => {
+          if (animalRequest.result) {
+            animalStore.put({
+              ...animalRequest.result,
+              updatedAt: nextModifiedAt(animalRequest.result.updatedAt)
+            });
+          }
+        };
+      });
+      state.journeyWeightTargetId = null;
+      await refresh();
+      renderJourneyDetail();
+      scheduleSync();
+      showToast(rosterAnimal.attended ? "Peso corregido en la jornada." : "Peso registrado y animal marcado como atendido.");
+    } catch (error) {
+      showToast(`No se pudo corregir el peso: ${error.message}`);
     } finally {
       state.journeyUpdating.delete(animalId);
     }
@@ -1337,6 +1665,7 @@
       ...journey,
       status: counts.pending ? "incomplete" : "completed",
       completedAt,
+      completedBy: journeyActor(),
       updatedAt: completedAt
     };
     try {
@@ -1358,9 +1687,15 @@
             product: journey.type === "other" ? journey.product : "",
             dose: journey.dose,
             notes: journey.notes,
-            createdAt: completedAt
+            createdAt: rosterAnimal.attendedAt || completedAt,
+            performedAt: rosterAnimal.attendedAt || completedAt,
+            performedBy: rosterAnimal.attendedBy || journeyActor()
           };
-          if (journey.type === "weight") fields.weight = rosterAnimal.weight;
+          if (journey.type === "weight") {
+            fields.weight = rosterAnimal.weight;
+            if (rosterAnimal.weightUpdatedAt) fields.weightUpdatedAt = rosterAnimal.weightUpdatedAt;
+            if (rosterAnimal.weightUpdatedBy) fields.weightUpdatedBy = rosterAnimal.weightUpdatedBy;
+          }
           const eventRecord = {
             id: `journey:${journey.id}:${rosterAnimal.id}`,
             animalId: rosterAnimal.id,
@@ -1369,7 +1704,7 @@
             ...fields
           };
           eventsStore.put(eventRecord);
-          if (eventType === "weight") {
+          if (eventType === "weight" && Number.isFinite(Number(rosterAnimal.weight))) {
             pendingForecastUpdates(state.forecasts, rosterAnimal.id, state.events.concat(eventRecord))
               .forEach(forecast => forecastsStore.put(forecast));
           }
@@ -1380,12 +1715,13 @@
       if (journey.type === "weight" && journey.roster.some(animal => animal.attended && animal.id === selectedAnimalId)) {
         loadCalculatorAnimal();
       }
-      renderJourneyDetail();
-      scheduleSync();
       if (counts.pending) {
         state.journeyFilter = "pending";
-        renderJourneyDetail();
+      } else {
+        state.journeyFilter = "all";
       }
+      renderJourneyDetail();
+      scheduleSync();
       showToast(counts.pending ? `Jornada finalizada. ${counts.attended} animales actualizados; ${counts.pending} pendientes.` : `Jornada completada. ${counts.attended} animales actualizados.`);
     } catch (error) {
       showToast(`No se pudo finalizar la jornada: ${error.message}`);
@@ -1629,7 +1965,11 @@
           : `<strong>${escapeHtml(EVENT_TYPES[record.type] || "Registro")}</strong>${record.label ? ` · ${escapeHtml(record.label)}` : ""}${record.product ? ` · Producto: ${escapeHtml(record.product)}` : ""}${record.dose ? ` · Dosis: ${escapeHtml(record.dose)}` : ""}${record.notes ? ` · ${escapeHtml(record.notes)}` : ""}`;
       const journeyLink = record.journeyId && state.journeys.some(journey => journey.id === record.journeyId)
         ? `<button class="history-journey-link" data-open-journey="${escapeHtml(record.journeyId)}" type="button">Ver jornada</button>` : "";
-      return `<div class="history-item"><div class="history-date">${formatDate(record.date)}</div><div class="history-description">${value}${record.type === "weight" && record.notes ? ` · ${escapeHtml(record.notes)}` : ""}${journeyLink}</div><button class="history-delete" data-delete-event="${escapeHtml(record.id)}" type="button" aria-label="Eliminar registro">×</button></div>`;
+      const performedBy = record.performedBy?.label
+        ? `<small class="history-audit">Atendido por ${escapeHtml(record.performedBy.label)} · ${escapeHtml(formatTimestamp(record.performedAt || record.createdAt))}</small>` : "";
+      const correctedBy = record.weightUpdatedBy?.label
+        ? `<small class="history-audit">Peso corregido por ${escapeHtml(record.weightUpdatedBy.label)} · ${escapeHtml(formatTimestamp(record.weightUpdatedAt))}</small>` : "";
+      return `<div class="history-item"><div class="history-date">${formatDate(record.date)}</div><div class="history-description">${value}${record.type === "weight" && record.notes ? ` · ${escapeHtml(record.notes)}` : ""}${journeyLink}${performedBy}${correctedBy}</div><button class="history-delete" data-delete-event="${escapeHtml(record.id)}" type="button" aria-label="Eliminar registro">×</button></div>`;
     }).join("");
   }
 
@@ -1808,7 +2148,28 @@
 
   async function deleteAnimal(animalId) {
     const animal = state.animals.find(item => item.id === animalId);
-    if (!animal || !confirm(`¿Eliminar definitivamente a ${animal.name || animal.tag || "este animal"} y todo su historial y fotografías? Esta acción no se puede deshacer.`)) return;
+    if (!animal) return;
+    const hasEvents = state.events.some(record => record.animalId === animalId);
+    const hasJourneyHistory = state.journeys.some(journey =>
+      journey.roster.some(rosterAnimal => rosterAnimal.id === animalId));
+    if (hasEvents || hasJourneyHistory) {
+      const shouldDeactivate = confirm(
+        `${animal.name || animal.tag || "Este animal"} tiene registros o participa en una jornada. ` +
+        "Para proteger su historial no se puede eliminar definitivamente. ¿Deseas darlo de baja y conservar sus datos?"
+      );
+      if (!shouldDeactivate) return;
+      try {
+        await put("animals", { ...animal, status: "Baja", updatedAt: nextModifiedAt(animal.updatedAt) });
+        scheduleSync();
+        $("#detail-dialog").close();
+        await refresh();
+        showToast("Animal dado de baja; se conservaron su historial y jornadas.");
+      } catch (error) {
+        showToast(`No se pudo dar de baja el animal: ${error.message}`);
+      }
+      return;
+    }
+    if (!confirm(`¿Eliminar definitivamente a ${animal.name || animal.tag || "este animal"} y sus fotografías? Esta acción no se puede deshacer.`)) return;
     try {
       const deletedAt = nextModifiedAt(animal.updatedAt);
       await transaction(["animals", "events", "photos", "growthForecasts", "deletedAnimals"], "readwrite", tx => {
@@ -1964,42 +2325,111 @@
     $("#backup-button").addEventListener("click", backup);
     $("#sync-button").addEventListener("click", syncData);
     $("#account-button").addEventListener("click", () => {
-      $("#account-error").hidden = Boolean(cloud);
-      $("#account-error").textContent = cloud ? "" : "La conexión con Supabase aún no está configurada. Consulta el README para activarla.";
+      showAccountView("login");
+      if (!cloud) showAccountView("login", "La conexión con Supabase aún no está configurada. Consulta el README para activarla.");
       $("#account-dialog").showModal();
     });
-    $("#account-form").addEventListener("submit", async event => {
+    $("#sign-in-form").addEventListener("submit", async event => {
       event.preventDefault();
-      if (!cloud) return;
-      const errorBox = $("#account-error");
-      errorBox.hidden = true;
-      const { error } = await cloud.auth.signInWithPassword({
-        email: $("#account-email").value.trim(),
-        password: $("#account-password").value
-      });
-      if (error) {
-        errorBox.textContent = error.message;
-        errorBox.hidden = false;
-      } else {
+      if (!cloud) {
+        showAccountView("login", "La conexión con Supabase aún no está configurada. Consulta el README para activarla.");
+        return;
+      }
+      try {
+        const { error } = await cloud.auth.signInWithPassword({
+          email: $("#account-email").value.trim(),
+          password: $("#account-password").value
+        });
+        if (error) {
+          showAccountView("login", authErrorMessage(error));
+          return;
+        }
+        $("#account-password").value = "";
         $("#account-dialog").close();
+      } catch (error) {
+        showAccountView("login", authErrorMessage(error));
       }
     });
-    $("#create-account-button").addEventListener("click", async () => {
-      if (!cloud) return;
-      const errorBox = $("#account-error");
-      errorBox.hidden = true;
-      const { data, error } = await cloud.auth.signUp({
-        email: $("#account-email").value.trim(),
-        password: $("#account-password").value
-      });
-      if (error) {
-        errorBox.textContent = error.message;
-        errorBox.hidden = false;
-      } else if (data.session) {
-        $("#account-dialog").close();
-      } else {
-        errorBox.textContent = "Cuenta creada. Revisa tu correo para confirmarla y luego inicia sesión en todos tus dispositivos.";
-        errorBox.hidden = false;
+    $("#sign-up-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      const password = $("#signup-password").value;
+      if (password !== $("#signup-password-confirm").value) {
+        showAccountView("register", "Las contraseñas no coinciden.");
+        return;
+      }
+      if (!cloud) {
+        showAccountView("register", "La conexión con Supabase aún no está configurada. Consulta el README para activarla.");
+        return;
+      }
+      try {
+        const { data, error } = await cloud.auth.signUp({
+          email: $("#signup-email").value.trim(),
+          password,
+          options: { emailRedirectTo: authRedirectUrl() }
+        });
+        if (error) {
+          showAccountView("register", authErrorMessage(error));
+        } else if (data.session) {
+          $("#account-email").value = $("#signup-email").value.trim();
+          $("#signup-password").value = "";
+          $("#signup-password-confirm").value = "";
+          $("#account-dialog").close();
+        } else {
+          $("#signup-password").value = "";
+          $("#signup-password-confirm").value = "";
+          showAccountView(
+            "message",
+            "Tu cuenta se creó correctamente. Revisa tu correo y confirma la dirección antes de iniciar sesión.",
+            true
+          );
+        }
+      } catch (error) {
+        showAccountView("register", authErrorMessage(error));
+      }
+    });
+    $("#recovery-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      if (!cloud) {
+        showAccountView("recovery", "La conexión con Supabase aún no está configurada. Consulta el README para activarla.");
+        return;
+      }
+      try {
+        const { error } = await cloud.auth.resetPasswordForEmail(
+          $("#recovery-email").value.trim(),
+          { redirectTo: authRedirectUrl() }
+        );
+        if (error) {
+          showAccountView("recovery", authErrorMessage(error));
+        } else {
+          showAccountView("message", "Si existe una cuenta con ese correo, recibirás un enlace para cambiar la contraseña.", true);
+        }
+      } catch (error) {
+        showAccountView("recovery", authErrorMessage(error));
+      }
+    });
+    $("#reset-password-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      const password = $("#reset-password").value;
+      if (password !== $("#reset-password-confirm").value) {
+        showAccountView("reset-password", "Las contraseñas no coinciden.");
+        return;
+      }
+      if (!cloud) {
+        showAccountView("reset-password", "La conexión con Supabase aún no está configurada. Consulta el README para activarla.");
+        return;
+      }
+      try {
+        const { error } = await cloud.auth.updateUser({ password });
+        if (error) {
+          showAccountView("reset-password", authErrorMessage(error));
+        } else {
+          $("#reset-password").value = "";
+          $("#reset-password-confirm").value = "";
+          $("#account-dialog").close();
+          showToast("La contraseña se actualizó correctamente.");
+        }
+      } catch (error) {
+        showAccountView("reset-password", authErrorMessage(error));
       }
     });
     $("#sign-out-button").addEventListener("click", async () => {
@@ -2012,8 +2442,18 @@
       const target = event.target.closest("button, img, label");
       if (!target) return;
       if (target.dataset.close) { requestClose(target.dataset.close); return; }
+      if (target.dataset.accountView) { showAccountView(target.dataset.accountView); return; }
       if (target.dataset.openJourney) { openJourney(target.dataset.openJourney); return; }
       if (target.dataset.toggleAttendance) { toggleJourneyAnimal(target.dataset.toggleAttendance); return; }
+      if (target.dataset.addJourneyAnimals) { addJourneyAnimals(target.dataset.addJourneyAnimals); return; }
+      if (target.dataset.reopenJourney) { reopenJourney(target.dataset.reopenJourney); return; }
+      if (target.dataset.editJourneyWeight) { editJourneyWeight(target.dataset.editJourneyWeight); return; }
+      if (target.dataset.saveJourneyWeight) { saveJourneyWeight(target.dataset.saveJourneyWeight); return; }
+      if (target.dataset.cancelJourneyWeight !== undefined) {
+        state.journeyWeightTargetId = null;
+        renderJourneyDetail();
+        return;
+      }
       if (target.dataset.journeyFilter) {
         state.journeyFilter = target.dataset.journeyFilter;
         renderJourneyDetail();
@@ -2080,11 +2520,15 @@
       const config = window.GANADERO_CONFIG;
       if (window.supabase?.createClient && config?.supabaseUrl && config?.supabaseAnonKey) {
         cloud = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
-        cloud.auth.onAuthStateChange((_event, session) => {
+        cloud.auth.onAuthStateChange((event, session) => {
           currentUser = session?.user || null;
           $("#account-button").hidden = Boolean(currentUser);
           $("#sign-out-button").hidden = !currentUser;
           setSyncStatus(currentUser ? "Sesión lista" : "Inicia sesión para sincronizar");
+          if (event === "PASSWORD_RECOVERY") {
+            showAccountView("reset-password");
+            if (!$("#account-dialog").open) $("#account-dialog").showModal();
+          }
           if (currentUser) setTimeout(() => syncData(), 0);
         });
         const { data, error } = await cloud.auth.getSession();

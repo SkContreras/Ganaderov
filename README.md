@@ -23,7 +23,29 @@ El archivo `config.js` contiene solo valores públicos del proyecto; no contiene
 
 ## Jornadas de manejo
 
-En **Jornadas** puedes crear jornadas de baño, vacunación, desparasitación, inyección, medicamento, pesaje, revisión veterinaria u otra actividad. La lista de animales se toma del inventario al iniciar la jornada. Las marcas y el progreso se guardan automáticamente; puedes cerrar la app y continuar una jornada en progreso después. Al finalizar, solo los animales marcados reciben el evento en su historial; los pendientes se muestran en el resumen. Para las jornadas de pesaje, se registra el peso individual al marcar cada animal. Las jornadas también se incluyen en las copias de seguridad y, al configurar Supabase, se sincronizan con la misma cuenta.
+En **Jornadas** puedes crear jornadas de baño, vacunación, desparasitación, inyección, medicamento, pesaje, revisión veterinaria u otra actividad. La lista se toma del inventario al iniciar la jornada y puedes incorporar animales activos después sin reemplazar el progreso existente. Las marcas se guardan en IndexedDB y la jornada puede continuar sin internet.
+
+Al finalizar una jornada incompleta, puedes abrirla desde el historial y pulsar **Reanudar jornada**. Los animales ya atendidos quedan bloqueados para evitar marcarlos o registrar su actividad dos veces; se atienden solo los pendientes y se finaliza de nuevo. Los registros de atención usan un identificador estable por jornada y animal, por lo que la sincronización y una reapertura actualizan el mismo registro, no crean otro evento. En jornadas de pesaje, al seleccionar un animal pendiente aparece la captura de peso en la misma pantalla; el peso se guarda localmente y marca al animal como atendido. También se puede corregir el peso de un animal atendido mientras la jornada está activa o reanudada; al finalizarla de nuevo, el historial conserva el mismo evento y no duplica el pesaje.
+
+Cada marca guarda la hora y la cuenta autenticada disponible. Sin sesión, queda indicada como «Usuario local (sin sesión)»; esa etiqueta no verifica la identidad de una persona. La finalización también conserva responsable y hora. La información se sincroniza con Supabase al recuperar conexión, pero la sincronización entre dos dispositivos necesita una configuración real de Supabase y no se da por probada solo porque funcione el guardado local.
+
+Para proteger el historial, un animal que tenga registros o esté incluido en una jornada no se puede eliminar definitivamente desde la interfaz; se puede dar de baja manteniendo su ficha y participación. Las jornadas se incluyen en las copias de seguridad.
+
+## Acceso y usuarios del rancho: estado actual
+
+La pantalla de acceso permite iniciar sesión, crear una cuenta con confirmación de contraseña y solicitar recuperación por correo. Las contraseñas deben tener al menos 8 caracteres y cumplir también la política configurada en Supabase. Si la confirmación por correo está habilitada, el usuario verá un mensaje que le indica que confirme la dirección antes de iniciar sesión; el enlace de recuperación permite definir y confirmar una contraseña nueva. Para que estos enlaces regresen a Ganaderov, agrega el origen y la URL desplegada en **Authentication → URL Configuration → Redirect URLs** de Supabase.
+
+El alta de una cuenta de acceso no crea ni concede automáticamente un perfil de trabajador o permisos sobre otro rancho. Actualmente el esquema de sincronización sigue aislando filas por la cuenta propietaria; todavía no hay solicitudes de acceso aprobables, perfiles de trabajadores ni roles por rancho. El campo «Atendido por» registra la cuenta autenticada si existe, pero no sustituye una autorización por rancho. La operación sin conexión conserva los datos locales, pero no establece por sí misma quién es el usuario ni sus permisos.
+
+Los formularios y las llamadas de acceso/recuperación están implementados en el cliente. La entrega del correo y el flujo con credenciales reales dependen de la configuración y políticas del proyecto Supabase y deben verificarse allí; no se consideran validados solo por probar la interfaz local.
+
+### Modelo multiusuario acordado, pendiente de implementación
+
+- Una cuenta pertenece a un solo rancho.
+- Una cuenta nueva solicita acceso y el propietario/admin del rancho debe aprobarla.
+- El rol trabajador podrá registrar pesos, tratamientos y jornadas, pero no administrar usuarios ni permisos.
+
+Estas decisiones todavía no están aplicadas al esquema ni a las políticas RLS. Hasta implementar y probar las membresías, cada cuenta Supabase conserva el aislamiento actual por `owner_id`; registrarse no permite acceder a los datos de otra cuenta.
 
 ## Crecimiento y peso objetivo
 
