@@ -2,6 +2,12 @@
 
 Aplicación para administrar el inventario y los expedientes individuales del ganado bovino. Los datos se guardan primero en el navegador y, al iniciar sesión y tener conexión, se sincronizan con Supabase para compartirlos entre dispositivos.
 
+El logo y el icono de la pestaña se sirven desde [`ganaderov-icon.svg`](./ganaderov-icon.svg), que también se incluye en el caché de la aplicación para uso offline.
+
+## Iconografía e interfaz accesible
+
+Los iconos de la interfaz usan símbolos SVG sólidos en una biblioteca común, con el mismo color, proporciones y remates, de acuerdo con la guía visual del proyecto. Conserva los `id` y atributos `data-*` existentes al cambiar su presentación. No uses emojis ni caracteres como sustitutos de iconos de navegación. Los iconos decorativos deben ocultarse a lectores de pantalla cuando el botón ya tenga un nombre accesible. Las acciones destructivas deben comunicar claramente qué dato eliminan; los estados se muestran con texto, icono y color, nunca solo con color.
+
 ## Configurar Supabase
 
 1. Crea un proyecto en [Supabase](https://supabase.com/).
@@ -16,6 +22,7 @@ El archivo `config.js` contiene solo valores públicos del proyecto; no contiene
 ## Sincronización y conflictos
 
 - Cada animal tiene una fecha y hora de última modificación, que también se actualiza al cambiar su historial o sus fotografías.
+- La fotografía principal se encuadra sin deformarla; el propietario o administrador puede ajustar su posición horizontal y vertical desde **Ajustar encuadre**. El encuadre se guarda y sincroniza con la ficha, y forma parte de las copias de seguridad.
 - Los cambios se guardan en IndexedDB en el dispositivo y se envían cuando hay conexión. La app debe haberse abierto al menos una vez con conexión para instalar el modo sin conexión.
 - Si el mismo animal cambió en la nube y en el dispositivo desde la última sincronización, Ganadero pregunta qué versión conservar. **Aceptar** sube la versión de este dispositivo; **Cancelar** descarga la versión de la nube. La decisión reemplaza la ficha completa del animal, incluido su historial y sus fotos.
 - Los cambios en animales diferentes se sincronizan por separado. Las eliminaciones también se propagan a los demás dispositivos.
@@ -23,7 +30,7 @@ El archivo `config.js` contiene solo valores públicos del proyecto; no contiene
 
 ## Jornadas de manejo
 
-El inventario muestra solo animales activos. Los marcados como vendidos, fallecidos, dados de baja, «Otro» o desaparecidos se excluyen de la lista y de los conteos del inventario, pero sus fichas, eventos y jornadas anteriores se conservan. Tampoco se pueden incluir en jornadas nuevas ni agregarse a una jornada en curso. Si alguno ya estaba en una jornada activa, deja de aparecer en la lista operativa y ya no cuenta como pendiente; la participación histórica no se elimina.
+El inventario muestra solo animales activos. Los marcados como vendidos, fallecidos, dados de baja, «Otro» o desaparecidos se excluyen de la lista y de los conteos del inventario, pero sus fichas, eventos y jornadas anteriores se conservan. El botón **Ver archivo** permite buscarlos, abrir sus expedientes y, con permisos de propietario o administrador, reactivarlos. Al reactivarlos vuelven al inventario y pueden incluirse en jornadas nuevas. Tampoco se pueden incluir en jornadas nuevas ni agregarse a una jornada en curso mientras estén archivados. Si alguno ya estaba en una jornada activa, deja de aparecer en la lista operativa y ya no cuenta como pendiente; la participación histórica no se elimina.
 
 En **Jornadas** puedes crear jornadas de baño, vacunación, desparasitación, inyección, medicamento, pesaje, revisión veterinaria u otra actividad. La lista se toma de los animales activos al iniciar la jornada y puedes incorporar animales activos después sin reemplazar el progreso existente. Las marcas se guardan en IndexedDB y la jornada puede continuar sin internet.
 

@@ -1,8 +1,9 @@
-const CACHE_NAME = "ganadero-v8";
+const CACHE_NAME = "ganadero-v14";
 const APP_FILES = [
   "./",
   "./index.html",
   "./styles.css",
+  "./ganaderov-icon.svg",
   "./config.js",
   "./app.js"
 ];

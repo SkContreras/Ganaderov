@@ -24,12 +24,52 @@
     review: "Revisión veterinaria",
     other: "Otra"
   };
+  const ICON_SYMBOLS = {
+    inventory: "inventory",
+    plus: "add",
+    search: "search",
+    chevron: "chevron-right",
+    close: "close",
+    check: "status-active",
+    warning: "status-pending",
+    trash: "delete",
+    edit: "edit",
+    star: "favorite",
+    external: "export",
+    photo: "photo",
+    archive: "archive",
+    clock: "reminder",
+    active: "status-active",
+    sold: "tag",
+    dead: "status-error",
+    other: "status-inactive",
+    male: "male",
+    female: "female",
+    tag: "tag"
+  };
   const INACTIVE_ANIMAL_STATUSES = new Set(["Vendido", "Fallecido", "Baja", "Otro", "Otros", "Desaparecido"]);
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const isActiveAnimal = animal => !INACTIVE_ANIMAL_STATUSES.has(animal.status);
+  function icon(name, className = "ui-icon") {
+    const symbol = ICON_SYMBOLS[name];
+    return symbol ? `<svg class="${className}" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-${symbol}"></use></svg>` : "";
+  }
+  function statusIconName(status) {
+    if (status === "Vendido") return "sold";
+    if (status === "Fallecido") return "dead";
+    if (INACTIVE_ANIMAL_STATUSES.has(status)) return "other";
+    return "active";
+  }
+  function statusMarkup(status, className = "status-pill") {
+    return `<span class="${className} ${statusClass(status)}">${icon(statusIconName(status))}${escapeHtml(status)}</span>`;
+  }
+  function journeyStatusMarkup(journey) {
+    const iconName = journey.status === "completed" ? "check" : journey.status === "incomplete" ? "warning" : "clock";
+    return `<span class="journey-status ${journey.status}">${icon(iconName)}${escapeHtml(journeyStatus(journey))}</span>`;
+  }
   const hasRanchAccess = () => !currentUser || state.legacyAccount || ["owner", "admin", "worker"].includes(state.ranchRole);
-  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), sort: "tag", direction: 1, currentAnimalId: null, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyUpdating: new Set(), animalFormSnapshot: "", calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
+  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), sort: "tag", direction: 1, archiveView: false, currentAnimalId: null, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyUpdating: new Set(), animalFormSnapshot: "", calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
   let cloud;
   let currentUser;
@@ -182,7 +222,7 @@
     state.ranchRole = context?.status === "active" ? context.role : null;
     state.ranchReady = true;
     $("#ranch-button").hidden = !currentUser;
-    $("#ranch-button").textContent = context?.status === "active" ? "Rancho y usuarios" : "Configurar rancho";
+    $("#ranch-button").innerHTML = `${icon("users")} ${context?.status === "active" ? "Rancho y usuarios" : "Configurar rancho"}`;
     $("#account-label").textContent = currentUser
       ? `${context?.display_name || currentUser.email} · ${context?.ranch_name || "Sin rancho"}`
       : "Sin sesión";
@@ -474,12 +514,22 @@
     return value;
   }
 
-  function bundleFingerprint(bundle) {
-    const deletedAt = bundle.deletedAt ? new Date(bundle.deletedAt).toISOString() : null;
-    const photos = bundle.photos.map(photo => ({
+  function photoFingerprint(photo) {
+    const fingerprint = {
       id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
       primary: Boolean(photo.primary), createdAt: photo.createdAt
-    })).sort((a, b) => a.id.localeCompare(b.id));
+    };
+    const crop = photoCrop(photo);
+    if (crop.x !== 50 || crop.y !== 50) {
+      fingerprint.cropX = crop.x;
+      fingerprint.cropY = crop.y;
+    }
+    return fingerprint;
+  }
+
+  function bundleFingerprint(bundle) {
+    const deletedAt = bundle.deletedAt ? new Date(bundle.deletedAt).toISOString() : null;
+    const photos = bundle.photos.map(photoFingerprint).sort((a, b) => a.id.localeCompare(b.id));
     const events = bundle.events.slice().sort((a, b) => a.id.localeCompare(b.id));
     const forecasts = (bundle.forecasts || []).slice().sort((a, b) => a.id.localeCompare(b.id));
     return JSON.stringify(stableValue({
@@ -681,7 +731,8 @@
         retainedPaths.add(storagePath);
         return {
           id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
-          primary: Boolean(photo.primary), createdAt: photo.createdAt, storagePath
+          primary: Boolean(photo.primary), createdAt: photo.createdAt,
+          cropX: photoCrop(photo).x, cropY: photoCrop(photo).y, storagePath
         };
       }));
       payload = {
@@ -891,6 +942,30 @@
     if (!photo?.blob) return "";
     if (!state.photoUrls.has(photo.id)) state.photoUrls.set(photo.id, URL.createObjectURL(photo.blob));
     return state.photoUrls.get(photo.id);
+  }
+  function photoCrop(photo) {
+    const coordinate = value => Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Number(value))) : 50;
+    return { x: coordinate(photo?.cropX), y: coordinate(photo?.cropY) };
+  }
+  function updatePhotoCropControls() {
+    const image = $(".detail-hero img");
+    const frame = $(".detail-hero");
+    const panel = $(".detail-crop-panel");
+    if (!image || !frame || !panel || !image.naturalWidth || !image.naturalHeight) return;
+    const horizontal = panel.querySelector('[data-photo-crop="x"]');
+    const vertical = panel.querySelector('[data-photo-crop="y"]');
+    const imageRatio = image.naturalWidth / image.naturalHeight;
+    const frameRatio = frame.clientWidth / frame.clientHeight;
+    horizontal.disabled = imageRatio <= frameRatio + 0.01;
+    vertical.disabled = imageRatio >= frameRatio - 0.01;
+    const help = panel.querySelector(".detail-crop-help");
+    help.textContent = horizontal.disabled && vertical.disabled
+      ? "La foto se muestra completa; no necesita recorte."
+      : horizontal.disabled
+        ? "Esta foto se recorta arriba y abajo. Ajusta la posición vertical."
+        : vertical.disabled
+          ? "Esta foto se recorta a los lados. Ajusta la posición horizontal."
+          : "Ajusta la posición de la foto en el marco.";
   }
 
   function weightHistory(animalId) {
@@ -1404,7 +1479,7 @@
       return `<section class="detail-section growth-section">
         <div class="detail-section-head"><h3>Crecimiento y peso objetivo</h3></div>
         <p class="growth-empty">Registra el primer peso para ver el crecimiento de este animal.</p>
-        <button class="button button-outline button-small growth-first-weighing" type="button" data-add-record="weight">＋ Registrar primer peso</button>
+        <button class="button button-outline button-small growth-first-weighing" type="button" data-add-record="weight">${icon("plus")} Registrar primer peso</button>
         ${renderGrowthTargetForm(animal)}
       </section>`;
     }
@@ -1519,7 +1594,9 @@
     $("#stat-weighed").textContent = String(weighed.size);
 
     const query = $("#search-input").value.trim().toLocaleLowerCase("es-MX");
-    const filtered = activeAnimals.filter(animal => {
+    const archivedAnimals = state.animals.filter(animal => !isActiveAnimal(animal));
+    const displayedAnimals = state.archiveView ? archivedAnimals : activeAnimals;
+    const filtered = displayedAnimals.filter(animal => {
       const searchable = [animal.tag, animal.name, animal.color, animal.sex, animal.status, animal.birthDate]
         .filter(Boolean).join(" ").toLocaleLowerCase("es-MX");
       return !query || searchable.includes(query);
@@ -1529,7 +1606,14 @@
       return String(first).localeCompare(String(second), "es-MX", { numeric: true }) * state.direction;
     });
 
-    $("#inventory-count").textContent = `${filtered.length} ${filtered.length === 1 ? "animal" : "animales"}`;
+    $("#inventory-heading-title").textContent = state.archiveView ? "Archivo de animales" : "Inventario activo";
+    $("#inventory-count").textContent = state.archiveView
+      ? `${filtered.length} de ${archivedAnimals.length} ${archivedAnimals.length === 1 ? "animal archivado" : "animales archivados"}`
+      : `${filtered.length} ${filtered.length === 1 ? "animal" : "animales"}`;
+    $("#archive-toggle").innerHTML = state.archiveView
+      ? `${icon("inventory")} Ver inventario activo (${activeAnimals.length})`
+      : `${icon("archive")} Ver archivo (${archivedAnimals.length})`;
+    $("#archive-toggle").setAttribute("aria-pressed", String(state.archiveView));
     const rows = $("#animal-rows");
     rows.innerHTML = filtered.map(animal => {
       const weight = eventFor(animal.id, "weight");
@@ -1542,8 +1626,8 @@
         <td>${display(animal.sex)}</td><td>${display(animal.color)}</td>
         <td>${weight ? `${escapeHtml(weight.weight)} kg` : "No registrado"}</td>
         <td>${weight ? formatDate(weight.date) : "No registrado"}</td>
-        <td><span class="status-pill ${statusClass(animal.status)}">${escapeHtml(animal.status)}</span></td>
-        <td><button class="row-menu" data-open-animal="${escapeHtml(animal.id)}" type="button" aria-label="Abrir ficha">›</button></td>
+        <td>${statusMarkup(animal.status)}</td>
+        <td><button class="row-menu" data-open-animal="${escapeHtml(animal.id)}" type="button" aria-label="Abrir ficha">${icon("chevron")}</button></td>
       </tr>`;
     }).join("");
 
@@ -1551,13 +1635,18 @@
     $("#empty-state").hidden = !noResults;
     $("table").hidden = noResults;
     const isEmptyInventory = activeAnimals.length === 0 && !query;
-    $("#empty-title").textContent = isEmptyInventory ? "Tu registro comienza aquí" : "No encontramos animales";
-    $("#empty-copy").textContent = isEmptyInventory
-      ? state.animals.length
-        ? "No hay animales activos. Los vendidos, fallecidos, desaparecidos y dados de baja se conservan en el historial, pero no aparecen en el inventario."
-        : "Añade tu primer animal para empezar a organizar su información."
-      : "Prueba con otra búsqueda.";
-    $("#empty-add-button").hidden = !isEmptyInventory || !canManageRanch();
+    const isEmptyArchive = archivedAnimals.length === 0 && !query;
+    $("#empty-title").textContent = state.archiveView
+      ? isEmptyArchive ? "El archivo está vacío" : "No encontramos animales"
+      : isEmptyInventory ? "Tu registro comienza aquí" : "No encontramos animales";
+    $("#empty-copy").textContent = state.archiveView
+      ? isEmptyArchive ? "Los animales vendidos, fallecidos, dados de baja, desaparecidos u otros se conservarán aquí para consultar su expediente y reactivarlos si hace falta." : "Prueba con otro arete, nombre o estado."
+      : isEmptyInventory
+        ? state.animals.length
+          ? "No hay animales activos. Los animales archivados se conservan en el archivo, desde donde puedes consultar sus datos y reactivarlos."
+          : "Añade tu primer animal para empezar a organizar su información."
+        : "Prueba con otra búsqueda.";
+    $("#empty-add-button").hidden = state.archiveView || !isEmptyInventory || !canManageRanch();
   }
 
   function journeyName(journey) {
@@ -1588,7 +1677,7 @@
         <span class="journey-progress-main"><strong>${escapeHtml(journeyName(journey))}</strong><span>${formatDate(journey.date)} · ${counts.expected} animales esperados</span></span>
         <span class="journey-progress-count">${counts.attended}/${counts.expected}<small>atendidos</small></span>
         <span class="journey-progress-track"><span style="width:${percent}%"></span></span>
-        <span class="journey-progress-pending">${counts.pending} pendientes · Continuar ›</span>
+        <span class="journey-progress-pending">${counts.pending} pendientes · Continuar ${icon("chevron")}</span>
       </button>`;
     }).join("");
 
@@ -1600,7 +1689,7 @@
         <td>${formatDate(journey.date)}</td>
         <td><strong>${escapeHtml(journeyName(journey))}</strong>${journey.product ? `<small>${escapeHtml(journey.product)}</small>` : ""}</td>
         <td>${counts.attended}/${counts.expected}</td>
-        <td><span class="journey-status ${journey.status}">${escapeHtml(journeyStatus(journey))}</span></td>
+        <td>${journeyStatusMarkup(journey)}</td>
         <td><button class="button button-outline button-small" type="button" data-open-journey="${escapeHtml(journey.id)}">${journey.status === "incomplete" ? "Abrir y continuar" : "Ver jornada"}</button></td>
       </tr>`;
     }).join("");
@@ -1742,7 +1831,7 @@
       !rosterIds.has(animal.id) && isActiveAnimal(animal));
     const addAnimalsControl = !finished && animalsToAdd.length
       ? `<details class="journey-add-animals">
-          <summary>＋ Agregar animales a esta jornada (${animalsToAdd.length} disponibles)</summary>
+          <summary>${icon("plus")} Agregar animales a esta jornada (${animalsToAdd.length} disponibles)</summary>
           <div class="journey-add-list">${animalsToAdd.map(animal => `<label>
             <input type="checkbox" name="journey-animal-to-add" value="${escapeHtml(animal.id)}">
             <span><strong>${escapeHtml(animal.tag || "Sin arete")}</strong><small>${escapeHtml(animal.name || "Sin nombre")}</small></span>
@@ -1755,7 +1844,7 @@
       <div class="journey-detail-header">
         <div class="journey-detail-top">
           <div><div class="eyebrow">JORNADA DE MANEJO</div><h2>${escapeHtml(journeyName(journey))}</h2><p>${formatDate(journey.date)} · ${counts.expected} animales esperados</p></div>
-          <button class="icon-button" type="button" data-close="journey-dialog" aria-label="Cerrar">×</button>
+          <button class="icon-button" type="button" data-close="journey-dialog" aria-label="Cerrar">${icon("close")}</button>
         </div>
         <div class="journey-summary">
           <div><strong>${counts.attended} de ${counts.expected}</strong><span>animales atendidos</span></div>
@@ -1767,9 +1856,9 @@
         ${details.length ? `<p class="journey-meta">${details.map(escapeHtml).join(" · ")}</p>` : ""}
       </div>
       <div class="journey-detail-body">
-        ${finished ? `<div class="journey-finish-message ${counts.pending ? "warning" : "success"}">${counts.pending ? `⚠ ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}. No recibirán el registro de esta jornada.` : "✓ Jornada completada. El historial de los animales atendidos fue actualizado."}</div>` : ""}
+        ${finished ? `<div class="journey-finish-message ${counts.pending ? "warning" : "success"}">${counts.pending ? `${icon("warning")} ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}. No recibirán el registro de esta jornada.` : `${icon("check")} Jornada completada. El historial de los animales atendidos fue actualizado.`}</div>` : ""}
         <div class="journey-roster-tools">
-          <label class="search-box"><span aria-hidden="true">⌕</span><input id="journey-search" type="search" placeholder="Buscar arete o nombre..." value="${escapeHtml(state.journeySearch)}" autocomplete="off"></label>
+          <label class="search-box">${icon("search", "ui-icon search-icon")}<input id="journey-search" type="search" placeholder="Buscar arete o nombre..." value="${escapeHtml(state.journeySearch)}" autocomplete="off"></label>
           <div class="journey-filter" role="group" aria-label="Filtrar animales">
             <button type="button" data-journey-filter="all" class="${state.journeyFilter === "all" ? "selected" : ""}">Todos</button>
             <button type="button" data-journey-filter="attended" class="${state.journeyFilter === "attended" ? "selected" : ""}">Atendidos</button>
@@ -1783,7 +1872,7 @@
               <button class="journey-animal ${animal.attended ? "attended" : "pending"}" type="button"
                 data-toggle-attendance="${escapeHtml(animal.id)}" ${finished || animal.attended ? "disabled" : ""}
                 aria-pressed="${animal.attended}" aria-label="${animal.attended ? "Atendido" : "Pendiente"}: arete ${escapeHtml(animal.tag || "sin arete")}, ${escapeHtml(animal.name || "sin nombre")}">
-                <span class="journey-check" aria-hidden="true">${animal.attended ? "✓" : ""}</span>
+                <span class="journey-check" aria-hidden="true">${animal.attended ? icon("check") : ""}</span>
                 <span class="journey-animal-id">${escapeHtml(animal.tag || "Sin arete")}</span>
                 <span class="journey-animal-name">${escapeHtml(animal.name || "Sin nombre")}</span>
                 <span class="journey-animal-description">${escapeHtml([animal.sex, animal.color].filter(Boolean).join(" · ") || "Datos sin registrar")}</span>
@@ -1802,10 +1891,10 @@
                   </div>` : ""}
             </div>`).join("") : '<p class="journey-empty">No hay animales en este filtro.</p>'}
         </div>
-        ${!finished && counts.pending ? `<p class="journey-pending-alert">⚠ Faltan ${counts.pending} ${counts.pending === 1 ? "animal" : "animales"} por atender. Se muestran en el filtro «Pendientes».</p>` : ""}
+        ${!finished && counts.pending ? `<p class="journey-pending-alert">${icon("warning")} Faltan ${counts.pending} ${counts.pending === 1 ? "animal" : "animales"} por atender. Se muestran en el filtro «Pendientes».</p>` : ""}
         ${finished && counts.pending ? `<section class="journey-pending-summary"><h3>Animales pendientes (${counts.pending})</h3><p>${journey.roster.filter(animal => !animal.attended).map(animal => `${animal.tag || "Sin arete"} · ${animal.name || "Sin nombre"}`).map(escapeHtml).join("  |  ")}</p></section>` : ""}
         <div class="journey-modal-actions">
-          <span class="journey-status ${journey.status}">${escapeHtml(journeyStatus(journey))}</span>
+          ${journeyStatusMarkup(journey)}
           ${journey.status === "incomplete" ? `<button class="button button-outline" type="button" data-reopen-journey="${escapeHtml(journey.id)}">Reanudar jornada</button>` : ""}
           ${!finished ? '<button class="button button-primary journey-finish-button" type="button" data-finish-journey>Finalizar jornada</button>' : ""}
         </div>
@@ -1999,7 +2088,7 @@
       return;
     }
     const counts = journeyCounts(journey);
-    if (counts.pending && !confirm(`⚠ Todavía hay ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}.\n\n¿Está seguro de que desea finalizar la jornada? Solo se registrarán los animales atendidos.`)) return;
+    if (counts.pending && !confirm(`Todavía hay ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}.\n\n¿Está seguro de que desea finalizar la jornada? Solo se registrarán los animales atendidos.`)) return;
     const completedAt = new Date().toISOString();
     const finishedJourney = {
       ...journey,
@@ -2213,7 +2302,7 @@
       selectedPhotos.forEach((file, index) => {
         photos.push({
           id: newId(), animalId: id, name: file.name, mime: file.type, blob: file,
-          primary: index === 0, createdAt: new Date().toISOString()
+          primary: index === 0, cropX: 50, cropY: 50, createdAt: new Date().toISOString()
         });
       });
     }
@@ -2252,43 +2341,65 @@
     const animalEvents = state.events.filter(record => record.animalId === animalId)
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
     const photos = state.photos.filter(photo => photo.animalId === animalId);
+    const heroPhoto = photos.find(photo => photo.primary) || photos[0];
+    const heroCrop = photoCrop(heroPhoto);
+    const heroImage = heroPhoto
+      ? `<img src="${photoUrl(heroPhoto)}" alt="Fotografía principal de ${escapeHtml(animal.name || animal.tag || "animal")}" data-view-photo="${escapeHtml(heroPhoto.id)}" style="object-position: ${heroCrop.x}% ${heroCrop.y}%;">`
+      : `<div class="detail-hero-placeholder">${icon("inventory")}</div>`;
+    const sexIcon = animal.sex === "Hembra" ? icon("female") : animal.sex === "Macho" ? icon("male") : "";
     const manager = canManageRanch();
     const worker = isRanchWorker();
     const gallery = photos.map(photo => `<div class="photo-tile">
       <img src="${photoUrl(photo)}" alt="Fotografía de ${escapeHtml(animal.name || animal.tag || "animal")}" data-view-photo="${escapeHtml(photo.id)}">
-      ${manager ? `<button class="photo-star ${photo.primary ? "primary" : ""}" data-primary-photo="${escapeHtml(photo.id)}" type="button" aria-label="${photo.primary ? "Fotografía principal" : "Elegir como fotografía principal"}">★</button>
-      <button class="photo-remove" data-delete-photo="${escapeHtml(photo.id)}" type="button" aria-label="Eliminar fotografía">×</button>` : ""}
+      ${manager ? `<button class="photo-star ${photo.primary ? "primary" : ""}" data-primary-photo="${escapeHtml(photo.id)}" type="button" aria-label="${photo.primary ? "Fotografía principal seleccionada" : `Elegir fotografía de ${escapeHtml(animal.name || animal.tag || "este animal")} como principal`}" aria-pressed="${photo.primary}" title="${photo.primary ? "Fotografía principal seleccionada" : "Elegir como fotografía principal"}">${icon("star")}</button>
+      <button class="photo-remove" data-delete-photo="${escapeHtml(photo.id)}" type="button" aria-label="Eliminar fotografía de ${escapeHtml(animal.name || animal.tag || "este animal")}">${icon("trash")}</button>` : ""}
     </div>`).join("");
     const recordButtons = manager
-      ? `<button class="button button-outline" type="button" data-add-record="weight">＋ Pesaje</button>
-          <button class="button button-outline" type="button" data-add-record="vaccine">＋ Vacuna</button>
-          <button class="button button-outline" type="button" data-add-record="deworm">＋ Desparasitación</button>
-          <button class="button button-outline" type="button" data-add-record="bath">＋ Baño</button>`
+      ? `<button class="button button-outline" type="button" data-add-record="weight">${icon("plus")} Pesaje</button>
+          <button class="button button-outline" type="button" data-add-record="vaccine">${icon("plus")} Vacuna</button>
+          <button class="button button-outline" type="button" data-add-record="deworm">${icon("plus")} Desparasitación</button>
+          <button class="button button-outline" type="button" data-add-record="bath">${icon("plus")} Baño</button>`
       : worker
-        ? `<button class="button button-outline" type="button" data-add-record="weight">＋ Pesaje</button>
-          <button class="button button-outline" type="button" data-add-record="vaccine">＋ Vacuna</button>
-          <button class="button button-outline" type="button" data-add-record="deworm">＋ Desparasitación</button>
-          <button class="button button-outline" type="button" data-add-record="bath">＋ Baño</button>`
+        ? `<button class="button button-outline" type="button" data-add-record="weight">${icon("plus")} Pesaje</button>
+          <button class="button button-outline" type="button" data-add-record="vaccine">${icon("plus")} Vacuna</button>
+          <button class="button button-outline" type="button" data-add-record="deworm">${icon("plus")} Desparasitación</button>
+          <button class="button button-outline" type="button" data-add-record="bath">${icon("plus")} Baño</button>`
         : "";
 
     $("#detail-content").innerHTML = `
       <div class="detail-header">
-        <div class="detail-top"><div><div class="eyebrow">EXPEDIENTE INDIVIDUAL</div><h2>${escapeHtml(animal.name || "Animal sin nombre")}</h2><p>Arete ${display(animal.tag)} · ${escapeHtml(animal.sex || "Sexo no registrado")}</p></div>
-          <button class="icon-button" type="button" data-close="detail-dialog" aria-label="Cerrar">×</button>
+        <div class="detail-top"><div><div class="eyebrow">FICHA DEL ANIMAL</div></div>
+          <button class="icon-button" type="button" data-close="detail-dialog" aria-label="Cerrar">${icon("close")}</button>
+        </div>
+        <div class="detail-hero">${heroImage}<span class="detail-hero-status">${statusMarkup(animal.status, "status-display")}</span></div>
+        ${heroPhoto && manager ? `<details class="detail-crop">
+          <summary aria-label="Ajustar encuadre de la foto" title="Ajustar encuadre">${icon("edit")} Ajustar encuadre</summary>
+          <div class="detail-crop-panel">
+            <label>Horizontal <input type="range" min="0" max="100" value="${heroCrop.x}" data-photo-crop="x" data-photo-id="${escapeHtml(heroPhoto.id)}" aria-label="Posición horizontal de la foto"></label>
+            <label>Vertical <input type="range" min="0" max="100" value="${heroCrop.y}" data-photo-crop="y" data-photo-id="${escapeHtml(heroPhoto.id)}" aria-label="Posición vertical de la foto"></label>
+            <p class="detail-crop-help" aria-live="polite">Ajusta la posición de la foto en el marco.</p>
+            <button class="detail-crop-reset" type="button" data-reset-photo-crop="${escapeHtml(heroPhoto.id)}">Centrar encuadre</button>
+          </div>
+        </details>` : ""}
+        <div class="detail-identity">
+          <span class="detail-tag-icon">${icon("tag")}</span>
+          <div><h2>${escapeHtml(animal.name || "Animal sin nombre")}</h2><p>Arete ${display(animal.tag)}</p></div>
+          <span class="detail-identity-sex">${sexIcon}${escapeHtml(animal.sex || "Sexo sin registrar")}</span>
         </div>
         <div class="detail-actions">
-          ${manager ? `<button class="button button-outline" type="button" data-edit-animal="${escapeHtml(animal.id)}">✎ Actualizar información</button>` : ""}
+          ${manager ? `<button class="button button-outline" type="button" data-edit-animal="${escapeHtml(animal.id)}">${icon("edit")} Editar animal</button>` : ""}
           ${recordButtons}
         </div>
       </div>
       <div class="detail-body">
+        <div class="detail-section-head detail-info-heading"><h3>Información general</h3></div>
         <div class="detail-basic">
           <div class="detail-fact"><span>Sexo</span><strong>${display(animal.sex)}</strong></div>
           <div class="detail-fact"><span>Color</span><strong>${display(animal.color)}</strong></div>
           <div class="detail-fact"><span>Última modificación</span><strong>${escapeHtml(formatTimestamp(animal.updatedAt))}</strong></div>
           <div class="detail-fact"><span>Fecha de nacimiento confirmada</span><strong>${formatDate(animal.birthDate)}</strong></div>
           <div class="detail-fact"><span>Edad${animal.estimatedAge && !animal.birthDate ? " aproximada" : ""}</span><strong>${escapeHtml(animalAge)}</strong></div>
-          <div class="detail-fact"><span>Estado</span><strong>${escapeHtml(animal.status)}</strong></div>
+          <div class="detail-fact"><span>Estado</span><strong>${statusMarkup(animal.status, "status-display")}</strong></div>
           <div class="detail-fact"><span>Último baño</span><strong>${latestBath ? formatDate(latestBath.date) : "No registrado"}</strong></div>
           <div class="detail-fact"><span>Última pesada</span><strong>${latestWeight ? formatDate(latestWeight.date) : "No registrado"}</strong></div>
           <div class="detail-fact"><span>Peso actual</span><strong>${latestWeight ? `${escapeHtml(latestWeight.weight)} kg` : "No registrado"}</strong></div>
@@ -2299,23 +2410,27 @@
         </div>
         ${renderGrowthChart(animal, growthPoints)}
         <section class="detail-section">
-          <div class="detail-section-head"><h3>Historial sanitario y de manejo</h3>${manager || worker ? '<button class="add-link" type="button" data-add-record="bath">＋ Añadir registro</button>' : ""}</div>
+          <div class="detail-section-head"><h3>Historial sanitario y de manejo</h3>${manager || worker ? `<button class="add-link" type="button" data-add-record="bath">${icon("plus")} Añadir registro</button>` : ""}</div>
           <div class="history-list">${renderHistory(animalEvents.filter(record => record.type !== "note"), manager)}</div>
         </section>
         <section class="detail-section">
-          <div class="detail-section-head"><h3>Comentarios y observaciones</h3>${manager ? '<button class="add-link" type="button" data-add-record="note">＋ Añadir observación</button>' : ""}</div>
+          <div class="detail-section-head"><h3>Comentarios y observaciones</h3>${manager ? `<button class="add-link" type="button" data-add-record="note">${icon("plus")} Añadir observación</button>` : ""}</div>
           <div class="history-list">${renderHistory(animalEvents.filter(record => record.type === "note"), manager)}</div>
         </section>
         <section class="detail-section">
           <div class="detail-section-head"><h3>Galería de fotografías <span class="muted">(${photos.length})</span></h3></div>
-          <div class="gallery">${gallery}${manager ? '<label class="photo-add" title="Añadir fotografías" aria-label="Añadir fotografías">＋<input id="photo-input" type="file" accept="image/*" multiple hidden></label>' : ""}</div>
+          <div class="gallery">${gallery}${manager ? `<label class="photo-add" title="Añadir fotografías" aria-label="Añadir fotografías">${icon("photo")}<input id="photo-input" type="file" accept="image/*" multiple hidden></label>` : ""}</div>
         </section>
         <div class="detail-section animal-management">
+          ${manager && !isActiveAnimal(animal) ? `<button class="button button-outline button-small" type="button" data-reactivate-animal="${escapeHtml(animal.id)}">${icon("active")} Reactivar animal</button>` : ""}
           ${manager && animal.status !== "Baja" ? `<button class="add-link" type="button" data-deactivate-animal="${escapeHtml(animal.id)}">Dar de baja</button>` : ""}
-          ${manager ? `<button class="danger-link" type="button" data-delete-animal="${escapeHtml(animal.id)}">Eliminar definitivamente</button>` : ""}
+            ${manager ? `<button class="danger-link" type="button" data-delete-animal="${escapeHtml(animal.id)}">${icon("trash")} Eliminar definitivamente a ${escapeHtml(animal.name || animal.tag || "este animal")}</button>` : ""}
         </div>
       </div>`;
     if (!$("#detail-dialog").open) $("#detail-dialog").showModal();
+    const detailPhotoImage = $(".detail-hero img");
+    if (detailPhotoImage?.complete) updatePhotoCropControls();
+    else detailPhotoImage?.addEventListener("load", updatePhotoCropControls, { once: true });
   }
 
   function renderHistory(records, allowDelete = canManageRanch()) {
@@ -2330,7 +2445,8 @@
         ? `<small class="history-audit">Atendido por ${escapeHtml(record.performedBy.label)} · ${escapeHtml(formatTimestamp(record.performedAt || record.createdAt))}</small>` : "";
       const correctedBy = record.weightUpdatedBy?.label
         ? `<small class="history-audit">Peso corregido por ${escapeHtml(record.weightUpdatedBy.label)} · ${escapeHtml(formatTimestamp(record.weightUpdatedAt))}</small>` : "";
-      return `<div class="history-item"><div class="history-date">${formatDate(record.date)}</div><div class="history-description">${value}${record.type === "weight" && record.notes ? ` · ${escapeHtml(record.notes)}` : ""}${journeyLink}${performedBy}${correctedBy}</div>${allowDelete ? `<button class="history-delete" data-delete-event="${escapeHtml(record.id)}" type="button" aria-label="Eliminar registro">×</button>` : ""}</div>`;
+      const recordName = record.type === "weight" ? "pesaje" : EVENT_TYPES[record.type] || "registro";
+      return `<div class="history-item"><div class="history-date">${formatDate(record.date)}</div><div class="history-description">${value}${record.type === "weight" && record.notes ? ` · ${escapeHtml(record.notes)}` : ""}${journeyLink}${performedBy}${correctedBy}</div>${allowDelete ? `<button class="history-delete" data-delete-event="${escapeHtml(record.id)}" type="button" aria-label="Eliminar ${escapeHtml(recordName)} del historial" title="Eliminar ${escapeHtml(recordName)} del historial">${icon("trash")}</button>` : ""}</div>`;
     }).join("");
   }
 
@@ -2449,7 +2565,7 @@
         const store = tx.objectStore("photos");
         images.forEach((file, index) => store.put({
           id: newId(), animalId, name: file.name, mime: file.type, blob: file,
-          primary: existing.length === 0 && index === 0, createdAt: new Date().toISOString()
+          primary: existing.length === 0 && index === 0, cropX: 50, cropY: 50, createdAt: new Date().toISOString()
         }));
       });
       await touchAnimal(animalId);
@@ -2476,6 +2592,22 @@
       openDetail(photo.animalId);
     } catch (error) {
       showToast(`No se pudo actualizar la fotografía principal: ${error.message}`);
+    }
+  }
+
+  async function savePhotoCrop(photoId, x, y) {
+    if (!canManageRanch()) return;
+    const photo = state.photos.find(item => item.id === photoId);
+    if (!photo) return;
+    try {
+      await put("photos", { ...photo, cropX: x, cropY: y });
+      await touchAnimal(photo.animalId);
+      await refresh();
+      openDetail(photo.animalId);
+      const controls = $$(".detail-crop");
+      controls.forEach(control => { control.open = true; });
+    } catch (error) {
+      showToast(`No se pudo guardar el encuadre: ${error.message}`);
     }
   }
 
@@ -2524,6 +2656,27 @@
       showToast("Animal dado de baja; su historial se conservó.");
     } catch (error) {
       showToast(`No se pudo actualizar el animal: ${error.message}`);
+    }
+  }
+
+  async function reactivateAnimal(animalId) {
+    if (!canManageRanch()) {
+      showToast("Solo el propietario o administrador puede reactivar animales.");
+      return;
+    }
+    const animal = state.animals.find(item => item.id === animalId);
+    if (!animal || isActiveAnimal(animal)) return;
+    if (!confirm(`¿Reactivar a ${animal.name || animal.tag || "este animal"}? Volverá al inventario activo y podrá incluirse en jornadas nuevas.`)) return;
+    try {
+      await put("animals", { ...animal, status: "Activo", updatedAt: nextModifiedAt(animal.updatedAt) });
+      scheduleSync();
+      $("#detail-dialog").close();
+      state.archiveView = false;
+      $("#search-input").value = "";
+      await refresh();
+      showToast("Animal reactivado y devuelto al inventario activo.");
+    } catch (error) {
+      showToast(`No se pudo reactivar el animal: ${error.message}`);
     }
   }
 
@@ -2587,7 +2740,8 @@
       };
       payload.photos = await Promise.all(state.photos.map(async photo => ({
         id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
-        primary: photo.primary, createdAt: photo.createdAt, data: await blobToDataUrl(photo.blob)
+        primary: photo.primary, cropX: photoCrop(photo).x, cropY: photoCrop(photo).y,
+        createdAt: photo.createdAt, data: await blobToDataUrl(photo.blob)
       })));
       const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -2656,7 +2810,11 @@
         }
         const response = await fetch(item.data);
         const blob = await response.blob();
-        return { id: item.id, animalId: item.animalId, name: item.name, mime: item.mime, primary: Boolean(item.primary), createdAt: item.createdAt, blob };
+        return {
+          id: item.id, animalId: item.animalId, name: item.name, mime: item.mime,
+          primary: Boolean(item.primary), cropX: photoCrop(item).x, cropY: photoCrop(item).y,
+          createdAt: item.createdAt, blob
+        };
       }));
       if (events.some(record => !animalIds.has(record.animalId))) throw new Error("La copia contiene registros asociados a animales inexistentes.");
       const deletionMap = new Map(backedUpDeletions.map(item => [item.id, item]));
@@ -2720,6 +2878,11 @@
     $("#calculator-animal").addEventListener("change", loadCalculatorAnimal);
     $("#calculator-save-forecast").addEventListener("click", saveCalculatorForecast);
     $("#new-journey-button").addEventListener("click", openJourneyCreateForm);
+    $("#archive-toggle").addEventListener("click", () => {
+      state.archiveView = !state.archiveView;
+      $("#search-input").value = "";
+      renderDashboard();
+    });
     $("#search-input").addEventListener("input", renderDashboard);
     $$(".sort-button").forEach(button => button.addEventListener("click", () => {
       const key = button.dataset.sort;
@@ -2845,6 +3008,7 @@
       const { error } = await cloud.auth.signOut();
       if (error) showToast(`No se pudo cerrar la sesión: ${error.message}`);
     });
+    window.addEventListener("resize", updatePhotoCropControls);
     $("#restore-button").addEventListener("click", () => $("#restore-input").click());
     $("#restore-input").addEventListener("change", event => restore(event.target.files[0]));
     document.addEventListener("click", event => {
@@ -2896,17 +3060,42 @@
       if (target.dataset.addRecord) { openRecordForm(target.dataset.addRecord); return; }
       if (target.dataset.deletePhoto) { deletePhoto(target.dataset.deletePhoto); return; }
       if (target.dataset.primaryPhoto) { choosePrimary(target.dataset.primaryPhoto); return; }
+      if (target.dataset.resetPhotoCrop) {
+        const cropControls = $$(".detail-crop-panel input[data-photo-crop]");
+        cropControls.forEach(input => { input.value = "50"; });
+        const photoId = target.dataset.resetPhotoCrop;
+        savePhotoCrop(photoId, 50, 50);
+        return;
+      }
       if (target.dataset.viewPhoto) {
         const photo = state.photos.find(item => item.id === target.dataset.viewPhoto);
         if (photo) { $("#photo-large").src = photoUrl(photo); $("#photo-dialog").showModal(); }
         return;
       }
       if (target.dataset.deleteEvent) { deleteEvent(target.dataset.deleteEvent); return; }
+      if (target.dataset.reactivateAnimal) { reactivateAnimal(target.dataset.reactivateAnimal); return; }
       if (target.dataset.deactivateAnimal) { deactivateAnimal(target.dataset.deactivateAnimal); return; }
       if (target.dataset.deleteAnimal) { deleteAnimal(target.dataset.deleteAnimal); }
     });
+    document.addEventListener("input", event => {
+      const input = event.target;
+      if (!input.dataset.photoCrop) return;
+      const panel = input.closest(".detail-crop-panel");
+      const x = Number(panel.querySelector('[data-photo-crop="x"]').value);
+      const y = Number(panel.querySelector('[data-photo-crop="y"]').value);
+      const image = $(".detail-hero img");
+      if (image) image.style.objectPosition = `${x}% ${y}%`;
+    });
     document.addEventListener("change", event => {
       if (event.target.id === "photo-input") addPhotos(event.target.files);
+      if (event.target.dataset.photoCrop) {
+        const panel = event.target.closest(".detail-crop-panel");
+        savePhotoCrop(
+          event.target.dataset.photoId,
+          Number(panel.querySelector('[data-photo-crop="x"]').value),
+          Number(panel.querySelector('[data-photo-crop="y"]').value)
+        );
+      }
       if (event.target.id === "animal-tag") event.target.setCustomValidity("");
     });
     document.addEventListener("keydown", event => {

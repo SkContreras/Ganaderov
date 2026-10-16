@@ -5,30 +5,65 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f6f7f2">
   <title>Ganadero — Registro de ganado</title>
+  <link rel="icon" type="image/svg+xml" href="./ganaderov-icon.svg">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+    <symbol id="icon-inventory" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2.5 6.5c2.8.6 4.4-.4 5.1-3.1l1.1-2.1c1.7 1.2 2.9 3 3.3 5.2h2c.4-2.2 1.6-4 3.3-5.2l1.1 2.1c.7 2.7 2.3 3.7 5.1 3.1-.5 3.5-2 5.5-4.5 6.2v3.1c0 4.3-3.1 7.2-7 7.2s-7-2.9-7-7.2v-3.1c-2.5-.7-4-2.7-4.5-6.2Zm6.1 6.2a1.15 1.15 0 1 0 0 2.3 1.15 1.15 0 0 0 0-2.3Zm6.8 0a1.15 1.15 0 1 0 0 2.3 1.15 1.15 0 0 0 0-2.3Z"/></symbol>
+    <symbol id="icon-journeys" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 4h2V2h3v2h4V2h3v2h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm1 5v10h12V9H6Zm4.2 1.5 1.5 1.5 2.7-2.7 1.6 1.4-4.2 4.4-3-3 1.4-1.6Z"/></symbol>
+    <symbol id="icon-calculator" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 2h14a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm1.5 3v4h11V5h-11Zm1 7h2v2h-2v-2Zm4 0h2v2h-2v-2Zm4 0h2v2h-2v-2Zm-8 4h2v2h-2v-2Zm4 0h2v2h-2v-2Zm4 0h2v2h-2v-2Z"/></symbol>
+    <symbol id="icon-add" viewBox="0 0 24 24"><path d="M9 2h6v7h7v6h-7v7H9v-7H2V9h7z"/></symbol>
+    <symbol id="icon-edit" viewBox="0 0 24 24"><path d="m3 17.5 13-13a3.2 3.2 0 0 1 4.5 4.5l-13 13L2 23zM14.5 6l4.5 4.5"/></symbol>
+    <symbol id="icon-view" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M1 12S5 4 12 4s11 8 11 8-4 8-11 8S1 12 1 12Zm11-4.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Zm0 2.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/></symbol>
+    <symbol id="icon-delete" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M4 6h16v2H4V6Zm3 3h10l-1 14H8L7 9Zm2 2v9h1.5v-9H9Zm4.5 0v9H15v-9h-1.5ZM9 2h6l1 3H8l1-3Z"/></symbol>
+    <symbol id="icon-archive" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h18v5H3V3Zm1 7h16v11H4V10Zm5 3v2h6v-2H9Z"/></symbol>
+    <symbol id="icon-sync" viewBox="0 0 24 24"><path d="M20.5 11A8.5 8.5 0 0 0 5.8 5.4L3 8.2V3h2v2.2A10.5 10.5 0 0 1 22.5 11h-2Zm-17 2a8.5 8.5 0 0 0 14.7 5.6l2.8-2.8V21h-2v-2.2A10.5 10.5 0 0 1 1.5 13h2Z"/></symbol>
+    <symbol id="icon-import" viewBox="0 0 24 24"><path d="M10 2h4v10l3-3 2.8 2.8L12 20l-7.8-8.2L7 9l3 3V2ZM3 19h18v3H3z"/></symbol>
+    <symbol id="icon-export" viewBox="0 0 24 24"><path d="M10 22h4V12l3 3 2.8-2.8L12 4l-7.8 8.2L7 15l3-3v10ZM3 2h18v3H3z"/></symbol>
+    <symbol id="icon-weight" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 5h14l2 17H3L5 5Zm7 3a4 4 0 0 0-4 4h2a2 2 0 1 1 3.7 1H12v2h5v-2h-1.2A6 6 0 0 0 12 8ZM8 2h8v2H8z"/></symbol>
+    <symbol id="icon-users" viewBox="0 0 24 24"><path d="M9 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM1 22v-2a8 8 0 0 1 16 0v2H1Zm15-11a4 4 0 1 0-1.4-7.7 7 7 0 0 1 0 7.4c.5.2 1 .3 1.4.3Zm1.2 3a7.5 7.5 0 0 1 5.8 7.3V22h-4v-2a10 10 0 0 0-1.8-5.7Z"/></symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><path fill-rule="evenodd" d="m19.4 13.5 2 1.5-2 3.5-2.3-.9a8 8 0 0 1-1.6.9L15 21h-4l-.5-2.5a8 8 0 0 1-1.6-.9l-2.3.9-2-3.5 2-1.5a8 8 0 0 1 0-1.9l-2-1.5 2-3.5 2.3.9a8 8 0 0 1 1.6-.9L11 2h4l.5 2.5a8 8 0 0 1 1.6.9l2.3-.9 2 3.5-2 1.5a8 8 0 0 1 0 2Zm-6.4 3a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/></symbol>
+    <symbol id="icon-male" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M14 2h8v8h-3V7.1l-3.2 3.2a8 8 0 1 1-2.1-2.1L17 4.9H14V2ZM9 11a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z"/></symbol>
+    <symbol id="icon-female" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 1a8 8 0 0 1 2 15.7V19h4v3h-4v2h-4v-2H6v-3h4v-2.3A8 8 0 0 1 12 1Zm0 3a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z"/></symbol>
+    <symbol id="icon-health" viewBox="0 0 24 24"><path d="M12 21S2 15 2 8a5 5 0 0 1 9-3 5 5 0 0 1 9 3c0 7-8 12-8 12Zm-7-9h4l2-4 2 8 2-4h4"/></symbol>
+    <symbol id="icon-treatment" viewBox="0 0 24 24"><path d="m3 17 11-11a4 4 0 0 1 5.7 5.7l-11 11L3 17Zm2.8 2.8 2.4 2.4 4.3-4.3-2.4-2.4-4.3 4.3Zm7.1-7.1 2.8 2.8 2.1-2.1-2.8-2.8-2.1 2.1ZM15 5l4 4M17 3l4 4"/></symbol>
+    <symbol id="icon-tag" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 12 12 2h9a1 1 0 0 1 1 1v9L12 22a2 2 0 0 1-2.8 0l-7.2-7.2A2 2 0 0 1 2 12Zm14-6a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"/></symbol>
+    <symbol id="icon-reminder" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7 2h3v3h4V2h3v3h2a2 2 0 0 1 2 2v15H3V7a2 2 0 0 1 2-2h2V2Zm-1 8v9h12v-9H6Zm2 2h3v3H8v-3Zm5 0h3v3h-3v-3Z"/></symbol>
+    <symbol id="icon-location" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 23S3 13.5 3 9a9 9 0 1 1 18 0c0 4.5-9 14-9 14Zm0-10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/></symbol>
+    <symbol id="icon-photo" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 5h18a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm5 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm-4 11h16l-5-6-4 4-3-3-4 5Z"/></symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M10.5 2a8.5 8.5 0 1 1-5.6 14.9l-3.5 3.5-1.8-1.8 3.5-3.5A8.5 8.5 0 0 1 10.5 2Zm0 3a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"/></symbol>
+    <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m8 3 9 9-9 9-3-3 6-6-6-6z"/></symbol>
+    <symbol id="icon-sort" viewBox="0 0 24 24"><path d="m7 9 5-5 5 5h-3v6h-4V9H7Zm10 6-5 5-5-5h3V9h4v6h3Z"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m5 3 7 7 7-7 2 2-7 7 7 7-2 2-7-7-7 7-2-2 7-7-7-7z"/></symbol>
+    <symbol id="icon-status-active" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 1a11 11 0 1 1 0 22 11 11 0 0 1 0-22Zm-1 15 8-8-2-2-6 6-3-3-2 2 5 5Z"/></symbol>
+    <symbol id="icon-status-pending" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 1a11 11 0 1 1 0 22 11 11 0 0 1 0-22Zm-1.5 5v6.7l5 3 1.5-2.5-3.5-2V6h-3Z"/></symbol>
+    <symbol id="icon-status-error" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 1a11 11 0 1 1 0 22 11 11 0 0 1 0-22Zm-4 7 4 4-4 4 2 2 4-4 4 4 2-2-4-4 4-4-2-2-4 4-4-4-2 2Z"/></symbol>
+    <symbol id="icon-status-inactive" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 1a11 11 0 1 1 0 22 11 11 0 0 1 0-22Zm-6 9v4h12v-4H6Z"/></symbol>
+    <symbol id="icon-favorite" viewBox="0 0 24 24"><path d="m12 1 3.3 7 7.7 1-5.6 5.3 1.4 7.7-6.8-3.8-6.8 3.8 1.4-7.7L1 9l7.7-1z"/></symbol>
+    <symbol id="icon-external" viewBox="0 0 24 24"><path d="M13 2h9v9h-3V7.1L11 15l-2-2 8-8h-4zM4 5h6v3H6v10h10v-4h3v7H3V5z"/></symbol>
+  </svg>
   <div class="app-shell">
     <aside class="sidebar">
       <a class="brand" href="#" aria-label="Ganadero, inicio">
-        <span class="brand-mark" aria-hidden="true">G</span>
+        <img class="brand-mark" src="./ganaderov-icon.svg" alt="">
         <span><strong>Ganadero</strong><small>REGISTRO DE CAMPO</small></span>
       </a>
       <div class="sidebar-label">GESTIÓN</div>
       <button id="inventory-nav" class="nav-item active" type="button" aria-current="page">
-        <span class="nav-icon" aria-hidden="true">▦</span> Inventario
+        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-inventory"></use></svg> Inventario
       </button>
       <button id="journeys-nav" class="nav-item" type="button" aria-current="false">
-        <span class="nav-icon" aria-hidden="true">✓</span> Jornadas
+        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-journeys"></use></svg> Jornadas
       </button>
       <button id="calculator-nav" class="nav-item" type="button" aria-current="false">
-        <span class="nav-icon" aria-hidden="true">⌗</span> Calculadora
+        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-calculator"></use></svg> Calculadora
       </button>
       <div class="sidebar-note">
-        <span class="note-icon" aria-hidden="true">✓</span>
+        <span class="note-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" focusable="false"><use href="#icon-status-active"></use></svg></span>
         <strong>Tus datos, bajo tu control</strong>
         <p>Los cambios se guardan en este dispositivo y se sincronizan con tu cuenta al conectarte.</p>
-        <button id="backup-button" class="text-button" type="button">Crear copia de seguridad <span aria-hidden="true">↗</span></button>
+        <button id="backup-button" class="text-button" type="button">Crear copia de seguridad <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-export"></use></svg></button>
       </div>
       <div id="sync-label" class="sidebar-foot">SOLO EN ESTE DISPOSITIVO</div>
     </aside>
@@ -38,11 +73,11 @@
         <div class="breadcrumb">Gestión del rancho <span>/</span> <strong id="breadcrumb-current">Ganado</strong></div>
         <div class="account-controls">
           <span id="account-label" class="account-label">Sin sesión</span>
-          <button id="sync-button" class="button button-outline button-small" type="button" disabled>Sincronizar</button>
-          <button id="account-button" class="button button-outline button-small" type="button">Iniciar sesión</button>
-          <button id="sign-out-button" class="button button-outline button-small" type="button" hidden>Cerrar sesión</button>
-          <button id="ranch-button" class="button button-outline button-small" type="button" hidden>Rancho y usuarios</button>
-          <button id="restore-button" class="button button-outline button-small" type="button">Importar copia</button>
+          <button id="sync-button" class="button button-outline button-small" type="button" aria-label="Sincronizar" disabled><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sync"></use></svg> Sincronizar</button>
+          <button id="account-button" class="button button-outline button-small" type="button" aria-label="Iniciar sesión"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-users"></use></svg> Iniciar sesión</button>
+          <button id="sign-out-button" class="button button-outline button-small" type="button" hidden><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-export"></use></svg> Cerrar sesión</button>
+          <button id="ranch-button" class="button button-outline button-small" type="button" hidden><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-users"></use></svg> Rancho y usuarios</button>
+          <button id="restore-button" class="button button-outline button-small" type="button" aria-label="Importar copia"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-import"></use></svg> Importar copia</button>
         </div>
         <input id="restore-input" type="file" accept="application/json,.json" hidden>
       </header>
@@ -51,39 +86,40 @@
       <section class="page-heading">
         <div>
           <div class="eyebrow"><span class="live-dot"></span> CONTROL DE INVENTARIO</div>
-          <h1>Registro de ganado</h1>
-          <p class="subtitle">Toda la información de tus animales, organizada en un solo lugar.</p>
+          <h1>Ganado</h1>
+          <p class="subtitle">Gestiona y consulta la información de tu ganado.</p>
         </div>
-        <button id="add-animal-button" class="button button-primary" type="button"><span aria-hidden="true">＋</span> Añadir animal</button>
+        <button id="add-animal-button" class="button button-primary" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-add"></use></svg> Añadir animal</button>
       </section>
 
       <section class="stats-grid" aria-label="Resumen del ganado">
         <article class="stat-card">
-          <div class="stat-top"><span>Total de animales</span><span class="stat-icon green" aria-hidden="true">♧</span></div>
+          <div class="stat-top"><span>Total de animales</span><span class="stat-icon green" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" focusable="false"><use href="#icon-inventory"></use></svg></span></div>
           <div id="stat-total" class="stat-value">0</div><div class="stat-caption">En el inventario</div>
         </article>
         <article class="stat-card">
-          <div class="stat-top"><span>Hembras</span><span class="stat-icon rose" aria-hidden="true">♀</span></div>
+          <div class="stat-top"><span>Hembras</span><span class="stat-icon rose" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" focusable="false"><use href="#icon-female"></use></svg></span></div>
           <div id="stat-females" class="stat-value">0</div><div class="stat-caption">Animales registrados</div>
         </article>
         <article class="stat-card">
-          <div class="stat-top"><span>Machos</span><span class="stat-icon blue" aria-hidden="true">♂</span></div>
+          <div class="stat-top"><span>Machos</span><span class="stat-icon blue" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" focusable="false"><use href="#icon-male"></use></svg></span></div>
           <div id="stat-males" class="stat-value">0</div><div class="stat-caption">Animales registrados</div>
         </article>
         <article class="stat-card">
-          <div class="stat-top"><span>Con peso registrado</span><span class="stat-icon gold" aria-hidden="true">⌁</span></div>
+          <div class="stat-top"><span>Con peso registrado</span><span class="stat-icon gold" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" focusable="false"><use href="#icon-weight"></use></svg></span></div>
           <div id="stat-weighed" class="stat-value">0</div><div class="stat-caption">Con al menos un pesaje</div>
         </article>
       </section>
 
       <section class="inventory-card">
         <div class="inventory-heading">
-          <div><h2>Todos los animales</h2><p id="inventory-count" class="muted">0 animales</p></div>
+          <div><h2 id="inventory-heading-title">Inventario activo</h2><p id="inventory-count" class="muted">0 animales</p></div>
           <div class="table-tools">
+            <button id="archive-toggle" class="button button-outline button-small archive-toggle" type="button" aria-pressed="false">Ver archivo</button>
             <label class="search-box">
-              <span aria-hidden="true">⌕</span>
+              <svg class="ui-icon search-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-search"></use></svg>
               <input id="search-input" type="search" placeholder="Buscar por arete, nombre..." autocomplete="off">
-              <kbd>⌘ K</kbd>
+              <kbd>Ctrl K</kbd>
             </label>
           </div>
         </div>
@@ -91,22 +127,22 @@
           <table>
             <thead>
               <tr>
-                <th><button class="sort-button" data-sort="tag" type="button">Animal <span>↕</span></button></th>
-                <th><button class="sort-button" data-sort="sex" type="button">Sexo <span>↕</span></button></th>
-                <th><button class="sort-button" data-sort="color" type="button">Color <span>↕</span></button></th>
-                <th><button class="sort-button" data-sort="weight" type="button">Último peso <span>↕</span></button></th>
-                <th><button class="sort-button" data-sort="weighDate" type="button">Última pesada <span>↕</span></button></th>
-                <th><button class="sort-button" data-sort="status" type="button">Estado <span>↕</span></button></th>
+                <th><button class="sort-button" data-sort="tag" type="button">Animal <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
+                <th><button class="sort-button" data-sort="sex" type="button">Sexo <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
+                <th><button class="sort-button" data-sort="color" type="button">Color <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
+                <th><button class="sort-button" data-sort="weight" type="button">Último peso <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
+                <th><button class="sort-button" data-sort="weighDate" type="button">Última pesada <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
+                <th><button class="sort-button" data-sort="status" type="button">Estado <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
                 <th><span class="sr-only">Acciones</span></th>
               </tr>
             </thead>
             <tbody id="animal-rows"></tbody>
           </table>
           <div id="empty-state" class="empty-state" hidden>
-            <div class="empty-illustration" aria-hidden="true">♧</div>
+            <div class="empty-illustration" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" focusable="false"><use href="#icon-inventory"></use></svg></div>
             <h3 id="empty-title">Tu registro comienza aquí</h3>
             <p id="empty-copy">Añade tu primer animal para empezar a organizar su información.</p>
-            <button id="empty-add-button" class="button button-primary" type="button">＋ Añadir animal</button>
+            <button id="empty-add-button" class="button button-primary" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-add"></use></svg> Añadir animal</button>
           </div>
         </div>
       </section>
@@ -119,7 +155,7 @@
             <h1>Jornadas de manejo</h1>
             <p class="subtitle">Reúne y registra tratamientos sin perder de vista ningún animal.</p>
           </div>
-          <button id="new-journey-button" class="button button-primary" type="button"><span aria-hidden="true">＋</span> Nueva jornada</button>
+          <button id="new-journey-button" class="button button-primary" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-add"></use></svg> Nueva jornada</button>
         </div>
         <section id="active-journeys-section" class="journey-section" hidden>
           <div class="journey-section-heading"><div><h2>En progreso</h2><p>Continúa donde lo dejaste.</p></div></div>
@@ -165,7 +201,7 @@
             <section class="calculator-group">
               <div class="calculator-group-heading">
                 <div><h2>Cotización de hoy</h2><p>Captura los precios de la categoría que corresponda.</p></div>
-                <a href="https://www.mexicoganadero.com/precios/" target="_blank" rel="noopener noreferrer">Consultar fuente ↗</a>
+                <a href="https://www.mexicoganadero.com/precios/" target="_blank" rel="noopener noreferrer">Consultar fuente <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-external"></use></svg></a>
               </div>
               <div class="calculator-fields">
                 <label>Categoría y rango actual<input id="calculator-current-category" maxlength="100" placeholder="Ej. Becerro CN, 151–180 kg"></label>
@@ -216,7 +252,7 @@
     <form id="animal-form" method="dialog">
       <div class="modal-heading">
         <div><div class="eyebrow">FICHA DE ANIMAL</div><h2 id="animal-dialog-title">Añadir animal</h2></div>
-        <button class="icon-button" type="button" data-close="animal-dialog" aria-label="Cerrar">×</button>
+        <button class="icon-button" type="button" data-close="animal-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
       </div>
       <input id="animal-id" type="hidden">
       <div class="form-section">
@@ -230,7 +266,7 @@
           <label>Edad aproximada · años<input id="animal-age-years" type="number" min="0" step="1" placeholder="Ej. 2" inputmode="numeric"></label>
           <label>Edad aproximada · meses<input id="animal-age-months" type="number" min="0" max="11" step="1" placeholder="0–11" inputmode="numeric"></label>
           <p class="calculator-note full-width">Usa la fecha confirmada o una edad aproximada. La edad estimada se guarda como tal y no se convierte en una fecha de nacimiento inventada.</p>
-          <label>Estado<select id="animal-status" name="status"><option>Activo</option><option>Vendido</option><option>Fallecido</option><option>Otro</option></select></label>
+          <label>Estado<select id="animal-status" name="status"><option>Activo</option><option>Vendido</option><option>Fallecido</option><option>Baja</option><option>Otro</option><option>Otros</option><option>Desaparecido</option></select></label>
         </div>
       </div>
       <div id="initial-records" class="form-section">
@@ -259,7 +295,7 @@
     <form id="record-form" method="dialog">
       <div class="modal-heading">
         <div><div class="eyebrow">NUEVO REGISTRO</div><h2 id="record-dialog-title">Añadir registro</h2></div>
-        <button class="icon-button" type="button" data-close="record-dialog" aria-label="Cerrar">×</button>
+        <button class="icon-button" type="button" data-close="record-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
       </div>
       <input id="record-animal-id" type="hidden">
       <input id="record-type" type="hidden">
@@ -269,7 +305,7 @@
   </dialog>
 
   <dialog id="photo-dialog" class="modal photo-modal">
-    <button class="icon-button photo-close" type="button" data-close="photo-dialog" aria-label="Cerrar">×</button>
+    <button class="icon-button photo-close" type="button" data-close="photo-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
     <img id="photo-large" alt="Fotografía del animal">
   </dialog>
 
@@ -277,7 +313,7 @@
     <form id="journey-form">
       <div class="modal-heading">
         <div><div class="eyebrow">NUEVA JORNADA</div><h2>Preparar manejo</h2></div>
-        <button class="icon-button" type="button" data-close="journey-create-dialog" aria-label="Cerrar">×</button>
+        <button class="icon-button" type="button" data-close="journey-create-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
       </div>
       <div class="form-grid">
         <label class="full-width">Actividad
@@ -313,7 +349,7 @@
   <dialog id="account-dialog" class="modal compact-modal">
     <div class="modal-heading">
       <div><div class="eyebrow">ACCESO A GANADEROV</div><h2 id="account-title">Iniciar sesión</h2></div>
-      <button class="icon-button" type="button" data-close="account-dialog" aria-label="Cerrar">×</button>
+      <button class="icon-button" type="button" data-close="account-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
     </div>
     <p id="account-help" class="account-help">Usa tu correo y contraseña. Tus datos locales permanecen en este dispositivo aunque no haya conexión.</p>
     <form id="sign-in-form">
@@ -373,7 +409,7 @@
   <dialog id="ranch-dialog" class="modal compact-modal">
     <div class="modal-heading">
       <div><div class="eyebrow">PERFILES Y PERMISOS</div><h2>Rancho y usuarios</h2></div>
-      <button class="icon-button" type="button" data-close="ranch-dialog" aria-label="Cerrar">×</button>
+      <button class="icon-button" type="button" data-close="ranch-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
     </div>
     <div id="ranch-content"></div>
   </dialog>

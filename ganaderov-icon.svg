@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#173F2A"/>
+  <!-- minimal cow head -->
+  <path d="M143 178c-8-28-1-53 18-70 18 5 36 17 48 31 14-6 30-9 47-9s33 3 47 9c12-14 30-26 48-31 19 17 26 42 18 70 11 20 17 43 17 68 0 79-57 132-130 132S126 325 126 246c0-25 6-48 17-68Z"
+        fill="#F5F1E8"/>
+  <path d="M161 180c-19-8-35-20-45-36 2 29 13 51 32 66" fill="none" stroke="#F5F1E8" stroke-width="18" stroke-linecap="round"/>
+  <path d="M351 180c19-8 35-20 45-36-2 29-13 51-32 66" fill="none" stroke="#F5F1E8" stroke-width="18" stroke-linecap="round"/>
+  <!-- eyes -->
+  <circle cx="199" cy="235" r="11" fill="#173F2A"/>
+  <circle cx="313" cy="235" r="11" fill="#173F2A"/>
+  <!-- muzzle -->
+  <path d="M190 290c17-21 37-31 66-31s49 10 66 31c-6 37-30 55-66 55s-60-18-66-55Z" fill="#D8C8AD"/>
+  <ellipse cx="226" cy="300" rx="10" ry="8" fill="#173F2A"/>
+  <ellipse cx="286" cy="300" rx="10" ry="8" fill="#173F2A"/>
+  <path d="M246 319c6 7 14 7 20 0" fill="none" stroke="#173F2A" stroke-width="7" stroke-linecap="round"/>
+  <!-- subtle field -->
+  <path d="M95 402c58-34 119-49 161-49s103 15 161 49" fill="none" stroke="#7CB342" stroke-width="14" stroke-linecap="round"/>
+  <path d="M127 430c45-22 89-32 129-32s84 10 129 32" fill="none" stroke="#7CB342" stroke-width="10" stroke-linecap="round"/>
+</svg>
