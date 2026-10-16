@@ -23,7 +23,9 @@ El archivo `config.js` contiene solo valores públicos del proyecto; no contiene
 
 ## Jornadas de manejo
 
-En **Jornadas** puedes crear jornadas de baño, vacunación, desparasitación, inyección, medicamento, pesaje, revisión veterinaria u otra actividad. La lista se toma del inventario al iniciar la jornada y puedes incorporar animales activos después sin reemplazar el progreso existente. Las marcas se guardan en IndexedDB y la jornada puede continuar sin internet.
+El inventario muestra solo animales activos. Los marcados como vendidos, fallecidos, dados de baja, «Otro» o desaparecidos se excluyen de la lista y de los conteos del inventario, pero sus fichas, eventos y jornadas anteriores se conservan. Tampoco se pueden incluir en jornadas nuevas ni agregarse a una jornada en curso. Si alguno ya estaba en una jornada activa, deja de aparecer en la lista operativa y ya no cuenta como pendiente; la participación histórica no se elimina.
+
+En **Jornadas** puedes crear jornadas de baño, vacunación, desparasitación, inyección, medicamento, pesaje, revisión veterinaria u otra actividad. La lista se toma de los animales activos al iniciar la jornada y puedes incorporar animales activos después sin reemplazar el progreso existente. Las marcas se guardan en IndexedDB y la jornada puede continuar sin internet.
 
 Al finalizar una jornada incompleta, puedes abrirla desde el historial y pulsar **Reanudar jornada**. Los animales ya atendidos quedan bloqueados para evitar marcarlos o registrar su actividad dos veces; se atienden solo los pendientes y se finaliza de nuevo. Los registros de atención usan un identificador estable por jornada y animal, por lo que la sincronización y una reapertura actualizan el mismo registro, no crean otro evento. En jornadas de pesaje, al seleccionar un animal pendiente aparece la captura de peso en la misma pantalla; el peso se guarda localmente y marca al animal como atendido. También se puede corregir el peso de un animal atendido mientras la jornada está activa o reanudada; al finalizarla de nuevo, el historial conserva el mismo evento y no duplica el pesaje.
 

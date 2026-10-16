@@ -85,17 +85,6 @@
               <input id="search-input" type="search" placeholder="Buscar por arete, nombre..." autocomplete="off">
               <kbd>⌘ K</kbd>
             </label>
-            <label class="filter-control">
-              <span class="sr-only">Filtrar por estado</span>
-              <select id="status-filter">
-                <option value="">Todos los estados</option>
-                <option value="Activo">Activos</option>
-                <option value="Vendido">Vendidos</option>
-                <option value="Fallecido">Fallecidos</option>
-                <option value="Baja">Bajas</option>
-                <option value="Otro">Otros</option>
-              </select>
-            </label>
           </div>
         </div>
         <div class="table-wrap">
@@ -309,7 +298,7 @@
         <label id="journey-dose-field">Dosis<input id="journey-dose" maxlength="120" placeholder="Ej. 5 ml"></label>
         <label id="journey-notes-field" class="full-width">Observaciones<textarea id="journey-notes" rows="3" maxlength="2000" placeholder="Opcional"></textarea></label>
       </div>
-      <p id="journey-no-animals" class="account-error" hidden>Agrega animales al inventario antes de iniciar una jornada.</p>
+      <p id="journey-no-animals" class="account-error" hidden>No hay animales activos disponibles para iniciar una jornada.</p>
       <div class="modal-actions">
         <button class="button button-outline" type="button" data-close="journey-create-dialog">Cancelar</button>
         <button id="start-journey-button" class="button button-primary" type="submit">Iniciar jornada</button>

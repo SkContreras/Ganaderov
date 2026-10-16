@@ -24,8 +24,10 @@
     review: "Revisión veterinaria",
     other: "Otra"
   };
+  const INACTIVE_ANIMAL_STATUSES = new Set(["Vendido", "Fallecido", "Baja", "Otro", "Otros", "Desaparecido"]);
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+  const isActiveAnimal = animal => !INACTIVE_ANIMAL_STATUSES.has(animal.status);
   const hasRanchAccess = () => !currentUser || state.legacyAccount || ["owner", "admin", "worker"].includes(state.ranchRole);
   const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), sort: "tag", direction: 1, currentAnimalId: null, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyUpdating: new Set(), animalFormSnapshot: "", calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
@@ -1508,16 +1510,16 @@
   function renderDashboard() {
     $("#add-animal-button").hidden = !canManageRanch();
     $("#empty-add-button").hidden = !canManageRanch();
-    $("#stat-total").textContent = String(state.animals.length);
-    $("#stat-females").textContent = String(state.animals.filter(animal => animal.sex === "Hembra").length);
-    $("#stat-males").textContent = String(state.animals.filter(animal => animal.sex === "Macho").length);
-    const weighed = new Set(state.events.filter(event => event.type === "weight").map(event => event.animalId));
+    const activeAnimals = state.animals.filter(isActiveAnimal);
+    const activeIds = new Set(activeAnimals.map(animal => animal.id));
+    $("#stat-total").textContent = String(activeAnimals.length);
+    $("#stat-females").textContent = String(activeAnimals.filter(animal => animal.sex === "Hembra").length);
+    $("#stat-males").textContent = String(activeAnimals.filter(animal => animal.sex === "Macho").length);
+    const weighed = new Set(state.events.filter(event => event.type === "weight" && activeIds.has(event.animalId)).map(event => event.animalId));
     $("#stat-weighed").textContent = String(weighed.size);
 
     const query = $("#search-input").value.trim().toLocaleLowerCase("es-MX");
-    const status = $("#status-filter").value;
-    const filtered = state.animals.filter(animal => {
-      if (status && animal.status !== status) return false;
+    const filtered = activeAnimals.filter(animal => {
       const searchable = [animal.tag, animal.name, animal.color, animal.sex, animal.status, animal.birthDate]
         .filter(Boolean).join(" ").toLocaleLowerCase("es-MX");
       return !query || searchable.includes(query);
@@ -1548,11 +1550,13 @@
     const noResults = filtered.length === 0;
     $("#empty-state").hidden = !noResults;
     $("table").hidden = noResults;
-    const isEmptyInventory = state.animals.length === 0 && !query && !status;
+    const isEmptyInventory = activeAnimals.length === 0 && !query;
     $("#empty-title").textContent = isEmptyInventory ? "Tu registro comienza aquí" : "No encontramos animales";
     $("#empty-copy").textContent = isEmptyInventory
-      ? "Añade tu primer animal para empezar a organizar su información."
-      : "Prueba con otra búsqueda o cambia el filtro seleccionado.";
+      ? state.animals.length
+        ? "No hay animales activos. Los vendidos, fallecidos, desaparecidos y dados de baja se conservan en el historial, pero no aparecen en el inventario."
+        : "Añade tu primer animal para empezar a organizar su información."
+      : "Prueba con otra búsqueda.";
     $("#empty-add-button").hidden = !isEmptyInventory || !canManageRanch();
   }
 
@@ -1561,8 +1565,11 @@
   }
 
   function journeyCounts(journey) {
-    const attended = journey.roster.filter(animal => animal.attended).length;
-    return { attended, expected: journey.roster.length, pending: journey.roster.length - attended };
+    const roster = journey.status === "in_progress"
+      ? journey.roster.filter(animal => isActiveAnimal(state.animals.find(current => current.id === animal.id) || animal))
+      : journey.roster;
+    const attended = roster.filter(animal => animal.attended).length;
+    return { attended, expected: roster.length, pending: roster.length - attended };
   }
 
   function journeyStatus(journey) {
@@ -1622,7 +1629,8 @@
       showToast("Crea un rancho o espera a que aprueben tu solicitud para registrar jornadas.");
       return;
     }
-    if (!state.animals.length) {
+    const activeAnimals = state.animals.filter(isActiveAnimal);
+    if (!activeAnimals.length) {
       $("#journey-no-animals").hidden = false;
       $("#start-journey-button").disabled = true;
     } else {
@@ -1649,7 +1657,11 @@
       showToast("Crea un rancho o espera a que aprueben tu solicitud para registrar jornadas.");
       return;
     }
-    if (!state.animals.length) return;
+    const activeAnimals = state.animals.filter(isActiveAnimal);
+    if (!activeAnimals.length) {
+      showToast("No hay animales activos para incluir en una jornada.");
+      return;
+    }
     const type = $("#journey-type").value;
     if (isRanchWorker() && type === "other") {
       showToast("El perfil de trabajador no puede registrar actividades personalizadas.");
@@ -1663,7 +1675,7 @@
       product: $("#journey-product").value.trim(),
       dose: $("#journey-dose").value.trim(),
       notes: $("#journey-notes").value.trim(),
-      roster: state.animals.map(animal => ({
+      roster: activeAnimals.map(animal => ({
         id: animal.id, tag: animal.tag || "", name: animal.name || "", sex: animal.sex || "",
         color: animal.color || "", status: animal.status || "", attended: false
       })),
@@ -1714,6 +1726,7 @@
     const finished = journey.status !== "in_progress";
     const query = state.journeySearch.trim().toLocaleLowerCase("es-MX");
     const roster = journey.roster.filter(animal => {
+      if (!finished && !isActiveAnimal(state.animals.find(current => current.id === animal.id) || animal)) return false;
       if (state.journeyFilter === "attended" && !animal.attended) return false;
       if (state.journeyFilter === "pending" && animal.attended) return false;
       const search = [animal.tag, animal.name, animal.sex, animal.color].filter(Boolean).join(" ").toLocaleLowerCase("es-MX");
@@ -1726,7 +1739,7 @@
     ].filter(Boolean);
     const rosterIds = new Set(journey.roster.map(animal => animal.id));
     const animalsToAdd = state.animals.filter(animal =>
-      !rosterIds.has(animal.id) && !["Vendido", "Fallecido", "Baja"].includes(animal.status));
+      !rosterIds.has(animal.id) && isActiveAnimal(animal));
     const addAnimalsControl = !finished && animalsToAdd.length
       ? `<details class="journey-add-animals">
           <summary>＋ Agregar animales a esta jornada (${animalsToAdd.length} disponibles)</summary>
@@ -1856,7 +1869,7 @@
     const rosterIds = new Set(journey.roster.map(animal => animal.id));
     const newRosterAnimals = state.animals
       .filter(animal => selectedIds.includes(animal.id) && !rosterIds.has(animal.id) &&
-        !["Vendido", "Fallecido", "Baja"].includes(animal.status))
+        isActiveAnimal(animal))
       .map(animal => ({
         id: animal.id, tag: animal.tag || "", name: animal.name || "", sex: animal.sex || "",
         color: animal.color || "", status: animal.status || "", attended: false
@@ -2063,7 +2076,7 @@
     return animal[key] || "";
   }
   function statusClass(status) {
-    return ({ Vendido: "sold", Fallecido: "dead", Baja: "other", Otro: "other" })[status] || "";
+    return ({ Vendido: "sold", Fallecido: "dead", Baja: "other", Otro: "other", Otros: "other", Desaparecido: "other" })[status] || "";
   }
   function showToast(message) {
     const toast = $("#toast");
@@ -2708,7 +2721,6 @@
     $("#calculator-save-forecast").addEventListener("click", saveCalculatorForecast);
     $("#new-journey-button").addEventListener("click", openJourneyCreateForm);
     $("#search-input").addEventListener("input", renderDashboard);
-    $("#status-filter").addEventListener("change", renderDashboard);
     $$(".sort-button").forEach(button => button.addEventListener("click", () => {
       const key = button.dataset.sort;
       state.direction = state.sort === key ? -state.direction : 1;
