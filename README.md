@@ -11,11 +11,12 @@ Los iconos de la interfaz usan símbolos SVG sólidos en una biblioteca común, 
 ## Configurar Supabase
 
 1. Crea un proyecto en [Supabase](https://supabase.com/).
-2. En un proyecto nuevo, en **SQL Editor**, ejecuta [`supabase-schema.sql`](./supabase-schema.sql). Para un proyecto ya configurado que contiene datos, crea primero una copia de seguridad y prueba la migración aditiva [`supabase-ranch-access-migration.sql`](./supabase-ranch-access-migration.sql) en una instancia de pruebas restaurada desde esa copia. Esta migración cambia las políticas RLS existentes para permitir miembros aprobados; no borra filas ni fotos, pero sí cambia el acceso al aplicarla. No la ejecutes directamente en producción sin validar antes todas las cuentas y políticas.
+2. En un proyecto nuevo, en **SQL Editor**, ejecuta [`supabase-schema.sql`](./supabase-schema.sql) y después [`supabase-ranch-access-migration.sql`](./supabase-ranch-access-migration.sql), que crea las tablas y funciones de membresía que requiere el modo multiusuario. Para un proyecto ya configurado que contiene datos, crea primero una copia de seguridad y prueba esa migración aditiva en una instancia de pruebas restaurada desde la copia. Cambia las políticas RLS existentes para permitir miembros aprobados; no borra filas ni fotos, pero sí cambia el acceso al aplicarla. No la ejecutes directamente en producción sin validar antes todas las cuentas y políticas.
 3. En **Project Settings → API**, copia la **Project URL** y la clave **anon/public**. En [`config.js`](./config.js), colócalas en `supabaseUrl` y `supabaseAnonKey`.
 4. Publica de nuevo estos archivos en Vercel. La clave `anon/public` está diseñada para el navegador y las políticas RLS limitan los datos a la cuenta autenticada. **Nunca pongas una clave `service_role` en `config.js`.**
 5. En **Authentication → URL Configuration**, agrega la URL de la app desplegada como sitio/redirección permitida.
 6. Abre la app con conexión, elige **Crear cuenta**, y confirma el correo si Supabase lo solicita. Inicia sesión con esa misma cuenta en los demás dispositivos.
+7. Para compartir la configuración de campos, prueba primero [`supabase-animal-settings-migration.sql`](./supabase-animal-settings-migration.sql) en staging **después** de `supabase-ranch-access-migration.sql`; requiere las tablas y funciones de membresía/administración que crea esa migración. La nueva migración solo añade una tabla, una política de lectura y una función revisionada; no actualiza ni elimina animales o eventos. No la ejecutes en producción hasta comprobar la lectura de miembros, el rechazo a trabajadores al guardar y los conflictos de revisión.
 
 El archivo `config.js` contiene solo valores públicos del proyecto; no contiene contraseñas. Si se usa un repositorio público, no agregues claves privadas ni credenciales de administrador.
 
@@ -39,6 +40,20 @@ Al finalizar una jornada incompleta, puedes abrirla desde el historial y pulsar 
 Cada marca guarda la hora y la cuenta autenticada disponible. Sin sesión, queda indicada como «Usuario local (sin sesión)»; esa etiqueta no verifica la identidad de una persona. La finalización también conserva responsable y hora. La información se sincroniza con Supabase al recuperar conexión, pero la sincronización entre dos dispositivos necesita una configuración real de Supabase y no se da por probada solo porque funcione el guardado local.
 
 Para proteger el historial, un animal que tenga registros o esté incluido en una jornada no se puede eliminar definitivamente desde la interfaz; se puede dar de baja manteniendo su ficha y participación. Las jornadas se incluyen en las copias de seguridad.
+
+## Campos y ficha de animales
+
+En **Configuración → Campos y ficha de animales**, el propietario o administrador configura módulos y campos por separado: activación, etiqueta, obligatoriedad, formulario básico o **Mostrar datos adicionales**, tabla y visibilidad de ficha (`hidden`, `full` o `summary`). Identificación básica permanece disponible; fechas/procedencia, ubicación y seguimiento tienen interruptores de módulo. Desactivar un módulo o campo no borra sus valores.
+
+El catálogo ahora incluye ID interno `ANM-00001` (generado y estable), arete, nombre, sexo, raza, color, cruza, señas, identificador oficial, fechas de nacimiento/ingreso/destete, edad derivada, procedencia, origen, referencias de madre y padre, ubicación actual, responsable, motivo/observaciones de baja, observaciones generales y metadatos automáticos de creación/modificación. Las listas de raza, lote, potrero, corral y estado tienen valores estables, etiquetas editables y opciones que se pueden desactivar; no se permite desactivar una opción asignada. Edad se deriva de la fecha de nacimiento o de la estimación registrada. Los pesos al nacimiento/destete no se guardan en la ficha: los pesajes siguen siendo registros históricos independientes.
+
+El formulario básico nuevo ofrece arete y sexo como obligatorios, más nombre y raza. El resto se organiza como datos adicionales. Los campos configurables aparecen en la ficha resumida/completa y la tabla según su ajuste. En ficha completa se ocultan valores vacíos de forma predeterminada; **Mostrar campos vacíos** los presenta como «Sin registrar». El peso actual y la fecha del último pesaje siguen derivándose del historial de pesajes.
+
+La configuración local usa `schemaVersion: 4`; las versiones 1, 2 y 3 se normalizan y sus visibilidades booleanas `detail` siguen convirtiéndose (`true` → `summary`, `false` → `hidden`). Los módulos y campos introducidos después de la versión original de cada configuración se inicializan desactivados para evitar cambios inesperados en ranchos existentes. Para compatibilidad con la función RPC ya instalada en Supabase (que valida `schemaVersion: 1`), la envoltura de red mantiene ese valor y agrega `configVersion: 4`, `detailVisibility` y el booleano `detail` para clientes antiguos. La sincronización usa la configuración revisionada del rancho.
+
+Los animales nuevos guardan los campos en el `payload` existente de `animal_sync_records`; no se agregan columnas ni se toca su esquema. A los animales existentes se les asigna un ID interno único si no lo tienen y se normaliza la clave `birthEstimated` desde formatos heredados, sin borrar datos ni fotos. Las copias JSON incluyen configuración y campos nuevos; se aceptan copias antiguas, se validan tipos/referencias/IDs internos y se asignan IDs a animales antiguos que aún no tengan uno.
+
+El formulario de animales sigue restringido al propietario/administrador. El trigger de trabajadores permite añadir registros operativos autorizados (pesos y tratamientos) y corregir el valor de una pesada propia; rechaza cambios a `payload.animal`, fotos, pronósticos y registros previos. Como propuesta controlada para una etapa posterior, el archivo aditivo [`supabase-worker-animal-permissions-proposal.sql`](./supabase-worker-animal-permissions-proposal.sql) documenta la lista sugerida de campos que sí podrían abrirse a trabajador (`lot`, `paddock`, `pen`, `locationSince`, `responsible`, `generalNotes`) y mantiene restringidos estado, progenitores, fechas críticas, IDs y auditoría automática.
 
 ## Acceso y usuarios del rancho
 
@@ -90,4 +105,4 @@ La calculadora enlaza a [México Ganadero](https://www.mexicoganadero.com/precio
 
 ## Uso local
 
-Abre `index.html` en una versión reciente de Chrome o Edge. Sin configurar Supabase, la app conserva el modo local de un solo dispositivo. Las fotos se almacenan en IndexedDB cuando está sin conexión y en el bucket privado de Supabase al sincronizar.
+Abre `index.html` en una versión reciente de Chrome o Edge. Sin configurar Supabase, la app conserva el modo local de un solo dispositivo. Las fotos se almacenan en IndexedDB cuando está sin conexión y en el bucket privado de Supabase al sincronizar. El caché offline del service worker usa la versión `ganadero-v17`.

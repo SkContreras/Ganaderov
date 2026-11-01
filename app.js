@@ -2,7 +2,62 @@
   "use strict";
 
   const DB_NAME = "ganadero-local";
-  const DB_VERSION = 4;
+  const DB_VERSION = 5;
+  const ANIMAL_MODULES = [
+    { id: "identification", label: "Identificación básica", description: "Datos esenciales para reconocer al animal.", locked: true },
+    { id: "dates", label: "Fechas y procedencia", description: "Nacimiento, ingreso, origen, progenitores y destete." },
+    { id: "location", label: "Ubicación y estado", description: "Ubicación actual, responsable y situación del animal." },
+    { id: "tracking", label: "Documentación y seguimiento", description: "Observaciones y datos automáticos de auditoría." }
+  ];
+  const ANIMAL_LISTS = [
+    { id: "breed", label: "Razas" },
+    { id: "lot", label: "Lotes" },
+    { id: "paddock", label: "Potreros" },
+    { id: "pen", label: "Corrales" },
+    { id: "status", label: "Estados" }
+  ];
+  const DEFAULT_STATUS_OPTIONS = [
+    { value: "Activo", label: "Activo", enabled: true, active: true },
+    { value: "Vendido", label: "Vendido", enabled: true, active: false },
+    { value: "Fallecido", label: "Muerto", enabled: true, active: false },
+    { value: "Desaparecido", label: "Extraviado", enabled: true, active: false },
+    { value: "Otro", label: "Otro", enabled: true, active: false },
+    { value: "Baja", label: "Baja (legado)", enabled: true, active: false },
+    { value: "Otros", label: "Otro (legado)", enabled: true, active: false }
+  ];
+  const ANIMAL_FIELD_CATALOG = [
+    { id: "tag", label: "Número de arete", description: "Identificador impreso del animal.", type: "text", module: "identification", form: true, detail: true, table: true, requiredAllowed: true, core: true },
+    { id: "name", label: "Nombre", description: "Nombre o apodo del animal.", type: "text", module: "identification", form: true, detail: true, table: true, requiredAllowed: true, core: true },
+    { id: "sex", label: "Sexo", description: "Sexo registrado; también se usa en los indicadores.", type: "select", module: "identification", form: true, detail: true, table: true, requiredAllowed: true, core: true },
+    { id: "breed", label: "Raza", description: "Raza del animal.", type: "list", list: "breed", module: "identification", form: true, detail: true, table: true, requiredAllowed: true, core: true, introduced: 3 },
+    { id: "color", label: "Color", description: "Color o descripción del pelaje.", type: "text", module: "identification", form: true, detail: true, table: true, requiredAllowed: true },
+    { id: "cross", label: "Cruza", description: "Cruza o composición racial.", type: "text", module: "identification", form: true, detail: true, introduced: 4 },
+    { id: "markings", label: "Señas particulares", description: "Marcas y rasgos para reconocer al animal.", type: "textarea", module: "identification", form: true, detail: true, introduced: 4 },
+    { id: "officialId", label: "Identificador oficial", description: "Identificador oficial distinto del arete.", type: "text", module: "identification", form: true, detail: true, introduced: 4 },
+    { id: "internalId", label: "ID interno", description: "Identificador automático, único e inmutable.", type: "automatic", module: "identification", form: false, detail: true, introduced: 4, locked: true },
+    { id: "birthDate", label: "Fecha de nacimiento", description: "Fecha confirmada; se mantiene vacía si se desconoce.", type: "date", module: "dates", form: true, detail: true, requiredAllowed: true },
+    { id: "birthEstimated", label: "Nacimiento estimado", description: "Indica si la fecha de nacimiento es aproximada.", type: "boolean", module: "dates", form: true, detail: true, introduced: 4 },
+    { id: "estimatedAge", label: "Edad calculada", description: "Se deriva automáticamente de la fecha de nacimiento o de la edad estimada registrada.", type: "derived", module: "dates", form: true, detail: true, requiredAllowed: true },
+    { id: "entryDate", label: "Fecha de ingreso al rancho", description: "Fecha en que el animal ingresó al rancho.", type: "date", module: "dates", form: true, detail: true, introduced: 4 },
+    { id: "originType", label: "Procedencia", description: "Forma de incorporación al rancho.", type: "select", options: ["Nacimiento propio", "Compra", "Donación", "Otro"], module: "dates", form: true, detail: true, introduced: 4 },
+    { id: "originName", label: "Rancho o vendedor de origen", description: "Rancho, vendedor o persona de procedencia.", type: "text", module: "dates", form: true, detail: true, introduced: 4 },
+    { id: "motherId", label: "Madre", description: "Referencia a otro animal del mismo rancho.", type: "animal", module: "dates", form: true, detail: true, introduced: 4 },
+    { id: "fatherId", label: "Padre o semental", description: "Referencia a otro animal del mismo rancho.", type: "animal", module: "dates", form: true, detail: true, introduced: 4 },
+    { id: "weaningDate", label: "Fecha de destete", description: "Fecha de destete; el peso se registra en el historial.", type: "date", module: "dates", form: true, detail: true, introduced: 4 },
+    { id: "status", label: "Estado", description: "Estado operativo usado por el inventario y las jornadas.", type: "list", list: "status", module: "location", form: true, detail: true, table: true, requiredAllowed: true, locked: true },
+    { id: "lot", label: "Lote actual", description: "Lote actual del animal.", type: "list", list: "lot", module: "location", form: true, detail: true, table: true, introduced: 4 },
+    { id: "paddock", label: "Potrero actual", description: "Potrero actual del animal.", type: "list", list: "paddock", module: "location", form: true, detail: true, table: true, introduced: 4 },
+    { id: "pen", label: "Corral actual", description: "Corral actual del animal.", type: "list", list: "pen", module: "location", form: true, detail: true, table: true, introduced: 4 },
+    { id: "locationSince", label: "Fecha de entrada a la ubicación", description: "Fecha de ingreso a su ubicación actual.", type: "date", module: "location", form: true, detail: true, introduced: 4 },
+    { id: "responsible", label: "Responsable", description: "Persona responsable actual en el rancho.", type: "text", module: "location", form: true, detail: true, introduced: 4 },
+    { id: "exitReason", label: "Motivo de baja", description: "Motivo cuando el animal ya no está activo.", type: "select", options: ["Venta", "Muerte", "Extravío", "Otro"], module: "location", form: true, detail: true, requiredAllowed: true, introduced: 4 },
+    { id: "exitNotes", label: "Observaciones de baja", description: "Detalle del motivo de baja.", type: "textarea", module: "location", form: true, detail: true, introduced: 4 },
+    { id: "generalNotes", label: "Observaciones generales", description: "Notas generales sobre el animal.", type: "textarea", module: "tracking", form: true, detail: true, introduced: 4 },
+    { id: "createdAt", label: "Fecha de creación", description: "Fecha automática de creación del registro.", type: "automatic", module: "tracking", form: false, detail: true, introduced: 4, locked: true },
+    { id: "createdBy", label: "Usuario creador", description: "Cuenta que creó la ficha.", type: "automatic", module: "tracking", form: false, detail: true, introduced: 4, locked: true },
+    { id: "updatedAt", label: "Última modificación", description: "Fecha y hora automática de modificación.", type: "automatic", module: "tracking", form: false, detail: true, introduced: 4, locked: true },
+    { id: "updatedBy", label: "Usuario que modificó", description: "Cuenta que modificó la ficha por última vez.", type: "automatic", module: "tracking", form: false, detail: true, introduced: 4, locked: true }
+  ];
   const EVENT_TYPES = {
     bath: "Baño",
     weight: "Pesaje",
@@ -50,7 +105,10 @@
   const INACTIVE_ANIMAL_STATUSES = new Set(["Vendido", "Fallecido", "Baja", "Otro", "Otros", "Desaparecido"]);
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const isActiveAnimal = animal => !INACTIVE_ANIMAL_STATUSES.has(animal.status);
+  const isActiveAnimal = animal => {
+    const option = state.fieldConfig?.lists?.status?.find(item => item.value === animal.status);
+    return option ? option.active !== false : !INACTIVE_ANIMAL_STATUSES.has(animal.status);
+  };
   function icon(name, className = "ui-icon") {
     const symbol = ICON_SYMBOLS[name];
     return symbol ? `<svg class="${className}" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-${symbol}"></use></svg>` : "";
@@ -58,18 +116,20 @@
   function statusIconName(status) {
     if (status === "Vendido") return "sold";
     if (status === "Fallecido") return "dead";
-    if (INACTIVE_ANIMAL_STATUSES.has(status)) return "other";
+    if (INACTIVE_ANIMAL_STATUSES.has(status) ||
+        state.fieldConfig?.lists?.status?.find(option => option.value === status)?.active === false) return "other";
     return "active";
   }
   function statusMarkup(status, className = "status-pill") {
-    return `<span class="${className} ${statusClass(status)}">${icon(statusIconName(status))}${escapeHtml(status)}</span>`;
+    const label = state.fieldConfig?.lists?.status?.find(option => option.value === status)?.label || status;
+    return `<span class="${className} ${statusClass(status)}">${icon(statusIconName(status))}${escapeHtml(label)}</span>`;
   }
   function journeyStatusMarkup(journey) {
     const iconName = journey.status === "completed" ? "check" : journey.status === "incomplete" ? "warning" : "clock";
     return `<span class="journey-status ${journey.status}">${icon(iconName)}${escapeHtml(journeyStatus(journey))}</span>`;
   }
   const hasRanchAccess = () => !currentUser || state.legacyAccount || ["owner", "admin", "worker"].includes(state.ranchRole);
-  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), sort: "tag", direction: 1, archiveView: false, currentAnimalId: null, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyUpdating: new Set(), animalFormSnapshot: "", calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
+  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), fieldConfig: null, fieldConfigRecord: null, fieldSettingsDirty: false, mainView: "inventory", sort: "tag", direction: 1, archiveView: false, currentAnimalId: null, detailView: "summary", detailShowEmpty: false, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyUpdating: new Set(), animalFormSnapshot: "", calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
   let cloud;
   let currentUser;
@@ -93,6 +153,7 @@
         }
         if (!database.objectStoreNames.contains("syncMeta")) database.createObjectStore("syncMeta", { keyPath: "id" });
         if (!database.objectStoreNames.contains("deletedAnimals")) database.createObjectStore("deletedAnimals", { keyPath: "id" });
+        if (!database.objectStoreNames.contains("ranchSettings")) database.createObjectStore("ranchSettings", { keyPath: "id" });
         if (!database.objectStoreNames.contains("journeys")) {
           const store = database.createObjectStore("journeys", { keyPath: "id" });
           store.createIndex("updatedAt", "updatedAt", { unique: false });
@@ -157,7 +218,7 @@
     if (db.name === scopedName) return false;
     const previous = db;
     const target = await openDatabase(scopedName);
-    const stores = ["animals", "events", "photos", "syncMeta", "deletedAnimals", "journeys", "growthForecasts"];
+    const stores = ["animals", "events", "photos", "syncMeta", "deletedAnimals", "journeys", "growthForecasts", "ranchSettings"];
     const targetRows = await Promise.all(stores.map(store => readDatabaseStore(target, store)));
     const targetEmpty = targetRows.every(rows => rows.length === 0);
     const scopeMarker = targetRows[stores.indexOf("syncMeta")].find(item => item.id === "local-ranch-scope");
@@ -466,6 +527,388 @@
     state.syncTimer = setTimeout(() => syncData(), 900);
   }
 
+  function defaultAnimalFieldConfig() {
+    const fields = {};
+    ANIMAL_FIELD_CATALOG.forEach(field => {
+      fields[field.id] = {
+        enabled: true,
+        form: Boolean(field.form),
+        formLevel: ["tag", "name", "sex", "breed"].includes(field.id) ? "basic" : "advanced",
+        detailVisibility: ["tag", "name", "sex", "breed", "status"].includes(field.id) ? "summary" : "full",
+        table: field.type !== "automatic" && field.table !== false,
+        required: ["tag", "sex"].includes(field.id),
+        label: field.label
+      };
+    });
+    return {
+      schemaVersion: 4,
+      modules: { identification: true, dates: true, location: true, tracking: true },
+      fields,
+      lists: {
+        breed: [], lot: [], paddock: [], pen: [],
+        status: DEFAULT_STATUS_OPTIONS.map(option => ({ ...option }))
+      },
+      layout: {}
+    };
+  }
+
+  function normalizeAnimalFieldConfig(value) {
+    const defaults = defaultAnimalFieldConfig();
+    if (!value || typeof value !== "object" || Array.isArray(value)) return defaults;
+    if (value.schemaVersion !== undefined && ![1, 2, 3, 4].includes(value.schemaVersion)) return defaults;
+    const schemaVersion = [1, 2, 3, 4].includes(value.schemaVersion) ? value.schemaVersion : 1;
+    const configVersion = Number.isInteger(value.configVersion) ? value.configVersion : schemaVersion;
+    const legacy = configVersion < 4;
+    const providedModules = value.modules && typeof value.modules === "object" && !Array.isArray(value.modules)
+      ? value.modules
+      : null;
+    const modules = Object.fromEntries(ANIMAL_MODULES.map(module => [
+      module.id,
+      providedModules && typeof providedModules[module.id] === "boolean"
+        ? providedModules[module.id]
+        : defaults.modules[module.id]
+    ]));
+    ANIMAL_MODULES.forEach(module => {
+      if (module.locked) modules[module.id] = true;
+      else if (legacy && !Object.hasOwn(providedModules || {}, module.id)) modules[module.id] = false;
+    });
+    const lists = { ...defaults.lists };
+    ANIMAL_LISTS.forEach(list => {
+      const provided = value.lists?.[list.id];
+      if (Array.isArray(provided)) {
+        const unique = new Set();
+        lists[list.id] = provided.filter(option =>
+          option && typeof option.value === "string" && option.value.trim() &&
+          typeof option.label === "string" && option.label.trim() &&
+          typeof option.enabled === "boolean" && !unique.has(option.value) && unique.add(option.value)
+        ).map(option => ({
+          value: option.value.trim().slice(0, 80),
+          label: option.label.trim().slice(0, 80),
+          enabled: option.enabled,
+          ...(list.id === "status" ? {
+            active: typeof option.active === "boolean"
+              ? option.active
+              : DEFAULT_STATUS_OPTIONS.find(defaultOption => defaultOption.value === option.value)?.active ?? true
+          } : {})
+        }));
+      } else if (legacy && list.id !== "status") {
+        lists[list.id] = [];
+      }
+    });
+    if (!lists.status.length) lists.status = DEFAULT_STATUS_OPTIONS.map(option => ({ ...option }));
+    const layout = value.layout && typeof value.layout === "object" && !Array.isArray(value.layout)
+      ? { ...value.layout }
+      : defaults.layout;
+    ANIMAL_FIELD_CATALOG.forEach(field => {
+      const provided = value.fields?.[field.id];
+      const normalized = defaults.fields[field.id];
+      const introducedAfterConfig = Number.isInteger(field.introduced) && field.introduced > configVersion;
+      if (provided && typeof provided === "object") {
+        normalized.enabled = field.locked ? true : provided.enabled !== false;
+        normalized.form = field.form && provided.form !== false;
+        const detailVisibility = provided.detailVisibility;
+        normalized.detailVisibility = !field.detail
+          ? "hidden"
+          : ["hidden", "full", "summary"].includes(detailVisibility)
+            ? detailVisibility
+            : provided.detail === false
+              ? "hidden"
+              : provided.detail === true
+                ? "summary"
+                : defaults.fields[field.id].detailVisibility;
+        normalized.table = field.type !== "automatic" && provided.table !== false;
+        normalized.required = Boolean(normalized.enabled && field.form && field.type !== "automatic" && provided.required);
+        normalized.formLevel = provided.formLevel === "basic" ? "basic" : "advanced";
+        normalized.label = typeof provided.label === "string" && provided.label.trim()
+          ? provided.label.trim().slice(0, 80)
+          : field.label;
+      } else if (introducedAfterConfig) {
+        normalized.enabled = false;
+      }
+      if (introducedAfterConfig && !provided) normalized.form = false;
+      if (normalized.required) normalized.form = true;
+    });
+    return { ...defaults, schemaVersion: 4, modules, fields: defaults.fields, lists, layout };
+  }
+
+  function ranchAnimalFieldConfigPayload(config) {
+    return {
+      ...config,
+      schemaVersion: 1,
+      configVersion: 4,
+      fields: Object.fromEntries(Object.entries(config.fields).map(([id, field]) => [
+        id,
+        {
+          ...field,
+          detail: field.detailVisibility !== "hidden"
+        }
+      ]))
+    };
+  }
+
+  function isValidAnimalFieldConfig(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    if (value.schemaVersion !== undefined && ![1, 2, 3, 4].includes(value.schemaVersion)) return false;
+    if (value.fields !== undefined && (!value.fields || typeof value.fields !== "object" || Array.isArray(value.fields))) return false;
+    if (value.modules !== undefined && (!value.modules || typeof value.modules !== "object" || Array.isArray(value.modules))) return false;
+    if (value.layout !== undefined && (!value.layout || typeof value.layout !== "object" || Array.isArray(value.layout))) return false;
+    if (value.lists !== undefined && (!value.lists || typeof value.lists !== "object" || Array.isArray(value.lists) ||
+        Object.values(value.lists).some(list => !Array.isArray(list) || list.some(option =>
+          !option || typeof option.value !== "string" || typeof option.label !== "string" ||
+          typeof option.enabled !== "boolean" || (option.active !== undefined && typeof option.active !== "boolean"))))) return false;
+    if (value.fields === undefined) return true;
+    return Object.values(value.fields).every(field =>
+      field && typeof field === "object" && !Array.isArray(field) &&
+      (field.detailVisibility === undefined || ["hidden", "full", "summary"].includes(field.detailVisibility)) &&
+      (field.detail === undefined || typeof field.detail === "boolean") &&
+      (field.formLevel === undefined || ["basic", "advanced"].includes(field.formLevel))
+    );
+  }
+
+  function animalFieldConfig(fieldId) {
+    const field = ANIMAL_FIELD_CATALOG.find(item => item.id === fieldId);
+    return state.fieldConfig?.fields?.[fieldId] || defaultAnimalFieldConfig().fields[fieldId] || {
+      enabled: false, form: false, detailVisibility: "hidden", table: false, required: false, label: field?.label || fieldId
+    };
+  }
+
+  function animalFieldActive(fieldId) {
+    const field = ANIMAL_FIELD_CATALOG.find(item => item.id === fieldId);
+    const config = animalFieldConfig(fieldId);
+    return config.enabled && (!field?.module || state.fieldConfig?.modules?.[field.module] !== false);
+  }
+
+  function applyAnimalFieldVisibility(root = document) {
+    root.querySelectorAll("[data-config-field]").forEach(element => {
+      const config = animalFieldConfig(element.dataset.configField);
+      const surface = element.dataset.configSurface;
+      element.hidden = !animalFieldActive(element.dataset.configField) || (surface === "detail"
+        ? config.detailVisibility === "hidden"
+        : surface ? !config[surface] : false);
+    });
+    root.querySelectorAll("[data-config-label]").forEach(element => {
+      const config = animalFieldConfig(element.dataset.configLabel);
+      element.textContent = config.label;
+    });
+    const form = root.matches?.("#animal-form") ? root : root.querySelector?.("#animal-form");
+    if (form) {
+      form.querySelectorAll("[data-config-required-label]").forEach(indicator => {
+        const config = animalFieldConfig(indicator.dataset.configRequiredLabel);
+        indicator.textContent = config.required ? "Obligatorio" : "Opcional";
+      });
+      form.querySelectorAll("[data-animal-field]").forEach(input => {
+        const config = animalFieldConfig(input.dataset.animalField);
+        const applies = input.dataset.animalField !== "exitReason" || !isActiveAnimal({ status: $("#animal-status")?.value || "Activo" });
+        input.required = !["estimatedAge", "exitReason"].includes(input.dataset.animalField) &&
+          applies && animalFieldActive(input.dataset.animalField) && config.form && config.required;
+      });
+    }
+  }
+
+  function applyDetailPresentation() {
+    const root = $("#detail-content");
+    if (!root) return;
+    root.querySelectorAll("[data-detail-field]").forEach(element => {
+      const field = animalFieldConfig(element.dataset.detailField);
+      const level = field.detailVisibility;
+      const allowedForView = state.detailView === "summary"
+        ? level === "summary"
+        : level === "summary" || level === "full";
+      const hasValue = element.dataset.detailHasValue !== "false";
+      element.hidden = !animalFieldActive(element.dataset.detailField) || !allowedForView ||
+        (state.detailView === "full" && !state.detailShowEmpty && !hasValue);
+    });
+    root.querySelectorAll("[data-detail-view]").forEach(element => {
+      const view = element.dataset.detailView;
+      const hasValue = element.dataset.detailHasValue !== "false";
+      const visibleInView = view === "both" || view === state.detailView;
+      element.hidden = !visibleInView ||
+        (state.detailView === "full" && !state.detailShowEmpty && !hasValue);
+    });
+    const extendedSection = $("#animal-extended-detail-section", root);
+    if (extendedSection) {
+      const hasVisibleFacts = $$(".detail-fact:not([hidden])", extendedSection).length > 0;
+      extendedSection.hidden = !hasVisibleFacts;
+    }
+    const heading = $("#detail-info-heading", root);
+    if (heading) heading.hidden = !$$(".detail-fact:not([hidden])", root).length;
+    if (heading) $("h3", heading).textContent = state.detailView === "summary" ? "Ficha resumida" : "Información general";
+    const toggle = $('[data-toggle-detail-view]', root);
+    if (toggle) toggle.textContent = state.detailView === "summary" ? "Ficha completa" : "Ficha resumida";
+    const emptyToggle = $('[data-show-detail-empty]', root);
+    if (emptyToggle) {
+      emptyToggle.checked = state.detailShowEmpty;
+      emptyToggle.closest("label").hidden = state.detailView !== "full";
+    }
+  }
+
+  function renderAnimalSettings() {
+    const config = normalizeAnimalFieldConfig(state.fieldConfig);
+    state.fieldConfig = config;
+    const canEdit = canManageRanch();
+    $("#animal-settings-access").hidden = canEdit;
+    $("#animal-settings-access").textContent = currentUser
+      ? "Solo el propietario o administrador puede modificar la configuración. Puedes consultar los valores actuales."
+      : "Esta configuración se guarda en este dispositivo. Inicia sesión y selecciona un rancho para compartirla con sus otros dispositivos.";
+    $("#save-animal-settings").hidden = !canEdit;
+    $("#save-animal-settings").textContent = state.fieldSettingsDirty
+      ? "Guardar cambios pendientes"
+      : "Guardar configuración";
+    $("#reset-animal-settings").disabled = !canEdit;
+    const summaryCount = Object.values(config.fields)
+      .filter(field => field.enabled && field.detailVisibility === "summary").length;
+    $("#animal-summary-limit-warning").hidden = summaryCount <= 10;
+    $("#animal-summary-limit-warning").textContent =
+      `Hay ${summaryCount} campos en la ficha resumida. Se recomienda mostrar 10 o menos para facilitar la lectura en el corral.`;
+    $("#animal-module-settings").innerHTML = ANIMAL_MODULES.map(module => `
+      <label class="settings-module">
+        <input type="checkbox" data-module-setting="${module.id}" ${config.modules[module.id] ? "checked" : ""}
+          ${module.locked || !canEdit ? "disabled" : ""}>
+        <span><strong>${escapeHtml(module.label)}</strong><small>${escapeHtml(module.description)}</small></span>
+      </label>`).join("");
+    $("#animal-list-settings").innerHTML = ANIMAL_LISTS.map(list => {
+      const options = config.lists[list.id] || [];
+      const rows = options.map(option => {
+        const inUse = state.animals.some(animal => animal[list.id === "status" ? "status" : list.id] === option.value);
+        return animalListOptionMarkup(list.id, option, inUse, canEdit);
+      }).join("");
+      return `<section class="settings-list">
+        <h3>${escapeHtml(list.label)}</h3>
+        ${rows || '<p class="muted">Todavía no hay opciones configuradas.</p>'}
+        <button class="button button-outline button-small" type="button" data-add-animal-option="${list.id}" ${canEdit ? "" : "disabled"}>Añadir opción</button>
+      </section>`;
+    }).join("");
+    $("#animal-field-settings").innerHTML = ANIMAL_FIELD_CATALOG.map(field => {
+      const setting = config.fields[field.id];
+      const checkbox = (property, label, disabled = false) =>
+        `<input type="checkbox" data-field-setting="${property}" data-field-id="${field.id}" aria-label="${label} · ${escapeHtml(setting.label)}" ${setting[property] ? "checked" : ""} ${disabled || field.locked || !canEdit ? "disabled" : ""}>`;
+      return `<tr>
+        <td class="settings-field-name"><label for="field-label-${field.id}">${escapeHtml(field.label)}</label><small>${escapeHtml(field.description)}</small>
+          <input id="field-label-${field.id}" class="settings-field-label" type="text" maxlength="80" value="${escapeHtml(setting.label)}" data-field-label="${field.id}" aria-label="Nombre visible para ${escapeHtml(field.label)}" ${canEdit ? "" : "disabled"}>
+          ${field.locked ? '<small class="settings-locked-note">Campo automático u operativo; no se desactiva.</small>' : ""}
+        </td>
+        <td>${checkbox("enabled", `Activar ${field.label}`, Boolean(field.locked))}</td>
+        <td>${field.form ? `<label class="settings-field-form">${checkbox("form", `Mostrar ${field.label} en el formulario`)}<select data-field-setting="formLevel" data-field-id="${field.id}" aria-label="Nivel del formulario para ${escapeHtml(setting.label)}" ${canEdit && !field.locked ? "" : "disabled"}>
+          <option value="basic" ${setting.formLevel === "basic" ? "selected" : ""}>Básico</option>
+          <option value="advanced" ${setting.formLevel !== "basic" ? "selected" : ""}>Datos adicionales</option>
+        </select></label>` : '<span class="settings-not-applicable">—</span>'}</td>
+        <td>${field.detail ? `<select data-field-setting="detailVisibility" data-field-id="${field.id}" aria-label="Visibilidad de ${escapeHtml(setting.label)} en la ficha" ${canEdit ? "" : "disabled"}>
+          <option value="hidden" ${setting.detailVisibility === "hidden" ? "selected" : ""}>Oculto</option>
+          <option value="full" ${setting.detailVisibility === "full" ? "selected" : ""}>Solo ficha completa</option>
+          <option value="summary" ${setting.detailVisibility === "summary" ? "selected" : ""}>Resumida y completa</option>
+        </select>` : '<span class="settings-not-applicable">—</span>'}</td>
+        <td>${field.type !== "automatic" ? checkbox("table", `Mostrar ${field.label} en la tabla`) : '<span class="settings-not-applicable">—</span>'}</td>
+        <td>${field.form && field.type !== "automatic" ? checkbox("required", `Hacer ${field.label} obligatorio`) : '<span class="settings-not-applicable">—</span>'}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  function animalListOptionMarkup(listId, option, inUse = false, canEdit = canManageRanch()) {
+    return `<div class="settings-list-option">
+      <input type="text" maxlength="80" value="${escapeHtml(option.label)}" data-list-label="${listId}" data-list-value="${escapeHtml(option.value)}"
+        aria-label="Etiqueta para ${escapeHtml(option.value)}" ${canEdit ? "" : "disabled"}>
+      <label><input type="checkbox" data-list-enabled="${listId}" data-list-value="${escapeHtml(option.value)}"
+        ${option.enabled ? "checked" : ""} ${!canEdit || inUse ? "disabled" : ""}> Activa</label>
+      ${listId === "status" ? `<label><input type="checkbox" data-list-active="${listId}" data-list-value="${escapeHtml(option.value)}"
+        ${option.active !== false ? "checked" : ""} ${canEdit && !DEFAULT_STATUS_OPTIONS.some(defaultOption => defaultOption.value === option.value) ? "" : "disabled"}> Cuenta en inventario</label>` : ""}
+      ${inUse ? '<small>En uso; no se puede desactivar.</small>' : ""}
+    </div>`;
+  }
+
+  function saveAnimalFieldSettingsFromForm() {
+    if (!canManageRanch()) return;
+    const fields = {};
+    ANIMAL_FIELD_CATALOG.forEach(field => {
+      const prior = animalFieldConfig(field.id);
+      const readBoolean = property =>
+        $("#animal-field-settings").querySelector(`[data-field-setting="${property}"][data-field-id="${field.id}"]`)?.checked ?? prior[property];
+      fields[field.id] = {
+        ...prior,
+        enabled: field.locked ? true : readBoolean("enabled"),
+        form: readBoolean("form"),
+        formLevel: $("#animal-field-settings").querySelector(
+          `[data-field-setting="formLevel"][data-field-id="${field.id}"]`
+        )?.value ?? prior.formLevel,
+        detailVisibility: $("#animal-field-settings").querySelector(
+          `[data-field-setting="detailVisibility"][data-field-id="${field.id}"]`
+        )?.value ?? prior.detailVisibility,
+        table: readBoolean("table"),
+        required: Boolean(field.form && field.type !== "automatic" && readBoolean("required")),
+        label: $("#animal-field-settings").querySelector(`[data-field-label="${field.id}"]`).value.trim() || field.label
+      };
+    });
+    const modules = { ...state.fieldConfig.modules };
+    ANIMAL_MODULES.forEach(module => {
+      modules[module.id] = module.locked || Boolean($(`[data-module-setting="${module.id}"]`)?.checked);
+    });
+    const lists = { ...state.fieldConfig.lists };
+    ANIMAL_LISTS.forEach(list => {
+      lists[list.id] = $$(`[data-list-label="${list.id}"]`, $("#animal-list-settings")).map(input => {
+        const checkbox = $(`[data-list-enabled="${list.id}"][data-list-value="${CSS.escape(input.dataset.listValue)}"]`);
+        const prior = (state.fieldConfig.lists[list.id] || []).find(option => option.value === input.dataset.listValue);
+        return {
+          value: input.dataset.listValue,
+          label: input.value.trim() || prior?.label || input.dataset.listValue,
+          enabled: checkbox?.checked ?? prior?.enabled ?? true,
+          ...(list.id === "status" ? {
+            active: $(`[data-list-active="${list.id}"][data-list-value="${CSS.escape(input.dataset.listValue)}"]`)?.checked ?? prior?.active ?? true
+          } : {})
+        };
+      });
+    });
+    const config = { ...state.fieldConfig, schemaVersion: 4, modules, fields, lists };
+    void persistAnimalFieldConfig(config, "Configuración de campos guardada.").catch(error => {
+      showToast(`No se pudo guardar la configuración: ${error.message}`);
+    });
+  }
+
+  async function persistAnimalFieldConfig(config, successMessage) {
+    if (!canManageRanch()) {
+      showToast("Solo el propietario o administrador puede cambiar esta configuración.");
+      return;
+    }
+    if ($("#animal-dialog").open) {
+      showToast("Cierra el formulario del animal antes de cambiar su configuración.");
+      return;
+    }
+    const previous = await getOne("ranchSettings", "animal-fields");
+    const record = {
+      id: "animal-fields",
+      ownerId: state.ranchOwnerId,
+      config: normalizeAnimalFieldConfig(config),
+      revision: (previous?.revision || 0) + 1,
+      baseRevision: previous?.baseRevision || 0,
+      dirty: true,
+      updatedAt: new Date().toISOString()
+    };
+    await put("ranchSettings", record);
+    state.fieldConfigRecord = record;
+    state.fieldConfig = record.config;
+    renderAnimalSettings();
+    applyAnimalFieldVisibility();
+    renderDashboard();
+    if ($("#detail-dialog").open && state.currentAnimalId) openDetail(state.currentAnimalId, true);
+    if (state.mainView === "calculator") renderCalculatorAnimalOptions();
+    scheduleSync();
+    state.fieldSettingsDirty = false;
+    $("#save-animal-settings").textContent = "Guardar configuración";
+    showToast(successMessage);
+  }
+
+  async function saveAnimalFieldSettings() {
+    saveAnimalFieldSettingsFromForm();
+  }
+
+  async function resetAnimalFieldSettings() {
+    if (!canManageRanch()) return;
+    if (!confirm("¿Restaurar la configuración predeterminada? Esto no elimina los datos de los animales ni sus registros.")) return;
+    try {
+      await persistAnimalFieldConfig(defaultAnimalFieldConfig(), "Se restauró la configuración predeterminada.");
+    } catch (error) {
+      showToast(`No se pudo restaurar la configuración: ${error.message}`);
+    }
+  }
+
   function nextModifiedAt(previous) {
     const previousTime = Date.parse(previous || "");
     return new Date(Math.max(Date.now(), Number.isFinite(previousTime) ? previousTime + 1 : 0)).toISOString();
@@ -473,14 +916,30 @@
 
   async function touchAnimal(animalId) {
     const animal = await getOne("animals", animalId);
-    if (animal && !isRanchWorker()) await put("animals", { ...animal, updatedAt: nextModifiedAt(animal.updatedAt) });
+    if (animal && !isRanchWorker()) await put("animals", {
+      ...animal, updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label
+    });
     scheduleSync();
   }
 
   async function refresh() {
-    [state.animals, state.events, state.photos, state.journeys, state.forecasts] = await Promise.all([
-      getAll("animals"), getAll("events"), getAll("photos"), getAll("journeys"), getAll("growthForecasts")
+    const [animals, events, photos, journeys, forecasts, fieldConfigRecord] = await Promise.all([
+      getAll("animals"), getAll("events"), getAll("photos"), getAll("journeys"), getAll("growthForecasts"),
+      getOne("ranchSettings", "animal-fields")
     ]);
+    state.animals = animals;
+    const assignedIds = await ensureAnimalInternalIds(animals);
+    if (assignedIds) scheduleSync();
+    state.events = events;
+    state.photos = photos;
+    state.journeys = journeys;
+    state.forecasts = forecasts;
+    state.fieldConfigRecord = fieldConfigRecord || null;
+    state.fieldConfig = normalizeAnimalFieldConfig(fieldConfigRecord?.config);
+    if (fieldConfigRecord?.config && fieldConfigRecord.config.schemaVersion !== 4) {
+      state.fieldConfigRecord = { ...fieldConfigRecord, config: state.fieldConfig };
+      await put("ranchSettings", state.fieldConfigRecord);
+    }
     const photoIds = new Set(state.photos.map(photo => photo.id));
     for (const [id, url] of state.photoUrls) {
       if (!photoIds.has(id)) {
@@ -491,6 +950,49 @@
     renderDashboard();
     renderJourneys();
     renderCalculatorAnimalOptions();
+  }
+
+  async function ensureAnimalInternalIds(animals, persist = true) {
+    const ordered = animals.slice().sort((a, b) => a.id.localeCompare(b.id));
+    const used = new Set();
+    let maximum = 0;
+    ordered.forEach(animal => {
+      const match = typeof animal.internalId === "string" && animal.internalId.match(/^ANM-(\d{5,})$/);
+      if (match) maximum = Math.max(maximum, Number(match[1]));
+    });
+    const changedAnimals = [];
+    ordered.forEach(animal => {
+      let changed = false;
+      if (animal.birthEstimated === undefined && typeof animal.birthDateEstimated === "boolean") {
+        animal.birthEstimated = animal.birthDateEstimated;
+        changed = true;
+      }
+      if (Object.hasOwn(animal, "birthDateEstimated")) {
+        delete animal.birthDateEstimated;
+        changed = true;
+      }
+      const valid = typeof animal.internalId === "string" && /^ANM-\d{5,}$/.test(animal.internalId);
+      if (valid && !used.has(animal.internalId)) {
+        used.add(animal.internalId);
+        if (changed) changedAnimals.push(animal);
+        return;
+      }
+      let candidate;
+      do {
+        maximum += 1;
+        candidate = `ANM-${String(maximum).padStart(5, "0")}`;
+      } while (used.has(candidate));
+      animal.internalId = candidate;
+      used.add(candidate);
+      changed = true;
+      if (changed) changedAnimals.push(animal);
+    });
+    if (changedAnimals.length && persist) {
+      await transaction(["animals"], "readwrite", tx => {
+        changedAnimals.forEach(animal => tx.objectStore("animals").put(animal));
+      });
+    }
+    return changedAnimals.length > 0;
   }
 
   function buildLocalBundles(animals, events, photos, forecasts, deletions) {
@@ -763,6 +1265,130 @@
     return data.modified_at;
   }
 
+  async function syncAnimalFieldConfig() {
+    const local = await getOne("ranchSettings", "animal-fields");
+    const { data: remote, error: fetchError } = await cloud.from("ranch_animal_configs")
+      .select("owner_id, config, revision, updated_at")
+      .eq("owner_id", state.ranchOwnerId)
+      .maybeSingle();
+    if (fetchError) {
+      if (fetchError.code === "PGRST205" || fetchError.code === "42P01" ||
+          /ranch_animal_configs|schema cache|does not exist/i.test(fetchError.message || "")) {
+        if (local?.dirty) {
+          showToast("La configuración se guardó en este dispositivo. Para sincronizarla, aplica supabase-animal-settings-migration.sql en Supabase.");
+        }
+        return "Configuración de campos solo local · falta la migración de Supabase";
+      }
+      throw fetchError;
+    }
+    if (!local) {
+      if (remote) {
+        if (state.fieldSettingsDirty && !confirm(
+          "La configuración del rancho está disponible, pero hay cambios locales sin guardar.\n\n" +
+          "Aceptar: descartar los cambios sin guardar y cargar la configuración del rancho.\n" +
+          "Cancelar: conservar estos cambios en pantalla; el resto de los datos sí se sincronizará."
+        )) return "Configuración en la nube pendiente de cargar · se conservaron cambios locales sin guardar";
+        state.fieldSettingsDirty = false;
+        const downloaded = {
+          id: "animal-fields",
+          ownerId: state.ranchOwnerId,
+          config: normalizeAnimalFieldConfig(remote.config),
+          revision: remote.revision,
+          baseRevision: remote.revision,
+          dirty: false,
+          updatedAt: remote.updated_at
+        };
+        await put("ranchSettings", downloaded);
+        state.fieldConfigRecord = downloaded;
+        state.fieldConfig = downloaded.config;
+        renderAnimalSettings();
+      }
+      return "";
+    }
+
+    const remoteRevision = remote?.revision || 0;
+    if (local.dirty) {
+      if (!canManageRanch()) {
+        state.fieldSettingsDirty = false;
+        const downloaded = {
+          ...local,
+          config: normalizeAnimalFieldConfig(remote?.config),
+          revision: remoteRevision,
+          baseRevision: remoteRevision,
+          dirty: false,
+          updatedAt: remote?.updated_at || new Date().toISOString()
+        };
+        await put("ranchSettings", downloaded);
+        state.fieldConfigRecord = downloaded;
+        state.fieldConfig = downloaded.config;
+        renderAnimalSettings();
+        return "Se descartó una configuración local sin autorización; se mantuvieron los demás datos sincronizados";
+      }
+      let config = normalizeAnimalFieldConfig(local.config);
+      if (remoteRevision !== local.baseRevision) {
+        const keepLocal = confirm(
+          "La configuración de campos cambió en otro dispositivo.\n\n" +
+          "Aceptar: conservar la configuración de este dispositivo.\n" +
+          "Cancelar: cargar la configuración del rancho."
+        );
+        if (!keepLocal) {
+          if (!remote) throw new Error("La configuración local tiene una revisión anterior y no existe una versión en la nube para restaurar.");
+          if (state.fieldSettingsDirty && !confirm(
+            "Hay cambios adicionales de configuración sin guardar.\n\n" +
+            "Aceptar: descartarlos y cargar la configuración del rancho.\n" +
+            "Cancelar: conservarlos en pantalla; el resto de los datos sí se sincronizará."
+          )) return "Configuración en la nube pendiente de cargar · se conservaron cambios locales sin guardar";
+          state.fieldSettingsDirty = false;
+          const downloaded = {
+            ...local, config: normalizeAnimalFieldConfig(remote.config), revision: remote.revision,
+            baseRevision: remote.revision, dirty: false, updatedAt: remote.updated_at
+          };
+          await put("ranchSettings", downloaded);
+          state.fieldConfigRecord = downloaded;
+          state.fieldConfig = downloaded.config;
+          renderAnimalSettings();
+          return "Configuración actualizada desde el rancho";
+        }
+      }
+      const { data, error } = await cloud.rpc("save_ranch_animal_config", {
+        p_owner_id: state.ranchOwnerId,
+        p_expected_revision: remoteRevision,
+        p_config: ranchAnimalFieldConfigPayload(config)
+      });
+      if (error) throw error;
+      const saved = {
+        ...local, config, revision: data.revision, baseRevision: data.revision,
+        dirty: false, updatedAt: data.updated_at
+      };
+      await put("ranchSettings", saved);
+      state.fieldConfigRecord = saved;
+      state.fieldConfig = config;
+      return "";
+    }
+
+    if (remote && remote.revision !== local.baseRevision) {
+      if (state.fieldSettingsDirty && !confirm(
+        "La configuración del rancho cambió en otro dispositivo y hay cambios locales sin guardar.\n\n" +
+        "Aceptar: descartar los cambios sin guardar y cargar la configuración del rancho.\n" +
+        "Cancelar: conservarlos en pantalla; el resto de los datos sí se sincronizará."
+      )) return "Configuración en la nube pendiente de cargar · se conservaron cambios locales sin guardar";
+      state.fieldSettingsDirty = false;
+      const downloaded = {
+        ...local, config: normalizeAnimalFieldConfig(remote.config), revision: remote.revision,
+        baseRevision: remote.revision, dirty: false, updatedAt: remote.updated_at
+      };
+      await put("ranchSettings", downloaded);
+      state.fieldConfigRecord = downloaded;
+      state.fieldConfig = downloaded.config;
+      renderAnimalSettings();
+      return "Configuración actualizada desde el rancho";
+    }
+    if (!remote && local.baseRevision > 0) {
+      throw new Error("No se encontró en Supabase la configuración que este dispositivo había sincronizado.");
+    }
+    return "";
+  }
+
   async function syncData() {
     if (!cloud) {
       setSyncStatus("Solo en este dispositivo · configura Supabase");
@@ -799,6 +1425,7 @@
     state.syncing = true;
     setSyncStatus("Sincronizando…");
     try {
+      const fieldConfigStatus = await syncAnimalFieldConfig();
       const [animals, events, photos, forecasts, deletions, journeys] = await Promise.all([
         getAll("animals"), getAll("events"), getAll("photos"), getAll("growthForecasts"), getAll("deletedAnimals"), getAll("journeys")
       ]);
@@ -856,13 +1483,13 @@
       await syncJourneys(journeys);
       await refresh();
       if ($("#detail-dialog").open && state.currentAnimalId) {
-        if (state.animals.some(animal => animal.id === state.currentAnimalId)) openDetail(state.currentAnimalId);
+        if (state.animals.some(animal => animal.id === state.currentAnimalId)) openDetail(state.currentAnimalId, true);
         else $("#detail-dialog").close();
       }
       if ($("#journey-dialog").open && state.currentJourneyId) renderJourneyDetail();
       setSyncStatus(pendingChanges
         ? `${pendingChanges} cambio(s) pendiente(s) · vuelve a sincronizar`
-        : conflicts ? `Sincronizado · ${conflicts} conflicto(s) resuelto(s)` : "Sincronizado");
+        : fieldConfigStatus || (conflicts ? `Sincronizado · ${conflicts} conflicto(s) resuelto(s)` : "Sincronizado"));
     } catch (error) {
       setSyncStatus("Error de sincronización");
       showToast(`No se pudo sincronizar: ${error.message}`);
@@ -903,6 +1530,9 @@
     const remaining = months % 12;
     if (years === 0 && remaining === 0) return "Menos de un mes";
     return [years ? `${years} ${years === 1 ? "año" : "años"}` : "", remaining ? `${remaining} ${remaining === 1 ? "mes" : "meses"}` : ""].filter(Boolean).join(", ");
+  }
+  function isEstimatedBirthDate(animal) {
+    return animal?.birthEstimated === true || animal?.birthDateEstimated === true;
   }
   function estimatedAgeMonths(ageEstimate, asOf = today()) {
     if (!ageEstimate || (!Number.isInteger(ageEstimate.monthsAtRecord) && !Number.isFinite(ageEstimate.daysAtRecord))) return null;
@@ -1597,14 +2227,23 @@
     const archivedAnimals = state.animals.filter(animal => !isActiveAnimal(animal));
     const displayedAnimals = state.archiveView ? archivedAnimals : activeAnimals;
     const filtered = displayedAnimals.filter(animal => {
-      const searchable = [animal.tag, animal.name, animal.color, animal.sex, animal.status, animal.birthDate]
-        .filter(Boolean).join(" ").toLocaleLowerCase("es-MX");
+      const configuredValues = ANIMAL_FIELD_CATALOG
+        .filter(field => animalFieldActive(field.id))
+        .map(field => animalFieldDisplayValue(field, animal));
+      const searchable = configuredValues.filter(Boolean).join(" ").toLocaleLowerCase("es-MX");
       return !query || searchable.includes(query);
     }).sort((a, b) => {
       const first = sortValue(a, state.sort);
       const second = sortValue(b, state.sort);
       return String(first).localeCompare(String(second), "es-MX", { numeric: true }) * state.direction;
     });
+    const baseTableFields = new Set(["tag", "name", "sex", "color", "status", "estimatedAge"]);
+    const extraTableFields = ANIMAL_FIELD_CATALOG.filter(field =>
+      field.type !== "automatic" && !baseTableFields.has(field.id) &&
+      animalFieldActive(field.id) && animalFieldConfig(field.id).table
+    );
+    $("#animal-extra-headers").textContent = extraTableFields.length ? "Otros datos" : "";
+    $("#animal-extra-headers").hidden = extraTableFields.length === 0;
 
     $("#inventory-heading-title").textContent = state.archiveView ? "Archivo de animales" : "Inventario activo";
     $("#inventory-count").textContent = state.archiveView
@@ -1621,12 +2260,21 @@
       const avatar = primaryPhoto
         ? `<img src="${photoUrl(primaryPhoto)}" alt="">`
         : escapeHtml(initials(animal));
+      const extraValues = extraTableFields.map(field => {
+        const value = animalFieldDisplayValue(field, animal);
+        return value ? `<span><strong>${escapeHtml(animalFieldConfig(field.id).label)}:</strong> ${escapeHtml(value)}</span>` : "";
+      }).filter(Boolean).join(" · ");
       return `<tr>
-        <td><div class="animal-cell"><div class="animal-avatar">${avatar}</div><div><button class="animal-link" data-open-animal="${escapeHtml(animal.id)}" type="button">${escapeHtml(animal.name || "Sin nombre")}</button><span class="animal-sub">Arete ${display(animal.tag)}</span></div></div></td>
-        <td>${display(animal.sex)}</td><td>${display(animal.color)}</td>
+        <td><div class="animal-cell"><div class="animal-avatar">${avatar}</div><div>
+          <button class="animal-link" data-config-field="name" data-config-surface="table" data-open-animal="${escapeHtml(animal.id)}" type="button">${escapeHtml(animal.name || "Sin nombre")}</button>
+          <span class="animal-sub" data-config-field="tag" data-config-surface="table">${escapeHtml(animalFieldConfig("tag").label)} ${display(animal.tag)}</span>
+        </div></div></td>
+        <td data-config-field="sex" data-config-surface="table">${display(animal.sex)}</td>
+        <td data-config-field="color" data-config-surface="table">${display(animal.color)}</td>
+        <td ${extraTableFields.length ? "" : "hidden"}><div class="table-extra-values">${extraValues || "—"}</div></td>
         <td>${weight ? `${escapeHtml(weight.weight)} kg` : "No registrado"}</td>
         <td>${weight ? formatDate(weight.date) : "No registrado"}</td>
-        <td>${statusMarkup(animal.status)}</td>
+        <td data-config-field="status" data-config-surface="table">${statusMarkup(animal.status)}</td>
         <td><button class="row-menu" data-open-animal="${escapeHtml(animal.id)}" type="button" aria-label="Abrir ficha">${icon("chevron")}</button></td>
       </tr>`;
     }).join("");
@@ -1647,6 +2295,7 @@
           : "Añade tu primer animal para empezar a organizar su información."
         : "Prueba con otra búsqueda.";
     $("#empty-add-button").hidden = state.archiveView || !isEmptyInventory || !canManageRanch();
+    applyAnimalFieldVisibility($("#inventory-view"));
   }
 
   function journeyName(journey) {
@@ -1697,19 +2346,31 @@
   }
 
   function setMainView(view) {
+    if (state.mainView === "settings" && view !== "settings" && state.fieldSettingsDirty &&
+        !confirm("Hay cambios de configuración sin guardar. ¿Descartarlos?")) return;
+    if (state.mainView === "settings" && view !== "settings") {
+      state.fieldSettingsDirty = false;
+      renderAnimalSettings();
+    }
     const journeys = view === "journeys";
     const calculator = view === "calculator";
-    $("#inventory-view").hidden = journeys || calculator;
+    const settings = view === "settings";
+    state.mainView = settings ? "settings" : calculator ? "calculator" : journeys ? "journeys" : "inventory";
+    $("#inventory-view").hidden = !["inventory"].includes(view);
     $("#journeys-view").hidden = !journeys;
     $("#calculator-view").hidden = !calculator;
-    $("#inventory-nav").classList.toggle("active", !journeys && !calculator);
+    $("#settings-view").hidden = !settings;
+    $("#inventory-nav").classList.toggle("active", !journeys && !calculator && !settings);
     $("#journeys-nav").classList.toggle("active", journeys);
     $("#calculator-nav").classList.toggle("active", calculator);
-    $("#inventory-nav").setAttribute("aria-current", !journeys && !calculator ? "page" : "false");
+    $("#settings-nav").classList.toggle("active", settings);
+    $("#inventory-nav").setAttribute("aria-current", !journeys && !calculator && !settings ? "page" : "false");
     $("#journeys-nav").setAttribute("aria-current", journeys ? "page" : "false");
     $("#calculator-nav").setAttribute("aria-current", calculator ? "page" : "false");
-    $("#breadcrumb-current").textContent = calculator ? "Calculadora" : journeys ? "Jornadas" : "Ganado";
+    $("#settings-nav").setAttribute("aria-current", settings ? "page" : "false");
+    $("#breadcrumb-current").textContent = settings ? "Configuración" : calculator ? "Calculadora" : journeys ? "Jornadas" : "Ganado";
     renderJourneys();
+    if (settings) renderAnimalSettings();
     if (calculator) renderCalculatorAnimalOptions();
   }
 
@@ -2062,7 +2723,8 @@
             if (animalRequest.result) {
               animalStore.put({
                 ...animalRequest.result,
-                updatedAt: nextModifiedAt(animalRequest.result.updatedAt)
+                updatedAt: nextModifiedAt(animalRequest.result.updatedAt),
+                updatedBy: journeyActor().label
               });
             }
           };
@@ -2108,7 +2770,9 @@
             const animalRequest = animalsStore.get(rosterAnimal.id);
             animalRequest.onsuccess = () => {
               const animal = animalRequest.result;
-              if (animal) animalsStore.put({ ...animal, updatedAt: nextModifiedAt(animal.updatedAt) });
+              if (animal) animalsStore.put({
+                ...animal, updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label
+              });
             };
           }
           const eventType = journey.type;
@@ -2165,7 +2829,8 @@
     return animal[key] || "";
   }
   function statusClass(status) {
-    return ({ Vendido: "sold", Fallecido: "dead", Baja: "other", Otro: "other", Otros: "other", Desaparecido: "other" })[status] || "";
+    return ({ Vendido: "sold", Fallecido: "dead", Baja: "other", Otro: "other", Otros: "other", Desaparecido: "other" })[status] ||
+      (state.fieldConfig?.lists?.status?.find(option => option.value === status)?.active === false ? "other" : "");
   }
   function showToast(message) {
     const toast = $("#toast");
@@ -2183,7 +2848,161 @@
     const parsed = new Date(`${value}T00:00:00Z`);
     return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
   }
+
+  function validateAnimalBackupRecords(animals) {
+    if (animals.some(animal => !animal || typeof animal !== "object" ||
+        typeof animal.id !== "string" || !animal.id.trim())) {
+      throw new Error("La copia contiene una ficha de animal sin identificador válido.");
+    }
+    const animalIds = new Set(animals.map(animal => animal.id));
+    if (animalIds.size !== animals.length) throw new Error("La copia contiene identificadores de animal duplicados.");
+    const internalIds = animals.map(animal => animal.internalId).filter(Boolean);
+    if (internalIds.some(value => typeof value !== "string" || !/^ANM-\d{5,}$/.test(value)) ||
+        new Set(internalIds).size !== internalIds.length) {
+      throw new Error("La copia contiene IDs internos inválidos o duplicados.");
+    }
+    animals.forEach(animal => {
+      ANIMAL_FIELD_CATALOG.forEach(field => {
+        const value = animal[field.id];
+        if (value === undefined || value === null || value === "") return;
+        if (field.type === "date" && !isDateOnly(value)) {
+          throw new Error(`La fecha «${field.label}» de un animal no es válida.`);
+        }
+        if (field.type === "boolean" && typeof value !== "boolean") {
+          throw new Error(`El campo «${field.label}» debe ser sí/no.`);
+        }
+        if (["text", "textarea", "select", "list"].includes(field.type) &&
+            (typeof value !== "string" || value.length > (field.type === "textarea" ? 2000 : 200))) {
+          throw new Error(`El campo «${field.label}» de un animal no es válido.`);
+        }
+        if (field.type === "animal" &&
+            (typeof value !== "string" || value === animal.id || !animalIds.has(value))) {
+          throw new Error(`La referencia «${field.label}» debe apuntar a otro animal incluido en la copia.`);
+        }
+        if (field.type === "derived" &&
+            (!value || typeof value !== "object" ||
+              (!Number.isInteger(value.monthsAtRecord) && !Number.isFinite(value.daysAtRecord)) ||
+              !isDateOnly(value.recordedAt))) {
+          throw new Error("La edad aproximada de un animal no tiene un formato válido.");
+        }
+      });
+    });
+  }
+
   function newId() { return crypto.randomUUID(); }
+
+  function listOptions(listId, currentValue = "") {
+    const configured = state.fieldConfig?.lists?.[listId] || [];
+    const options = configured.filter(option => option.enabled || option.value === currentValue);
+    if (currentValue && !options.some(option => option.value === currentValue)) {
+      options.push({ value: currentValue, label: currentValue, enabled: true });
+    }
+    return options;
+  }
+
+  function animalFormControl(field, animal) {
+    const config = animalFieldConfig(field.id);
+    const currentValue = animal?.[field.id] ?? "";
+    const required = config.required ? "required" : "";
+    const base = `data-animal-field="${field.id}" name="${field.id}"`;
+    if (field.type === "automatic") return "";
+    if (field.type === "derived") {
+      const parts = estimatedAgeInputParts(animal?.estimatedAge);
+      return `<div class="animal-age-inputs"><label>${escapeHtml(config.label)} · años<input id="animal-age-years" data-animal-field="${field.id}" type="number" min="0" step="1" value="${parts.years}" placeholder="Años" ${required}></label>
+        <label>Meses<input id="animal-age-months" data-animal-field="${field.id}" type="number" min="0" max="11" step="1" value="${parts.months}" placeholder="0–11" ${required}></label></div>`;
+    }
+    if (field.id === "tag") return `<input id="animal-tag" ${base} maxlength="80" value="${escapeHtml(currentValue)}" placeholder="Ej. 00125" ${required}>`;
+    if (field.id === "name") return `<input id="animal-name" ${base} maxlength="100" value="${escapeHtml(currentValue)}" placeholder="Ej. Luna" ${required}>`;
+    if (field.id === "sex") {
+      return `<select id="animal-sex" ${base} ${required}><option value="">No registrado</option>${["Hembra", "Macho"].map(value => `<option value="${value}" ${currentValue === value ? "selected" : ""}>${value}</option>`).join("")}</select>`;
+    }
+    if (field.id === "status" || field.type === "list" || field.type === "select") {
+      const options = field.list ? listOptions(field.list, currentValue) : (field.options || []).map(value => ({ value, label: value }));
+      const placeholder = field.id === "status" ? "" : `<option value="">Sin registrar</option>`;
+      return `<select id="${field.id === "status" ? "animal-status" : `animal-field-${field.id}`}" ${base} ${required}>${placeholder}${options.map(option =>
+        `<option value="${escapeHtml(option.value)}" ${currentValue === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`
+      ).join("")}</select>`;
+    }
+    if (field.type === "animal") {
+      const candidates = state.animals.filter(item => item.id !== animal?.id);
+      return `<select id="animal-field-${field.id}" ${base} ${required}><option value="">Sin registrar</option>${candidates.map(item =>
+        `<option value="${escapeHtml(item.id)}" ${currentValue === item.id ? "selected" : ""}>${escapeHtml(item.name || item.tag || item.internalId || "Animal")}${item.tag ? ` · ${escapeHtml(item.tag)}` : ""}</option>`
+      ).join("")}</select>`;
+    }
+    if (field.type === "boolean") {
+      return `<select id="animal-field-${field.id}" ${base} ${required}><option value="">Sin registrar</option><option value="true" ${currentValue === true || currentValue === "true" ? "selected" : ""}>Sí</option><option value="false" ${currentValue === false || currentValue === "false" ? "selected" : ""}>No</option></select>`;
+    }
+    if (field.type === "textarea") {
+      return `<textarea id="animal-field-${field.id}" ${base} rows="3" maxlength="2000" ${required}>${escapeHtml(currentValue)}</textarea>`;
+    }
+    if (field.type === "date") {
+      return `<input id="${field.id === "birthDate" ? "animal-birth" : `animal-field-${field.id}`}" ${base} type="date" value="${escapeHtml(currentValue)}" ${required}>`;
+    }
+    return `<input id="${field.id === "color" ? "animal-color" : `animal-field-${field.id}`}" ${base} type="text" maxlength="200" value="${escapeHtml(currentValue)}" ${required}>`;
+  }
+
+  function renderAnimalFormFields(animal) {
+    const formFields = ANIMAL_FIELD_CATALOG.filter(field => field.form && field.type !== "automatic" &&
+      animalFieldActive(field.id) && animalFieldConfig(field.id).form);
+    const makeLabel = field => `<label data-config-field="${field.id}" data-config-surface="form">
+      <span data-config-label="${field.id}">${escapeHtml(animalFieldConfig(field.id).label)}</span>
+      ${field.requiredAllowed ? `<span class="optional" data-config-required-label="${field.id}">${animalFieldConfig(field.id).required ? "Obligatorio" : "Opcional"}</span>` : ""}
+      ${animalFormControl(field, animal)}
+    </label>`;
+    const basic = formFields.filter(field => animalFieldConfig(field.id).formLevel === "basic")
+      .map(makeLabel).join("");
+    const advanced = formFields.filter(field => animalFieldConfig(field.id).formLevel !== "basic")
+      .map(makeLabel).join("");
+    $("#animal-basic-fields").innerHTML = basic;
+    $("#animal-advanced-fields").innerHTML = advanced;
+    $("#animal-advanced-details").hidden = !advanced;
+    applyAnimalFieldVisibility($("#animal-form"));
+    updateConditionalAnimalFields();
+  }
+
+  function updateConditionalAnimalFields() {
+    const inactive = !isActiveAnimal({ status: $("#animal-status")?.value || "Activo" });
+    ["exitReason", "exitNotes"].forEach(fieldId => {
+      const input = $(`[data-animal-field="${fieldId}"]`, $("#animal-form"));
+      const label = input?.closest("label");
+      if (!label) return;
+      label.hidden = !inactive || !animalFieldActive(fieldId) || !animalFieldConfig(fieldId).form;
+      if (fieldId === "exitReason") input.required = inactive &&
+        animalFieldActive(fieldId) && animalFieldConfig(fieldId).form && animalFieldConfig(fieldId).required;
+    });
+  }
+
+  function animalFieldDisplayValue(field, animal) {
+    const value = animal[field.id];
+    if (value === null || value === undefined || value === "") return "";
+    if (field.id === "estimatedAge") {
+      if (animal.birthDate) return `${calculateAge(animal.birthDate)}${isEstimatedBirthDate(animal) ? " (aproximada)" : ""}`;
+      return formatEstimatedAge(value);
+    }
+    if (field.type === "boolean") return value ? "Sí" : "No";
+    if (field.type === "date") return isDateOnly(value) ? formatDate(value) : "";
+    if (field.type === "list" || field.type === "select") {
+      return (state.fieldConfig?.lists?.[field.list] || []).find(option => option.value === value)?.label || value;
+    }
+    if (field.type === "animal") {
+      const parent = state.animals.find(item => item.id === value);
+      return parent ? `${parent.name || parent.tag || parent.internalId}${parent.tag ? ` · ${parent.tag}` : ""}` : "";
+    }
+    if (field.id === "createdAt" || field.id === "updatedAt") return formatTimestamp(value);
+    return String(value);
+  }
+
+  function renderAnimalExtendedDetail(animal) {
+    const excluded = new Set(["tag", "name", "sex", "color", "birthDate", "estimatedAge", "status", "updatedAt"]);
+    return ANIMAL_FIELD_CATALOG.filter(field => !excluded.has(field.id) && field.detail)
+      .map(field => {
+        const value = animalFieldDisplayValue(field, animal);
+        return `<div class="detail-fact" data-detail-field="${field.id}" data-detail-has-value="${Boolean(value)}">
+          <span data-config-label="${field.id}">${escapeHtml(animalFieldConfig(field.id).label)}</span>
+          <strong>${value ? escapeHtml(value) : "Sin registrar"}</strong>
+        </div>`;
+      }).join("");
+  }
 
   function openAnimalForm(animal = null) {
     if (!canManageRanch()) {
@@ -2192,19 +3011,12 @@
     }
     const form = $("#animal-form");
     form.reset();
+    renderAnimalFormFields(animal);
     $("#animal-id").value = animal?.id || "";
     $("#animal-dialog-title").textContent = animal ? "Editar animal" : "Añadir animal";
     form.querySelector('[type="submit"]').textContent = animal ? "Guardar cambios" : "Guardar animal";
-    $("#animal-tag").value = animal?.tag || "";
-    $("#animal-name").value = animal?.name || "";
-    $("#animal-sex").value = animal?.sex || "";
-    $("#animal-color").value = animal?.color || "";
-    $("#animal-birth").value = animal?.birthDate || "";
-    const estimatedAgeParts = estimatedAgeInputParts(animal?.estimatedAge);
-    $("#animal-age-years").value = estimatedAgeParts.years;
-    $("#animal-age-months").value = estimatedAgeParts.months;
-    $("#animal-status").value = animal?.status || "Activo";
     $("#initial-records").hidden = Boolean(animal);
+    applyAnimalFieldVisibility(form);
     state.animalFormSnapshot = animalFormValues();
     $("#animal-dialog").showModal();
   }
@@ -2226,52 +3038,133 @@
     return { id: newId(), animalId, type, date, createdAt: performedAt, performedAt, performedBy: journeyActor(), ...fields };
   }
 
+  function nextInternalAnimalId() {
+    const used = new Set(state.animals.map(animal => animal.internalId).filter(Boolean));
+    let maximum = state.animals.reduce((value, animal) => {
+      const match = typeof animal.internalId === "string" && animal.internalId.match(/^ANM-(\d{5,})$/);
+      return match ? Math.max(value, Number(match[1])) : value;
+    }, 0);
+    let candidate;
+    do {
+      maximum += 1;
+      candidate = `ANM-${String(maximum).padStart(5, "0")}`;
+    } while (used.has(candidate));
+    return candidate;
+  }
+
+  function animalFormFieldValue(field) {
+    if (field.type === "derived") {
+      const yearsControl = $("#animal-age-years");
+      const monthsControl = $("#animal-age-months");
+      if (!yearsControl || !monthsControl) return null;
+      const yearsInput = yearsControl.value.trim();
+      const monthsInput = monthsControl.value.trim();
+      if (!yearsInput && !monthsInput) return null;
+      const years = yearsInput ? Number(yearsInput) : 0;
+      const months = monthsInput ? Number(monthsInput) : 0;
+      if (!Number.isInteger(years) || years < 0 || !Number.isInteger(months) || months < 0 || months > 11) {
+        throw new Error("La edad aproximada requiere años enteros y meses entre 0 y 11.");
+      }
+      return { monthsAtRecord: years * 12 + months, recordedAt: today() };
+    }
+    const input = $(`[data-animal-field="${field.id}"]`, $("#animal-form"));
+    if (!input) return "";
+    if (field.type === "boolean") return input.value === "" ? "" : input.value === "true";
+    return input.value.trim();
+  }
+
   async function saveAnimal(event) {
     event.preventDefault();
     if (!canManageRanch()) {
       showToast("Solo el propietario o administrador puede crear o editar fichas de animales.");
       return;
     }
-    const id = $("#animal-id").value || newId();
-    const existing = state.animals.find(animal => animal.id === id);
-    const tag = $("#animal-tag").value.trim();
-    if (tag && state.animals.some(animal => animal.id !== id && animal.tag?.toLocaleLowerCase() === tag.toLocaleLowerCase())) {
-      $("#animal-tag").setCustomValidity("Ya existe un animal con este número de arete.");
-      $("#animal-tag").reportValidity();
-      $("#animal-tag").setCustomValidity("");
+    const invalidControl = [...$("#animal-form").elements].find(control =>
+      control.willValidate && !control.checkValidity());
+    if (invalidControl) {
+      const advanced = invalidControl.closest("#animal-advanced-details");
+      if (advanced) advanced.open = true;
+      invalidControl.reportValidity();
       return;
     }
-    const birthDate = $("#animal-birth").value;
-    const yearsInput = $("#animal-age-years").value.trim();
-    const monthsInput = $("#animal-age-months").value.trim();
-    const ageYears = yearsInput ? Number(yearsInput) : 0;
-    const ageMonths = monthsInput ? Number(monthsInput) : 0;
+    const id = $("#animal-id").value || newId();
+    const existing = state.animals.find(animal => animal.id === id);
+    const tagInput = $("#animal-tag");
+    const tag = tagInput?.value.trim() || "";
+    if (tag && state.animals.some(animal => animal.id !== id && animal.tag?.toLocaleLowerCase() === tag.toLocaleLowerCase())) {
+      if (tagInput) {
+        tagInput.setCustomValidity("Ya existe un animal con este número de arete.");
+        tagInput.reportValidity();
+        tagInput.setCustomValidity("");
+      }
+      return;
+    }
+    const birthDateField = ANIMAL_FIELD_CATALOG.find(field => field.id === "birthDate");
+    const ageField = ANIMAL_FIELD_CATALOG.find(field => field.id === "estimatedAge");
+    const birthDate = animalFormFieldValue(birthDateField);
+    const birthDateEditable = animalFieldActive("birthDate") && animalFieldConfig("birthDate").form;
+    let estimatedAge = null;
+    try {
+      estimatedAge = animalFormFieldValue(ageField);
+    } catch (error) {
+      showToast(error.message);
+      return;
+    }
     const todayDay = Date.parse(`${today()}T00:00:00Z`);
     const birthDay = birthDate ? Date.parse(`${birthDate}T00:00:00Z`) : NaN;
-    if (birthDate && (!Number.isFinite(birthDay) || birthDay > todayDay)) {
+    if (birthDateEditable && birthDate && (!Number.isFinite(birthDay) || birthDay > todayDay)) {
       showToast("La fecha de nacimiento confirmada no puede estar en el futuro.");
       return;
     }
-    if (birthDate && (yearsInput || monthsInput)) {
+    const ageEditable = animalFieldActive("estimatedAge") && animalFieldConfig("estimatedAge").form;
+    if (birthDateEditable && ageEditable && birthDate && estimatedAge) {
       showToast("Indica la fecha de nacimiento confirmada o una edad aproximada, no ambas.");
       return;
     }
-    if ((yearsInput || monthsInput) &&
-        (!Number.isInteger(ageYears) || ageYears < 0 || !Number.isInteger(ageMonths) || ageMonths < 0 || ageMonths > 11)) {
-      showToast("La edad aproximada requiere años enteros y meses entre 0 y 11.");
+    if (ageEditable && animalFieldConfig("estimatedAge").required && !birthDate && !estimatedAge) {
+      showToast("Indica la edad aproximada de este animal.");
       return;
     }
-    const estimatedAge = yearsInput || monthsInput
-      ? { monthsAtRecord: ageYears * 12 + ageMonths, recordedAt: today() }
-      : null;
+    const selectedStatus = animalFieldActive("status") && animalFieldConfig("status").form
+      ? animalFormFieldValue(ANIMAL_FIELD_CATALOG.find(field => field.id === "status"))
+      : existing?.status || "Activo";
+    const exitReasonConfig = animalFieldConfig("exitReason");
+    if (!isActiveAnimal({ status: selectedStatus }) && animalFieldActive("exitReason") &&
+        exitReasonConfig.form && exitReasonConfig.required && !animalFormFieldValue(ANIMAL_FIELD_CATALOG.find(field => field.id === "exitReason"))) {
+      showToast("Indica el motivo de baja para este animal.");
+      return;
+    }
+    const values = {};
+    for (const field of ANIMAL_FIELD_CATALOG) {
+      if (field.type === "automatic" || !animalFieldActive(field.id) || !animalFieldConfig(field.id).form) continue;
+      if (["exitReason", "exitNotes"].includes(field.id) && isActiveAnimal({ status: selectedStatus })) continue;
+      const currentValue = animalFormFieldValue(field);
+      values[field.id] = existing && field.id === "internalId" ? existing.internalId : currentValue;
+    }
+    for (const fieldId of ["motherId", "fatherId"]) {
+      const parentId = values[fieldId];
+      if (!parentId) continue;
+      if (parentId === id || !state.animals.some(animal => animal.id === parentId)) {
+        showToast(`La referencia de ${animalFieldConfig(fieldId).label.toLocaleLowerCase("es-MX")} debe ser otro animal del mismo rancho.`);
+        return;
+      }
+    }
+    const actor = journeyActor().label;
     const animal = {
       ...(existing || {}),
-      id, tag, name: $("#animal-name").value.trim(), sex: $("#animal-sex").value,
-      color: $("#animal-color").value.trim(), birthDate, ...(estimatedAge ? { estimatedAge } : {}),
-      status: $("#animal-status").value, createdAt: existing?.createdAt || new Date().toISOString(),
-      updatedAt: nextModifiedAt(existing?.updatedAt)
+      ...values,
+      id,
+      internalId: existing?.internalId || nextInternalAnimalId(),
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      createdBy: existing?.createdBy || actor,
+      updatedAt: nextModifiedAt(existing?.updatedAt),
+      updatedBy: actor
     };
-    if (!estimatedAge) delete animal.estimatedAge;
+    if (animal.birthEstimated === undefined && typeof animal.birthDateEstimated === "boolean") {
+      animal.birthEstimated = animal.birthDateEstimated;
+    }
+    delete animal.birthDateEstimated;
+    if (birthDateEditable && ageEditable && !estimatedAge) delete animal.estimatedAge;
     const events = [];
     const photos = [];
     if (!existing) {
@@ -2315,7 +3208,10 @@
       $("#animal-dialog").close();
       await refresh();
       scheduleSync();
-      if (existing) showToast("Cambios guardados.");
+      if (existing) {
+        openDetail(id, true);
+        showToast("Cambios guardados.");
+      }
       else showToast("Animal añadido al inventario.");
     } catch (error) {
       showToast(`No se pudo guardar: ${error.message}`);
@@ -2328,18 +3224,26 @@
     return event.label ? escapeHtml(event.label) : "Registro guardado";
   }
 
-  function openDetail(animalId) {
+  function openDetail(animalId, preserveView = false) {
     const animal = state.animals.find(item => item.id === animalId);
     if (!animal) return;
+    if (!preserveView) {
+      state.detailView = "summary";
+      state.detailShowEmpty = false;
+    }
     state.currentAnimalId = animalId;
     const latestWeight = eventFor(animalId, "weight");
     const latestBath = eventFor(animalId, "bath");
     const latestVaccine = eventFor(animalId, "vaccine");
     const latestDeworm = eventFor(animalId, "deworm");
     const growthPoints = weightHistory(animalId);
-    const animalAge = animal.birthDate ? calculateAge(animal.birthDate) : formatEstimatedAge(animal.estimatedAge);
+    const animalAge = animal.birthDate
+      ? `${calculateAge(animal.birthDate)}${isEstimatedBirthDate(animal) ? " (aproximada)" : ""}`
+      : formatEstimatedAge(animal.estimatedAge);
     const animalEvents = state.events.filter(record => record.animalId === animalId)
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+    const latestHealthRecord = animalEvents.find(record =>
+      ["vaccine", "deworm", "injection", "medication", "review"].includes(record.type));
     const photos = state.photos.filter(photo => photo.animalId === animalId);
     const heroPhoto = photos.find(photo => photo.primary) || photos[0];
     const heroCrop = photoCrop(heroPhoto);
@@ -2371,8 +3275,8 @@
         <div class="detail-top"><div><div class="eyebrow">FICHA DEL ANIMAL</div></div>
           <button class="icon-button" type="button" data-close="detail-dialog" aria-label="Cerrar">${icon("close")}</button>
         </div>
-        <div class="detail-hero">${heroImage}<span class="detail-hero-status">${statusMarkup(animal.status, "status-display")}</span></div>
-        ${heroPhoto && manager ? `<details class="detail-crop">
+        <div class="detail-hero">${heroImage}<span class="detail-hero-status" data-detail-field="status" data-detail-has-value="true">${statusMarkup(animal.status, "status-display")}</span></div>
+        ${heroPhoto && manager ? `<details class="detail-crop" data-detail-view="full" data-detail-has-value="true">
           <summary aria-label="Ajustar encuadre de la foto" title="Ajustar encuadre">${icon("edit")} Ajustar encuadre</summary>
           <div class="detail-crop-panel">
             <label>Horizontal <input type="range" min="0" max="100" value="${heroCrop.x}" data-photo-crop="x" data-photo-id="${escapeHtml(heroPhoto.id)}" aria-label="Posición horizontal de la foto"></label>
@@ -2383,50 +3287,58 @@
         </details>` : ""}
         <div class="detail-identity">
           <span class="detail-tag-icon">${icon("tag")}</span>
-          <div><h2>${escapeHtml(animal.name || "Animal sin nombre")}</h2><p>Arete ${display(animal.tag)}</p></div>
-          <span class="detail-identity-sex">${sexIcon}${escapeHtml(animal.sex || "Sexo sin registrar")}</span>
+          <div data-config-field="name" data-config-surface="detail" data-detail-field="name" data-detail-has-value="${Boolean(animal.name)}"><h2>${escapeHtml(animal.name || "Animal sin nombre")}</h2></div>
+          <p class="detail-identity-tag" data-config-field="tag" data-config-surface="detail" data-detail-field="tag" data-detail-has-value="${Boolean(animal.tag)}"><span data-config-label="tag">${escapeHtml(animalFieldConfig("tag").label)}</span> ${display(animal.tag)}</p>
+          <span class="detail-identity-sex" data-config-field="sex" data-config-surface="detail" data-detail-field="sex" data-detail-has-value="${Boolean(animal.sex)}">${sexIcon}${escapeHtml(animal.sex || "Sexo sin registrar")}</span>
         </div>
         <div class="detail-actions">
           ${manager ? `<button class="button button-outline" type="button" data-edit-animal="${escapeHtml(animal.id)}">${icon("edit")} Editar animal</button>` : ""}
-          ${recordButtons}
+          <button class="button button-outline" type="button" data-toggle-detail-view>Ficha completa</button>
+          <label class="detail-empty-toggle" hidden><input type="checkbox" data-show-detail-empty> Mostrar campos vacíos</label>
+          <div class="detail-record-actions" data-detail-view="full" data-detail-has-value="true">${recordButtons}</div>
         </div>
       </div>
       <div class="detail-body">
-        <div class="detail-section-head detail-info-heading"><h3>Información general</h3></div>
+        <div id="detail-info-heading" class="detail-section-head detail-info-heading"><h3>${state.detailView === "summary" ? "Ficha resumida" : "Información general"}</h3></div>
         <div class="detail-basic">
-          <div class="detail-fact"><span>Sexo</span><strong>${display(animal.sex)}</strong></div>
-          <div class="detail-fact"><span>Color</span><strong>${display(animal.color)}</strong></div>
-          <div class="detail-fact"><span>Última modificación</span><strong>${escapeHtml(formatTimestamp(animal.updatedAt))}</strong></div>
-          <div class="detail-fact"><span>Fecha de nacimiento confirmada</span><strong>${formatDate(animal.birthDate)}</strong></div>
-          <div class="detail-fact"><span>Edad${animal.estimatedAge && !animal.birthDate ? " aproximada" : ""}</span><strong>${escapeHtml(animalAge)}</strong></div>
-          <div class="detail-fact"><span>Estado</span><strong>${statusMarkup(animal.status, "status-display")}</strong></div>
-          <div class="detail-fact"><span>Último baño</span><strong>${latestBath ? formatDate(latestBath.date) : "No registrado"}</strong></div>
-          <div class="detail-fact"><span>Última pesada</span><strong>${latestWeight ? formatDate(latestWeight.date) : "No registrado"}</strong></div>
-          <div class="detail-fact"><span>Peso actual</span><strong>${latestWeight ? `${escapeHtml(latestWeight.weight)} kg` : "No registrado"}</strong></div>
-          <div class="detail-fact"><span>Última vacuna</span><strong>${latestVaccine ? formatDate(latestVaccine.date) : "No registrado"}</strong></div>
-          <div class="detail-fact"><span>Vacuna</span><strong>${eventSummary(latestVaccine)}</strong></div>
-          <div class="detail-fact"><span>Última desparasitación</span><strong>${latestDeworm ? formatDate(latestDeworm.date) : "No registrado"}</strong></div>
-          <div class="detail-fact"><span>Producto</span><strong>${eventSummary(latestDeworm)}</strong></div>
+          <div class="detail-fact" data-detail-field="color" data-detail-has-value="${Boolean(animal.color)}"><span data-config-label="color">Color</span><strong>${animal.color ? escapeHtml(animal.color) : "Sin registrar"}</strong></div>
+          <div class="detail-fact" data-detail-view="full"><span>Última modificación</span><strong>${escapeHtml(formatTimestamp(animal.updatedAt))}</strong></div>
+          <div class="detail-fact" data-detail-field="birthDate" data-detail-has-value="${Boolean(animal.birthDate)}"><span data-config-label="birthDate">${escapeHtml(animalFieldConfig("birthDate").label)}</span><strong>${animal.birthDate ? formatDate(animal.birthDate) : "Sin registrar"}</strong></div>
+          <div class="detail-fact" data-detail-field="estimatedAge" data-detail-has-value="${Boolean(animalAge && animalAge !== "No registrado")}"><span data-config-label="estimatedAge">${escapeHtml(animalFieldConfig("estimatedAge").label)}</span><strong>${animalAge === "No registrado" ? "Sin registrar" : escapeHtml(animalAge)}</strong></div>
+          <div class="detail-fact" data-detail-view="full" data-detail-has-value="${Boolean(latestBath)}"><span>Último baño</span><strong>${latestBath ? formatDate(latestBath.date) : "Sin registrar"}</strong></div>
+          <div class="detail-fact" data-detail-view="both" data-detail-has-value="${Boolean(latestWeight)}"><span>Último pesaje</span><strong>${latestWeight ? formatDate(latestWeight.date) : "Sin registrar"}</strong></div>
+          <div class="detail-fact" data-detail-view="both" data-detail-has-value="${Boolean(latestWeight)}"><span>Peso actual</span><strong>${latestWeight ? `${escapeHtml(latestWeight.weight)} kg` : "Sin registrar"}</strong></div>
+          <div class="detail-fact" data-detail-view="summary" data-detail-has-value="${Boolean(latestHealthRecord)}"><span>Último registro sanitario</span><strong>${latestHealthRecord ? `${escapeHtml(EVENT_TYPES[latestHealthRecord.type] || "Registro")} · ${formatDate(latestHealthRecord.date)}` : "Sin registrar"}</strong></div>
+          <div class="detail-fact" data-detail-view="full" data-detail-has-value="${Boolean(latestVaccine)}"><span>Última vacuna</span><strong>${latestVaccine ? formatDate(latestVaccine.date) : "Sin registrar"}</strong></div>
+          <div class="detail-fact" data-detail-view="full" data-detail-has-value="${Boolean(latestVaccine)}"><span>Vacuna</span><strong>${latestVaccine ? eventSummary(latestVaccine) : "Sin registrar"}</strong></div>
+          <div class="detail-fact" data-detail-view="full" data-detail-has-value="${Boolean(latestDeworm)}"><span>Última desparasitación</span><strong>${latestDeworm ? formatDate(latestDeworm.date) : "Sin registrar"}</strong></div>
+          <div class="detail-fact" data-detail-view="full" data-detail-has-value="${Boolean(latestDeworm)}"><span>Producto</span><strong>${latestDeworm ? eventSummary(latestDeworm) : "Sin registrar"}</strong></div>
         </div>
-        ${renderGrowthChart(animal, growthPoints)}
-        <section class="detail-section">
+        <section class="detail-section" data-detail-view="both" id="animal-extended-detail-section">
+          <div class="detail-section-head"><h3>Datos adicionales</h3></div>
+          <div class="detail-basic">${renderAnimalExtendedDetail(animal)}</div>
+        </section>
+        <div data-detail-view="full" data-detail-has-value="${growthPoints.length > 0}">${renderGrowthChart(animal, growthPoints)}</div>
+        <section class="detail-section" data-detail-view="full" data-detail-has-value="${animalEvents.some(record => record.type !== "note")}">
           <div class="detail-section-head"><h3>Historial sanitario y de manejo</h3>${manager || worker ? `<button class="add-link" type="button" data-add-record="bath">${icon("plus")} Añadir registro</button>` : ""}</div>
           <div class="history-list">${renderHistory(animalEvents.filter(record => record.type !== "note"), manager)}</div>
         </section>
-        <section class="detail-section">
+        <section class="detail-section" data-detail-view="full" data-detail-has-value="${animalEvents.some(record => record.type === "note")}">
           <div class="detail-section-head"><h3>Comentarios y observaciones</h3>${manager ? `<button class="add-link" type="button" data-add-record="note">${icon("plus")} Añadir observación</button>` : ""}</div>
           <div class="history-list">${renderHistory(animalEvents.filter(record => record.type === "note"), manager)}</div>
         </section>
-        <section class="detail-section">
+        <section class="detail-section" data-detail-view="full" data-detail-has-value="${photos.length > 0}">
           <div class="detail-section-head"><h3>Galería de fotografías <span class="muted">(${photos.length})</span></h3></div>
           <div class="gallery">${gallery}${manager ? `<label class="photo-add" title="Añadir fotografías" aria-label="Añadir fotografías">${icon("photo")}<input id="photo-input" type="file" accept="image/*" multiple hidden></label>` : ""}</div>
         </section>
-        <div class="detail-section animal-management">
+        <div class="detail-section animal-management" data-detail-view="full" data-detail-has-value="true">
           ${manager && !isActiveAnimal(animal) ? `<button class="button button-outline button-small" type="button" data-reactivate-animal="${escapeHtml(animal.id)}">${icon("active")} Reactivar animal</button>` : ""}
           ${manager && animal.status !== "Baja" ? `<button class="add-link" type="button" data-deactivate-animal="${escapeHtml(animal.id)}">Dar de baja</button>` : ""}
             ${manager ? `<button class="danger-link" type="button" data-delete-animal="${escapeHtml(animal.id)}">${icon("trash")} Eliminar definitivamente a ${escapeHtml(animal.name || animal.tag || "este animal")}</button>` : ""}
         </div>
       </div>`;
+    applyAnimalFieldVisibility($("#detail-content"));
+    applyDetailPresentation();
     if (!$("#detail-dialog").open) $("#detail-dialog").showModal();
     const detailPhotoImage = $(".detail-hero img");
     if (detailPhotoImage?.complete) updatePhotoCropControls();
@@ -2500,7 +3412,7 @@
       $("#record-dialog").close();
       await refresh();
       if (type === "weight" && $("#calculator-animal").value === animalId) loadCalculatorAnimal();
-      openDetail(state.currentAnimalId);
+      openDetail(state.currentAnimalId, true);
       showToast("Registro guardado en el historial.");
     } catch (error) {
       showToast(`No se pudo guardar: ${error.message}`);
@@ -2529,7 +3441,7 @@
       showToast("Revisa el rango: el mínimo debe ser igual o menor que el máximo.");
       return;
     }
-    const updated = { ...animal, updatedAt: nextModifiedAt(animal.updatedAt) };
+    const updated = { ...animal, updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label };
     if (minValue) {
       updated.targetWeightMin = targetMin;
       updated.targetWeightMax = targetMax;
@@ -2541,7 +3453,7 @@
       await put("animals", updated);
       scheduleSync();
       await refresh();
-      openDetail(animal.id);
+      openDetail(animal.id, true);
       showToast(minValue ? "Rango de peso objetivo guardado." : "Rango de peso objetivo eliminado.");
     } catch (error) {
       showToast(`No se pudo guardar el objetivo: ${error.message}`);
@@ -2570,7 +3482,7 @@
       });
       await touchAnimal(animalId);
       await refresh();
-      openDetail(animalId);
+      openDetail(animalId, true);
       showToast(`${images.length} ${images.length === 1 ? "fotografía añadida" : "fotografías añadidas"}.`);
     } catch (error) {
       showToast(`No se pudieron guardar las fotografías: ${error.message}`);
@@ -2589,7 +3501,7 @@
       });
       await touchAnimal(photo.animalId);
       await refresh();
-      openDetail(photo.animalId);
+      openDetail(photo.animalId, true);
     } catch (error) {
       showToast(`No se pudo actualizar la fotografía principal: ${error.message}`);
     }
@@ -2603,7 +3515,7 @@
       await put("photos", { ...photo, cropX: x, cropY: y });
       await touchAnimal(photo.animalId);
       await refresh();
-      openDetail(photo.animalId);
+      openDetail(photo.animalId, true);
       const controls = $$(".detail-crop");
       controls.forEach(control => { control.open = true; });
     } catch (error) {
@@ -2621,7 +3533,7 @@
       if (photo.primary && remaining.length) await put("photos", { ...remaining[0], primary: true });
       await touchAnimal(photo.animalId);
       await refresh();
-      openDetail(photo.animalId);
+      openDetail(photo.animalId, true);
       showToast("Fotografía eliminada.");
     } catch (error) {
       showToast(`No se pudo eliminar la fotografía: ${error.message}`);
@@ -2636,7 +3548,7 @@
       await remove("events", eventId);
       await touchAnimal(record.animalId);
       await refresh();
-      openDetail(state.currentAnimalId);
+      openDetail(state.currentAnimalId, true);
       showToast("Registro eliminado.");
     } catch (error) {
       showToast(`No se pudo eliminar: ${error.message}`);
@@ -2649,7 +3561,7 @@
     if (!animal) return;
     if (!confirm(`¿Deseas dar de baja a ${animal.name || animal.tag || "este animal"}? Su ficha y su historial se conservarán.`)) return;
     try {
-      await put("animals", { ...animal, status: "Baja", updatedAt: nextModifiedAt(animal.updatedAt) });
+      await put("animals", { ...animal, status: "Baja", updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label });
       scheduleSync();
       $("#detail-dialog").close();
       await refresh();
@@ -2668,7 +3580,7 @@
     if (!animal || isActiveAnimal(animal)) return;
     if (!confirm(`¿Reactivar a ${animal.name || animal.tag || "este animal"}? Volverá al inventario activo y podrá incluirse en jornadas nuevas.`)) return;
     try {
-      await put("animals", { ...animal, status: "Activo", updatedAt: nextModifiedAt(animal.updatedAt) });
+      await put("animals", { ...animal, status: "Activo", updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label });
       scheduleSync();
       $("#detail-dialog").close();
       state.archiveView = false;
@@ -2694,7 +3606,7 @@
       );
       if (!shouldDeactivate) return;
       try {
-        await put("animals", { ...animal, status: "Baja", updatedAt: nextModifiedAt(animal.updatedAt) });
+        await put("animals", { ...animal, status: "Baja", updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label });
         scheduleSync();
         $("#detail-dialog").close();
         await refresh();
@@ -2736,7 +3648,8 @@
       const payload = {
         format: "ganadero-backup", version: 1, exportedAt: new Date().toISOString(),
         animals: state.animals, events: state.events, journeys: state.journeys,
-        forecasts: state.forecasts, photos: [], deletedAnimals: await getAll("deletedAnimals")
+        forecasts: state.forecasts, animalSettings: state.fieldConfig,
+        photos: [], deletedAnimals: await getAll("deletedAnimals")
       };
       payload.photos = await Promise.all(state.photos.map(async photo => ({
         id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
@@ -2774,9 +3687,17 @@
           !Array.isArray(payload.animals) || !Array.isArray(payload.events) || !Array.isArray(payload.photos)) {
         throw new Error("El archivo no tiene un formato de copia de Ganadero compatible.");
       }
+      if (payload.animalSettings !== undefined && !isValidAnimalFieldConfig(payload.animalSettings)) {
+        throw new Error("La copia contiene una configuración de campos inválida.");
+      }
       if (!confirm("Importar esta copia reemplazará todos los datos guardados actualmente en este dispositivo. ¿Continuar?")) return;
+      if (payload.animalSettings && !canManageRanch()) {
+        throw new Error("Solo el propietario o administrador puede restaurar la configuración del rancho.");
+      }
       const previousAnimals = await getAll("animals");
       const animals = payload.animals.map(animal => ({ ...animal, updatedAt: nextModifiedAt(animal.updatedAt) }));
+      validateAnimalBackupRecords(animals);
+      await ensureAnimalInternalIds(animals, false);
       const journeys = payload.journeys === undefined ? state.journeys : payload.journeys;
       if (!Array.isArray(journeys) || journeys.some(journey =>
         !journey || typeof journey.id !== "string" || !Array.isArray(journey.roster) ||
@@ -2816,6 +3737,9 @@
           createdAt: item.createdAt, blob
         };
       }));
+      const restoredConfig = payload.animalSettings
+        ? normalizeAnimalFieldConfig(payload.animalSettings)
+        : null;
       if (events.some(record => !animalIds.has(record.animalId))) throw new Error("La copia contiene registros asociados a animales inexistentes.");
       const deletionMap = new Map(backedUpDeletions.map(item => [item.id, item]));
       previousAnimals.filter(animal => !animalIds.has(animal.id)).forEach(animal => {
@@ -2823,7 +3747,8 @@
       });
       for (const url of state.photoUrls.values()) URL.revokeObjectURL(url);
       state.photoUrls.clear();
-      await transaction(["animals", "events", "photos", "growthForecasts", "deletedAnimals", "journeys"], "readwrite", tx => {
+      const existingSettings = await getOne("ranchSettings", "animal-fields");
+      await transaction(["animals", "events", "photos", "growthForecasts", "deletedAnimals", "journeys", "ranchSettings"], "readwrite", tx => {
         for (const name of ["animals", "events", "photos", "growthForecasts", "deletedAnimals"]) tx.objectStore(name).clear();
         tx.objectStore("journeys").clear();
         const deletions = tx.objectStore("deletedAnimals");
@@ -2834,6 +3759,15 @@
         forecasts.forEach(item => tx.objectStore("growthForecasts").put(item));
         photos.forEach(item => tx.objectStore("photos").put(item));
         journeys.forEach(item => tx.objectStore("journeys").put(item));
+        if (restoredConfig) tx.objectStore("ranchSettings").put({
+          id: "animal-fields",
+          ownerId: state.ranchOwnerId,
+          config: restoredConfig,
+          revision: (existingSettings?.revision || 0) + 1,
+          baseRevision: existingSettings?.baseRevision || 0,
+          dirty: true,
+          updatedAt: new Date().toISOString()
+        });
       });
       await refresh();
       scheduleSync();
@@ -2872,6 +3806,9 @@
     $("#inventory-nav").addEventListener("click", () => setMainView("inventory"));
     $("#journeys-nav").addEventListener("click", () => setMainView("journeys"));
     $("#calculator-nav").addEventListener("click", () => setMainView("calculator"));
+    $("#settings-nav").addEventListener("click", () => setMainView("settings"));
+    $("#save-animal-settings").addEventListener("click", saveAnimalFieldSettings);
+    $("#reset-animal-settings").addEventListener("click", resetAnimalFieldSettings);
     $("#calculator-form").addEventListener("submit", event => event.preventDefault());
     $("#calculator-form").addEventListener("input", updateCalculator);
     $("#calculator-gain").addEventListener("input", () => { state.calculatorMeasuredGain = null; });
@@ -3034,7 +3971,24 @@
         })();
         return;
       }
+      if (target.dataset.addAnimalOption) {
+        const listId = target.dataset.addAnimalOption;
+        const list = ANIMAL_LISTS.find(item => item.id === listId);
+        const label = prompt(`Nombre de la nueva opción para ${list?.label || "la lista"}:`)?.trim();
+        if (!label) return;
+        const listContainer = target.closest(".settings-list");
+        const value = `option-${newId()}`;
+        listContainer.insertAdjacentHTML("beforeend", animalListOptionMarkup(listId, { value, label, enabled: true, active: true }));
+        state.fieldSettingsDirty = true;
+        $("#save-animal-settings").textContent = "Guardar cambios pendientes";
+        return;
+      }
       if (target.dataset.openJourney) { openJourney(target.dataset.openJourney); return; }
+      if (target.hasAttribute("data-toggle-detail-view")) {
+        state.detailView = state.detailView === "summary" ? "full" : "summary";
+        applyDetailPresentation();
+        return;
+      }
       if (target.dataset.toggleAttendance) { toggleJourneyAnimal(target.dataset.toggleAttendance); return; }
       if (target.dataset.addJourneyAnimals) { addJourneyAnimals(target.dataset.addJourneyAnimals); return; }
       if (target.dataset.reopenJourney) { reopenJourney(target.dataset.reopenJourney); return; }
@@ -3087,6 +4041,33 @@
       if (image) image.style.objectPosition = `${x}% ${y}%`;
     });
     document.addEventListener("change", event => {
+      if (event.target.matches("[data-show-detail-empty]")) {
+        state.detailShowEmpty = event.target.checked;
+        applyDetailPresentation();
+        return;
+      }
+      if (event.target.matches("[data-field-setting], [data-field-label], [data-module-setting], [data-list-label], [data-list-enabled]")) {
+        state.fieldSettingsDirty = true;
+        $("#save-animal-settings").textContent = "Guardar cambios pendientes";
+        if (event.target.matches("[data-field-setting]")) {
+          const summaryCount = $$('#animal-field-settings [data-field-setting="detailVisibility"]')
+            .filter(select => select.value === "summary" &&
+              $("#animal-field-settings").querySelector(`[data-field-setting="enabled"][data-field-id="${select.dataset.fieldId}"]`)?.checked).length;
+          $("#animal-summary-limit-warning").hidden = summaryCount <= 10;
+          $("#animal-summary-limit-warning").textContent =
+            `Hay ${summaryCount} campos en la ficha resumida. Se recomienda mostrar 10 o menos para facilitar la lectura en el corral.`;
+        }
+        return;
+      }
+      if (event.target.matches("[data-list-active]")) {
+        state.fieldSettingsDirty = true;
+        $("#save-animal-settings").textContent = "Guardar cambios pendientes";
+        return;
+      }
+      if (event.target.id === "animal-status") {
+        updateConditionalAnimalFields();
+        return;
+      }
       if (event.target.id === "photo-input") addPhotos(event.target.files);
       if (event.target.dataset.photoCrop) {
         const panel = event.target.closest(".detail-crop-panel");

@@ -59,6 +59,10 @@
       <button id="calculator-nav" class="nav-item" type="button" aria-current="false">
         <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-calculator"></use></svg> Calculadora
       </button>
+      <div class="sidebar-label settings-nav-label">ADMINISTRACIÓN</div>
+      <button id="settings-nav" class="nav-item" type="button" aria-current="false">
+        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-settings"></use></svg> Configuración
+      </button>
       <div class="sidebar-note">
         <span class="note-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" focusable="false"><use href="#icon-status-active"></use></svg></span>
         <strong>Tus datos, bajo tu control</strong>
@@ -97,11 +101,11 @@
           <div class="stat-top"><span>Total de animales</span><span class="stat-icon green" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" focusable="false"><use href="#icon-inventory"></use></svg></span></div>
           <div id="stat-total" class="stat-value">0</div><div class="stat-caption">En el inventario</div>
         </article>
-        <article class="stat-card">
+        <article class="stat-card" data-config-field="sex">
           <div class="stat-top"><span>Hembras</span><span class="stat-icon rose" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" focusable="false"><use href="#icon-female"></use></svg></span></div>
           <div id="stat-females" class="stat-value">0</div><div class="stat-caption">Animales registrados</div>
         </article>
-        <article class="stat-card">
+        <article class="stat-card" data-config-field="sex">
           <div class="stat-top"><span>Machos</span><span class="stat-icon blue" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" focusable="false"><use href="#icon-male"></use></svg></span></div>
           <div id="stat-males" class="stat-value">0</div><div class="stat-caption">Animales registrados</div>
         </article>
@@ -128,11 +132,12 @@
             <thead>
               <tr>
                 <th><button class="sort-button" data-sort="tag" type="button">Animal <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
-                <th><button class="sort-button" data-sort="sex" type="button">Sexo <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
-                <th><button class="sort-button" data-sort="color" type="button">Color <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
+                <th data-config-field="sex" data-config-surface="table"><button class="sort-button" data-sort="sex" type="button"><span data-config-label="sex">Sexo</span> <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
+                <th data-config-field="color" data-config-surface="table"><button class="sort-button" data-sort="color" type="button"><span data-config-label="color">Color</span> <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
+                <th id="animal-extra-headers"></th>
                 <th><button class="sort-button" data-sort="weight" type="button">Último peso <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
                 <th><button class="sort-button" data-sort="weighDate" type="button">Última pesada <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
-                <th><button class="sort-button" data-sort="status" type="button">Estado <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
+                <th data-config-field="status" data-config-surface="table"><button class="sort-button" data-sort="status" type="button"><span data-config-label="status">Estado</span> <svg class="ui-icon sort-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sort"></use></svg></button></th>
                 <th><span class="sr-only">Acciones</span></th>
               </tr>
             </thead>
@@ -244,12 +249,49 @@
           </section>
         </div>
       </section>
+      <section id="settings-view" hidden>
+        <div class="page-heading settings-page-heading">
+          <div>
+            <div class="eyebrow"><span class="live-dot"></span> CONFIGURACIÓN DEL RANCHO</div>
+            <h1>Campos y ficha de animales</h1>
+            <p class="subtitle">Define qué datos se capturan y se muestran sin borrar la información guardada.</p>
+          </div>
+          <button id="save-animal-settings" class="button button-primary" type="button">Guardar configuración</button>
+        </div>
+        <div id="animal-settings-access" class="settings-callout" hidden></div>
+        <section class="settings-card">
+          <div class="settings-card-heading">
+            <div><h2>Módulos</h2><p>Desactivar un módulo lo oculta, pero mantiene sus valores guardados.</p></div>
+          </div>
+          <div id="animal-module-settings" class="settings-module-grid"></div>
+        </section>
+        <section class="settings-card">
+          <div class="settings-card-heading">
+            <div><h2>Listas del rancho</h2><p>Desactiva opciones que ya no uses; no se pueden desactivar mientras estén asignadas a animales.</p></div>
+          </div>
+          <div id="animal-list-settings" class="settings-list-grid"></div>
+        </section>
+        <section class="settings-card">
+          <div class="settings-card-heading">
+            <div><h2>Campos disponibles</h2><p>Configura activación, formulario básico o adicional, ficha y tabla por separado.</p></div>
+            <button id="reset-animal-settings" class="button button-outline button-small" type="button">Restaurar predeterminados</button>
+          </div>
+          <div class="settings-table-wrap">
+            <table class="settings-table">
+              <thead><tr><th>Campo</th><th>Activado</th><th>Formulario</th><th>Ficha</th><th>Tabla</th><th>Obligatorio</th></tr></thead>
+              <tbody id="animal-field-settings"></tbody>
+            </table>
+          </div>
+        </section>
+        <p id="animal-summary-limit-warning" class="settings-callout settings-warning" role="status" hidden></p>
+        <p class="settings-data-note">Desactivar u ocultar un campo o módulo no elimina sus datos. Los campos nuevos de configuraciones antiguas empiezan desactivados. Pesajes, salud, reproducción, producción y economía históricos no se alteran en esta etapa.</p>
+      </section>
       <footer class="page-footer">Los cambios se guardan localmente y se sincronizan con tu cuenta al conectarte.</footer>
     </main>
   </div>
 
   <dialog id="animal-dialog" class="modal">
-    <form id="animal-form" method="dialog">
+    <form id="animal-form" method="dialog" novalidate>
       <div class="modal-heading">
         <div><div class="eyebrow">FICHA DE ANIMAL</div><h2 id="animal-dialog-title">Añadir animal</h2></div>
         <button class="icon-button" type="button" data-close="animal-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
@@ -257,18 +299,12 @@
       <input id="animal-id" type="hidden">
       <div class="form-section">
         <h3>Información básica</h3>
-        <div class="form-grid">
-          <label>Número de arete <span class="optional">Opcional</span><input id="animal-tag" name="tag" maxlength="80" placeholder="Ej. 00125"></label>
-          <label>Nombre <span class="optional">Opcional</span><input id="animal-name" name="name" maxlength="100" placeholder="Ej. Luna"></label>
-          <label>Sexo<select id="animal-sex" name="sex"><option value="">No registrado</option><option>Hembra</option><option>Macho</option></select></label>
-          <label>Color<input id="animal-color" name="color" maxlength="100" placeholder="Ej. Blanca"></label>
-          <label>Fecha de nacimiento confirmada<input id="animal-birth" name="birthDate" type="date"></label>
-          <label>Edad aproximada · años<input id="animal-age-years" type="number" min="0" step="1" placeholder="Ej. 2" inputmode="numeric"></label>
-          <label>Edad aproximada · meses<input id="animal-age-months" type="number" min="0" max="11" step="1" placeholder="0–11" inputmode="numeric"></label>
-          <p class="calculator-note full-width">Usa la fecha confirmada o una edad aproximada. La edad estimada se guarda como tal y no se convierte en una fecha de nacimiento inventada.</p>
-          <label>Estado<select id="animal-status" name="status"><option>Activo</option><option>Vendido</option><option>Fallecido</option><option>Baja</option><option>Otro</option><option>Otros</option><option>Desaparecido</option></select></label>
-        </div>
+        <div id="animal-basic-fields" class="form-grid"></div>
       </div>
+      <details id="animal-advanced-details" class="animal-advanced-fields">
+        <summary>Mostrar datos adicionales</summary>
+        <div id="animal-advanced-fields" class="form-grid"></div>
+      </details>
       <div id="initial-records" class="form-section">
         <h3>Registros iniciales <span class="section-hint">Todos son opcionales</span></h3>
         <div class="form-grid">
