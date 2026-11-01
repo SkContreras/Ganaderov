@@ -296,31 +296,66 @@
         <div><div class="eyebrow">FICHA DE ANIMAL</div><h2 id="animal-dialog-title">Añadir animal</h2></div>
         <button class="icon-button" type="button" data-close="animal-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
       </div>
+      <p id="animal-form-error-summary" class="form-error-summary" role="alert" hidden></p>
+      <p id="animal-undo-feedback" class="field-help success" role="status" hidden></p>
+      <div id="animal-form-stepper" class="form-stepper" hidden>
+        <div class="form-stepper-track"><span id="animal-form-stepper-fill"></span></div>
+        <p id="animal-form-stepper-label">Paso 1 de 3 · Identificación</p>
+      </div>
       <input id="animal-id" type="hidden">
-      <div class="form-section">
+      <div class="form-section" data-animal-step="identification">
         <h3>Información básica</h3>
         <div id="animal-basic-fields" class="form-grid"></div>
       </div>
-      <details id="animal-advanced-details" class="animal-advanced-fields">
+      <details id="animal-advanced-details" class="animal-advanced-fields" data-animal-step="additional">
         <summary>Mostrar datos adicionales</summary>
         <div id="animal-advanced-fields" class="form-grid"></div>
       </details>
-      <div id="initial-records" class="form-section">
+      <div id="initial-records" class="form-section" data-animal-step="records">
         <h3>Registros iniciales <span class="section-hint">Todos son opcionales</span></h3>
         <div class="form-grid">
-          <label>Fecha de baño<input id="initial-bath-date" type="date"></label>
-          <label>Fecha de pesada<input id="initial-weight-date" type="date"></label>
-          <label>Peso (kg)<input id="initial-weight" type="number" min="0" step="0.1" placeholder="Ej. 420"></label>
+          <label>Fecha de baño<input id="initial-bath-date" type="date" inputmode="numeric"></label>
+          <label>Fecha de pesada<input id="initial-weight-date" type="date" inputmode="numeric"></label>
+          <label>Peso (kg)
+            <div class="weight-capture">
+              <input id="initial-weight" type="number" min="0" step="0.1" inputmode="decimal" placeholder="Ej. 420">
+              <div class="weight-capture-controls" role="group" aria-label="Ajustar peso inicial">
+                <button type="button" data-adjust-weight="initial-weight" data-weight-delta="-1">−1</button>
+                <button type="button" data-adjust-weight="initial-weight" data-weight-delta="1">+1</button>
+                <button type="button" data-adjust-weight="initial-weight" data-weight-delta="5">+5</button>
+              </div>
+            </div>
+            <small id="initial-weight-feedback" class="field-help" aria-live="polite"></small>
+          </label>
           <label>Vacuna<input id="initial-vaccine" maxlength="120" placeholder="Tipo o nombre"></label>
-          <label>Fecha de vacuna<input id="initial-vaccine-date" type="date"></label>
+          <label>Fecha de vacuna<input id="initial-vaccine-date" type="date" inputmode="numeric"></label>
           <label>Desparasitación<input id="initial-dewormer" maxlength="120" placeholder="Producto utilizado"></label>
-          <label>Fecha de desparasitación<input id="initial-deworm-date" type="date"></label>
-          <label class="full-width">Observaciones<textarea id="initial-observation" rows="2" maxlength="2000" placeholder="Información importante sobre este animal..."></textarea></label>
-          <label class="full-width">Fotografías <span class="optional">Opcional · Puedes seleccionar varias</span><input id="initial-photos" type="file" accept="image/*" multiple></label>
+          <label>Fecha de desparasitación<input id="initial-deworm-date" type="date" inputmode="numeric"></label>
+          <label class="full-width">Observaciones<textarea id="initial-observation" rows="2" maxlength="2000" placeholder="Información importante... Usa el dictado del teclado para hablar"></textarea></label>
+          <label class="full-width">Fotografías <span class="optional">Opcional · Puedes seleccionar varias</span><input id="initial-photos" type="file" accept="image/*" capture="environment" multiple></label>
+          <div id="initial-photos-preview" class="photo-preview-grid full-width" hidden></div>
         </div>
       </div>
-      <div class="modal-actions"><button class="button button-outline" type="button" data-close="animal-dialog">Cancelar</button><button class="button button-primary" type="submit">Guardar animal</button></div>
+      <div id="animal-step-actions" class="animal-step-actions" hidden>
+        <button id="animal-step-prev" class="button button-outline" type="button">Anterior</button>
+        <button id="animal-step-next" class="button button-primary" type="button">Siguiente</button>
+      </div>
+      <div class="modal-actions">
+        <button class="button button-outline" type="button" data-close="animal-dialog">Cancelar</button>
+        <button id="animal-undo-last" class="button button-outline" type="button" hidden>Deshacer último alta</button>
+        <button id="animal-save-and-add" class="button button-outline" type="submit" data-submit-mode="save-and-add">Guardar y añadir otro</button>
+        <button id="animal-save" class="button button-primary" type="submit" data-submit-mode="save">Guardar animal</button>
+      </div>
     </form>
+  </dialog>
+
+  <dialog id="tag-scanner-dialog" class="modal compact-modal tag-scanner-modal">
+    <div class="modal-heading">
+      <div><div class="eyebrow">ESCANEAR ARETE</div><h2>Enfoca el código</h2></div>
+      <button class="icon-button" type="button" data-close="tag-scanner-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
+    </div>
+    <video id="tag-scanner-video" playsinline muted></video>
+    <p id="tag-scanner-status" class="field-help" role="status" aria-live="polite">Buscando un código legible…</p>
   </dialog>
 
   <dialog id="detail-dialog" class="modal detail-modal">
@@ -328,7 +363,7 @@
   </dialog>
 
   <dialog id="record-dialog" class="modal compact-modal">
-    <form id="record-form" method="dialog">
+    <form id="record-form" method="dialog" novalidate>
       <div class="modal-heading">
         <div><div class="eyebrow">NUEVO REGISTRO</div><h2 id="record-dialog-title">Añadir registro</h2></div>
         <button class="icon-button" type="button" data-close="record-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>

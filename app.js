@@ -129,7 +129,7 @@
     return `<span class="journey-status ${journey.status}">${icon(iconName)}${escapeHtml(journeyStatus(journey))}</span>`;
   }
   const hasRanchAccess = () => !currentUser || state.legacyAccount || ["owner", "admin", "worker"].includes(state.ranchRole);
-  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), fieldConfig: null, fieldConfigRecord: null, fieldSettingsDirty: false, mainView: "inventory", sort: "tag", direction: 1, archiveView: false, currentAnimalId: null, detailView: "summary", detailShowEmpty: false, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyUpdating: new Set(), animalFormSnapshot: "", calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
+  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), fieldConfig: null, fieldConfigRecord: null, fieldSettingsDirty: false, mainView: "inventory", sort: "tag", direction: 1, archiveView: false, currentAnimalId: null, detailView: "summary", detailShowEmpty: false, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyWeightWarning: null, journeyUpdating: new Set(), animalFormSnapshot: "", animalFormStep: 0, animalFormMode: "create", animalFormWeightWarning: null, recordFormWeightWarning: null, quickCaptureSeed: null, pendingUndo: null, undoTimer: null, toastAction: null, scannerStream: null, scannerFrame: null, calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
   let cloud;
   let currentUser;
@@ -2546,7 +2546,7 @@
                   ? `<span class="journey-weight-readonly">${escapeHtml(animal.weight)} kg</span>` : ""}
               ${journey.type === "weight" && !finished && state.journeyWeightTargetId === animal.id
                 ? `<div class="journey-weight-editor">
-                    <label>Peso (kg)<input id="journey-weight-input" type="number" min="0" step="0.1" value="${animal.attended ? escapeHtml(animal.weight) : ""}" inputmode="decimal" aria-label="Peso en kilogramos"></label>
+                    <label>Peso (kg)<input id="journey-weight-input" type="number" min="0" step="0.1" value="${animal.attended ? escapeHtml(animal.weight) : ""}" inputmode="decimal" aria-label="Peso en kilogramos"><small id="journey-weight-feedback" class="field-help" aria-live="polite"></small></label>
                     <button class="button button-primary button-small" type="button" data-save-journey-weight="${escapeHtml(animal.id)}">Guardar</button>
                     <button class="button button-outline button-small" type="button" data-cancel-journey-weight>Cancelar</button>
                   </div>` : ""}
@@ -2569,6 +2569,7 @@
       nextSearch.focus();
       nextSearch.setSelectionRange(selectionStart, selectionStart);
     });
+    updateJourneyWeightFeedback();
   }
 
   async function toggleJourneyAnimal(animalId) {
@@ -2687,6 +2688,8 @@
       showToast("Escribe un peso válido mayor o igual a 0 kg.");
       return;
     }
+    if (state.journeyWeightWarning &&
+        !confirm(`${state.journeyWeightWarning}\n\n¿Guardar de todas formas?`)) return;
     const updatedAt = new Date().toISOString();
     const actor = journeyActor();
     const roster = journey.roster.map(item => item.id === animalId
@@ -2832,12 +2835,24 @@
     return ({ Vendido: "sold", Fallecido: "dead", Baja: "other", Otro: "other", Otros: "other", Desaparecido: "other" })[status] ||
       (state.fieldConfig?.lists?.status?.find(option => option.value === status)?.active === false ? "other" : "");
   }
-  function showToast(message) {
+  function showToast(message, action = null) {
     const toast = $("#toast");
-    toast.textContent = message;
+    toast.replaceChildren(document.createTextNode(message));
+    state.toastAction = action;
+    if (action) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "toast-action";
+      button.dataset.toastAction = "undo";
+      button.textContent = action.label;
+      toast.append(button);
+    }
     toast.classList.add("show");
     clearTimeout(state.toastTimer);
-    state.toastTimer = setTimeout(() => toast.classList.remove("show"), 2800);
+    state.toastTimer = setTimeout(() => {
+      toast.classList.remove("show");
+      state.toastAction = null;
+    }, action ? 6000 : 2800);
   }
   function today() {
     const date = new Date();
@@ -2900,45 +2915,109 @@
     return options;
   }
 
+  function recentListValues(fieldId, currentValue = "", limit = 6) {
+    const seen = new Set();
+    const values = [];
+    state.animals
+      .filter(animal => typeof animal[fieldId] === "string" && animal[fieldId].trim())
+      .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""))
+      .forEach(animal => {
+        const value = animal[fieldId].trim();
+        if (seen.has(value)) return;
+        seen.add(value);
+        values.push(value);
+      });
+    if (currentValue && !seen.has(currentValue)) values.unshift(currentValue);
+    return values.slice(0, limit);
+  }
+
   function animalFormControl(field, animal) {
     const config = animalFieldConfig(field.id);
     const currentValue = animal?.[field.id] ?? "";
     const required = config.required ? "required" : "";
     const base = `data-animal-field="${field.id}" name="${field.id}"`;
+    const selected = currentValue || "";
     if (field.type === "automatic") return "";
     if (field.type === "derived") {
       const parts = estimatedAgeInputParts(animal?.estimatedAge);
       return `<div class="animal-age-inputs"><label>${escapeHtml(config.label)} · años<input id="animal-age-years" data-animal-field="${field.id}" type="number" min="0" step="1" value="${parts.years}" placeholder="Años" ${required}></label>
         <label>Meses<input id="animal-age-months" data-animal-field="${field.id}" type="number" min="0" max="11" step="1" value="${parts.months}" placeholder="0–11" ${required}></label></div>`;
     }
-    if (field.id === "tag") return `<input id="animal-tag" ${base} maxlength="80" value="${escapeHtml(currentValue)}" placeholder="Ej. 00125" ${required}>`;
-    if (field.id === "name") return `<input id="animal-name" ${base} maxlength="100" value="${escapeHtml(currentValue)}" placeholder="Ej. Luna" ${required}>`;
+    if (field.id === "tag") return `<div class="tag-capture"><input id="animal-tag" ${base} maxlength="80" value="${escapeHtml(selected)}" placeholder="Ej. 00125" ${required} autocomplete="off"><button class="button button-outline button-small" type="button" id="animal-tag-scan">Escanear</button></div>`;
+    if (field.id === "name") return `<input id="animal-name" ${base} maxlength="100" value="${escapeHtml(selected)}" placeholder="Ej. Luna" ${required}>`;
+
     if (field.id === "sex") {
-      return `<select id="animal-sex" ${base} ${required}><option value="">No registrado</option>${["Hembra", "Macho"].map(value => `<option value="${value}" ${currentValue === value ? "selected" : ""}>${value}</option>`).join("")}</select>`;
+      const options = ["Hembra", "Macho"];
+      return `<div class="chip-select" data-chip-select="sex"><select id="animal-sex" class="chip-select-native" ${base} ${required}>
+        <option value="">No registrado</option>${options.map(value => `<option value="${value}" ${selected === value ? "selected" : ""}>${value}</option>`).join("")}
+      </select>
+      <div class="chip-options" role="group" aria-label="Sexo">${options.map(value =>
+        `<button class="chip-option ${selected === value ? "selected" : ""}" type="button" data-chip-option="sex" data-chip-value="${escapeHtml(value)}">${escapeHtml(value)}</button>`).join("")}
+      </div></div>`;
     }
+
     if (field.id === "status" || field.type === "list" || field.type === "select") {
-      const options = field.list ? listOptions(field.list, currentValue) : (field.options || []).map(value => ({ value, label: value }));
-      const placeholder = field.id === "status" ? "" : `<option value="">Sin registrar</option>`;
-      return `<select id="${field.id === "status" ? "animal-status" : `animal-field-${field.id}`}" ${base} ${required}>${placeholder}${options.map(option =>
-        `<option value="${escapeHtml(option.value)}" ${currentValue === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`
+      const options = field.list ? listOptions(field.list, selected) : (field.options || []).map(value => ({ value, label: value }));
+      const selectId = field.id === "status" ? "animal-status" : `animal-field-${field.id}`;
+      const withPlaceholder = field.id === "status"
+        ? options
+        : [{ value: "", label: "Sin registrar" }, ...options];
+      const selectedValue = field.id === "status"
+        ? (selected || options[0]?.value || "")
+        : selected;
+      const normalized = withPlaceholder.map(option => ({
+        value: String(option.value ?? ""),
+        label: option.label ?? option.value ?? "Sin registrar"
+      }));
+
+      if (["status", "breed", "lot", "paddock"].includes(field.id)) {
+        const preferredValues = field.id === "status"
+          ? normalized.filter(option => option.value).map(option => option.value)
+          : recentListValues(field.id, selectedValue);
+        const preferredOptions = preferredValues
+          .map(value => normalized.find(option => option.value === value) || { value, label: value })
+          .filter((option, index, array) => option.value && array.findIndex(item => item.value === option.value) === index)
+          .slice(0, 6);
+        const fallbackOptions = normalized.filter(option => option.value &&
+          !preferredOptions.some(preferred => preferred.value === option.value)).slice(0, 3);
+        const chips = [...preferredOptions, ...fallbackOptions]
+          .filter((option, index, array) => array.findIndex(item => item.value === option.value) === index);
+        return `<div class="chip-select" data-chip-select="${field.id}">
+          <select id="${selectId}" class="chip-select-native" ${base} ${required}>${normalized.map(option =>
+            `<option value="${escapeHtml(option.value)}" ${selectedValue === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select>
+          <div class="chip-options" role="group" aria-label="${escapeHtml(config.label)}">${chips.map(option =>
+            `<button class="chip-option ${selectedValue === option.value ? "selected" : ""}" type="button" data-chip-option="${field.id}" data-chip-value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</button>`).join("")}
+            ${["breed", "lot", "paddock"].includes(field.id)
+    ? `<button class="chip-option add" type="button" data-chip-create="${field.id}">+ Nueva</button>`
+    : ""}
+          </div>
+        </div>`;
+      }
+
+      return `<select id="${selectId}" ${base} ${required}>${normalized.map(option =>
+        `<option value="${escapeHtml(option.value)}" ${selectedValue === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`
       ).join("")}</select>`;
     }
+
     if (field.type === "animal") {
       const candidates = state.animals.filter(item => item.id !== animal?.id);
       return `<select id="animal-field-${field.id}" ${base} ${required}><option value="">Sin registrar</option>${candidates.map(item =>
-        `<option value="${escapeHtml(item.id)}" ${currentValue === item.id ? "selected" : ""}>${escapeHtml(item.name || item.tag || item.internalId || "Animal")}${item.tag ? ` · ${escapeHtml(item.tag)}` : ""}</option>`
+        `<option value="${escapeHtml(item.id)}" ${selected === item.id ? "selected" : ""}>${escapeHtml(item.name || item.tag || item.internalId || "Animal")}${item.tag ? ` · ${escapeHtml(item.tag)}` : ""}</option>`
       ).join("")}</select>`;
     }
     if (field.type === "boolean") {
-      return `<select id="animal-field-${field.id}" ${base} ${required}><option value="">Sin registrar</option><option value="true" ${currentValue === true || currentValue === "true" ? "selected" : ""}>Sí</option><option value="false" ${currentValue === false || currentValue === "false" ? "selected" : ""}>No</option></select>`;
+      return `<select id="animal-field-${field.id}" ${base} ${required}><option value="">Sin registrar</option><option value="true" ${selected === true || selected === "true" ? "selected" : ""}>Sí</option><option value="false" ${selected === false || selected === "false" ? "selected" : ""}>No</option></select>`;
     }
     if (field.type === "textarea") {
-      return `<textarea id="animal-field-${field.id}" ${base} rows="3" maxlength="2000" ${required}>${escapeHtml(currentValue)}</textarea>`;
+      const placeholder = ["generalNotes", "exitNotes"].includes(field.id)
+        ? "Usa el dictado del teclado para hablar"
+        : "";
+      return `<textarea id="animal-field-${field.id}" ${base} rows="3" maxlength="2000" placeholder="${placeholder}" ${required}>${escapeHtml(selected)}</textarea>`;
     }
     if (field.type === "date") {
-      return `<input id="${field.id === "birthDate" ? "animal-birth" : `animal-field-${field.id}`}" ${base} type="date" value="${escapeHtml(currentValue)}" ${required}>`;
+      return `<input id="${field.id === "birthDate" ? "animal-birth" : `animal-field-${field.id}`}" ${base} type="date" inputmode="numeric" value="${escapeHtml(selected)}" ${required}>`;
     }
-    return `<input id="${field.id === "color" ? "animal-color" : `animal-field-${field.id}`}" ${base} type="text" maxlength="200" value="${escapeHtml(currentValue)}" ${required}>`;
+    return `<input id="${field.id === "color" ? "animal-color" : `animal-field-${field.id}`}" ${base} type="text" maxlength="200" value="${escapeHtml(selected)}" ${required}>`;
   }
 
   function renderAnimalFormFields(animal) {
@@ -2948,6 +3027,7 @@
       <span data-config-label="${field.id}">${escapeHtml(animalFieldConfig(field.id).label)}</span>
       ${field.requiredAllowed ? `<span class="optional" data-config-required-label="${field.id}">${animalFieldConfig(field.id).required ? "Obligatorio" : "Opcional"}</span>` : ""}
       ${animalFormControl(field, animal)}
+      <small class="field-error" hidden></small>
     </label>`;
     const basic = formFields.filter(field => animalFieldConfig(field.id).formLevel === "basic")
       .map(makeLabel).join("");
@@ -2960,16 +3040,70 @@
     updateConditionalAnimalFields();
   }
 
-  function updateConditionalAnimalFields() {
-    const inactive = !isActiveAnimal({ status: $("#animal-status")?.value || "Activo" });
-    ["exitReason", "exitNotes"].forEach(fieldId => {
-      const input = $(`[data-animal-field="${fieldId}"]`, $("#animal-form"));
-      const label = input?.closest("label");
-      if (!label) return;
-      label.hidden = !inactive || !animalFieldActive(fieldId) || !animalFieldConfig(fieldId).form;
-      if (fieldId === "exitReason") input.required = inactive &&
-        animalFieldActive(fieldId) && animalFieldConfig(fieldId).form && animalFieldConfig(fieldId).required;
+  function setAnimalFieldVisibility(fieldId, visible) {
+    const form = $("#animal-form");
+    const wrapper = $(`[data-config-field="${fieldId}"][data-config-surface="form"]`, form);
+    if (!wrapper) return;
+    const config = animalFieldConfig(fieldId);
+    const allowed = visible && animalFieldActive(fieldId) && config.form;
+    wrapper.hidden = !allowed;
+    $$(`[data-animal-field="${fieldId}"]`, wrapper).forEach(control => {
+      control.required = allowed && config.required;
     });
+  }
+
+  function updateConditionalAnimalFields() {
+    const form = $("#animal-form");
+    const statusValue = $("#animal-status")?.value || "Activo";
+    const inactive = !isActiveAnimal({ status: statusValue });
+    const originType = $('[data-animal-field="originType"]', form)?.value || "";
+    const birthInput = $("#animal-birth");
+    const hasBirthDate = Boolean(birthInput?.value);
+
+    ["exitReason", "exitNotes"].forEach(fieldId => {
+      setAnimalFieldVisibility(fieldId, inactive);
+      if (fieldId === "exitReason") {
+        const input = $(`[data-animal-field="${fieldId}"]`, form);
+        if (input) {
+          const config = animalFieldConfig(fieldId);
+          input.required = inactive && animalFieldActive(fieldId) && config.form && config.required;
+        }
+      }
+    });
+
+    ["lot", "paddock", "pen", "locationSince", "responsible"].forEach(fieldId => {
+      setAnimalFieldVisibility(fieldId, !inactive);
+    });
+
+    setAnimalFieldVisibility("originName", originType === "Compra" || !originType);
+    setAnimalFieldVisibility("entryDate", originType === "Compra" || !originType);
+    setAnimalFieldVisibility("motherId", originType === "Nacimiento propio" || !originType);
+    setAnimalFieldVisibility("fatherId", originType === "Nacimiento propio" || !originType);
+
+    const estimatedAgeWrapper = $(`[data-config-field="estimatedAge"][data-config-surface="form"]`, form);
+    if (estimatedAgeWrapper) {
+      estimatedAgeWrapper.hidden = hasBirthDate || !animalFieldActive("estimatedAge") ||
+        !animalFieldConfig("estimatedAge").form;
+    }
+
+    const birthWrapper = $(`[data-config-field="birthDate"][data-config-surface="form"]`, form);
+    if (birthWrapper) {
+      let hint = $("#animal-birth-age-live", birthWrapper);
+      if (!hint) {
+        hint = document.createElement("small");
+        hint.id = "animal-birth-age-live";
+        hint.className = "field-help";
+        hint.setAttribute("aria-live", "polite");
+        birthWrapper.appendChild(hint);
+      }
+      if (hasBirthDate) {
+        hint.textContent = `Edad calculada hoy: ${calculateAge(birthInput.value)}.`;
+        hint.classList.remove("warning");
+      } else {
+        hint.textContent = "Si no conoces la fecha exacta, usa años y meses en edad aproximada.";
+        hint.classList.add("warning");
+      }
+    }
   }
 
   function animalFieldDisplayValue(field, animal) {
@@ -3004,21 +3138,369 @@
       }).join("");
   }
 
-  function openAnimalForm(animal = null) {
+  function animalFormDraftKey() {
+    return `ganadero:animal-draft:${state.ranchOwnerId || "local"}`;
+  }
+
+  function isAnimalFormMobile() {
+    return window.matchMedia("(max-width: 780px)").matches;
+  }
+
+  function nextTagValue(tag) {
+    if (!tag) return "";
+    const match = String(tag).match(/(\d+)(?!.*\d)/);
+    if (!match) return String(tag);
+    const digits = match[1];
+    let carry = 1;
+    const incremented = [...digits].reverse().map(digit => {
+      const value = Number(digit) + carry;
+      carry = value > 9 ? 1 : 0;
+      return String(value % 10);
+    }).reverse().join("");
+    const number = `${carry ? "1" : ""}${incremented}`.padStart(digits.length, "0");
+    return String(tag).slice(0, match.index) + number + String(tag).slice(match.index + match[1].length);
+  }
+
+  function quickCaptureSeedFromAnimal(animal) {
+    if (!animal) return null;
+    return {
+      tag: nextTagValue(animal.tag || ""),
+      breed: animal.breed || "",
+      lot: animal.lot || "",
+      paddock: animal.paddock || "",
+      entryDate: animal.entryDate || today()
+    };
+  }
+
+  function restoreAnimalFormErrors() {
+    const summary = $("#animal-form-error-summary");
+    summary.hidden = true;
+    summary.textContent = "";
+    $$(".field-error", $("#animal-form")).forEach(error => {
+      error.hidden = true;
+      error.textContent = "";
+    });
+    $$("#animal-form label.is-invalid").forEach(label => label.classList.remove("is-invalid"));
+  }
+
+  function saveAnimalDraft() {
+    if (state.animalFormMode !== "create" || !$("#animal-dialog")?.open) return;
+    const form = $("#animal-form");
+    const payload = {
+      controls: {},
+      updatedAt: new Date().toISOString()
+    };
+    [...form.elements]
+      .filter(control => control.id && !["button", "submit", "file", "hidden"].includes(control.type))
+      .forEach(control => {
+        payload.controls[control.id] = control.value;
+      });
+    try {
+      localStorage.setItem(animalFormDraftKey(), JSON.stringify(payload));
+    } catch (error) {
+      setAnimalFormError(`No se pudo guardar el borrador: ${error.message}`);
+    }
+  }
+
+  function applyFormValuesById(values = {}, keepExisting = false) {
+    Object.entries(values).forEach(([id, value]) => {
+      const control = $(`#${id}`);
+      if (!control || ["button", "submit", "file", "hidden"].includes(control.type)) return;
+      if (keepExisting && control.value) return;
+      control.value = value;
+    });
+  }
+
+  function loadAnimalDraft() {
+    if (state.animalFormMode !== "create") return false;
+    try {
+      const payload = JSON.parse(localStorage.getItem(animalFormDraftKey()) || "null");
+      if (!payload?.controls || typeof payload.controls !== "object") return false;
+      applyFormValuesById(payload.controls, true);
+      return true;
+    } catch (error) {
+      setAnimalFormError(`No se pudo recuperar el borrador: ${error.message}`);
+      return false;
+    }
+  }
+
+  function clearAnimalDraft() {
+    try {
+      localStorage.removeItem(animalFormDraftKey());
+    } catch (error) {
+      showToast(`No se pudo limpiar el borrador guardado: ${error.message}`);
+    }
+  }
+
+  function resetAnimalStepBaseVisibility() {
+    ["identification", "additional", "records"].forEach(stepId => {
+      const element = $(`[data-animal-step="${stepId}"]`, $("#animal-form"));
+      if (element) element.dataset.baseHidden = element.hidden ? "1" : "0";
+    });
+  }
+
+  function animalStepSequence() {
+    return [
+      { id: "identification", label: "Identificación", element: $("[data-animal-step=\"identification\"]", $("#animal-form")) },
+      { id: "additional", label: "Datos adicionales", element: $("[data-animal-step=\"additional\"]", $("#animal-form")) },
+      { id: "records", label: "Registros iniciales", element: $("[data-animal-step=\"records\"]", $("#animal-form")) }
+    ].filter(step => step.element && step.element.dataset.baseHidden !== "1");
+  }
+
+  function updateAnimalFormStepper() {
+    const stepper = $("#animal-form-stepper");
+    const actions = $("#animal-step-actions");
+    const steps = animalStepSequence();
+    if (!steps.length) {
+      stepper.hidden = true;
+      actions.hidden = true;
+      return;
+    }
+    const mobile = isAnimalFormMobile();
+    if (!mobile) {
+      steps.forEach(step => {
+        step.element.hidden = step.element.dataset.baseHidden === "1";
+        if (step.element.matches("details")) {
+          step.element.open = false;
+          step.element.querySelector("summary").textContent = "Mostrar datos adicionales";
+        }
+      });
+      stepper.hidden = true;
+      actions.hidden = true;
+      return;
+    }
+    state.animalFormStep = Math.max(0, Math.min(state.animalFormStep, steps.length - 1));
+    steps.forEach((step, index) => {
+      step.element.hidden = index !== state.animalFormStep;
+      if (step.element.matches("details")) {
+        step.element.open = index === state.animalFormStep;
+        step.element.querySelector("summary").textContent = index === state.animalFormStep
+          ? "Datos adicionales"
+          : "Mostrar datos adicionales";
+      }
+    });
+    stepper.hidden = false;
+    actions.hidden = false;
+    $("#animal-form-stepper-fill").style.width = `${((state.animalFormStep + 1) / steps.length) * 100}%`;
+    $("#animal-form-stepper-label").textContent = `Paso ${state.animalFormStep + 1} de ${steps.length} · ${steps[state.animalFormStep].label}`;
+    $("#animal-step-prev").disabled = state.animalFormStep === 0;
+    $("#animal-step-next").textContent = state.animalFormStep === steps.length - 1 ? "Guardar" : "Siguiente";
+  }
+
+  function setAnimalFormStep(nextStep) {
+    state.animalFormStep = nextStep;
+    updateAnimalFormStepper();
+  }
+
+  function focusAnimalFormStep() {
+    const steps = animalStepSequence();
+    const current = steps[state.animalFormStep];
+    setTimeout(() => current?.element.querySelector(
+      'input:not([type="hidden"]), select, textarea, button'
+    )?.focus(), 0);
+  }
+
+  function revealAnimalControl(control) {
+    const section = control.closest("[data-animal-step]");
+    const steps = animalStepSequence();
+    const stepIndex = steps.findIndex(step => step.element === section);
+    if (stepIndex >= 0 && isAnimalFormMobile()) setAnimalFormStep(stepIndex);
+    if (section?.matches("details")) section.open = true;
+    const visibleControl = control.closest(".chip-select")?.querySelector(".chip-option") || control;
+    visibleControl.focus();
+  }
+
+  function setAnimalFormError(message, control = null) {
+    const summary = $("#animal-form-error-summary");
+    summary.textContent = message;
+    summary.hidden = !message;
+    if (control) {
+      setFieldError(control, message);
+      revealAnimalControl(control);
+    }
+  }
+
+  function validateAnimalControls(controls) {
+    const form = $("#animal-form");
+    $$(".field-error", form).forEach(error => {
+      error.hidden = true;
+      error.textContent = "";
+    });
+    $$("#animal-form label.is-invalid").forEach(label => label.classList.remove("is-invalid"));
+    const invalidControl = controls.find(control => control.willValidate && !control.checkValidity());
+    if (!invalidControl) {
+      $("#animal-form-error-summary").hidden = true;
+      return true;
+    }
+    setAnimalFormError(validationMessageFor(invalidControl), invalidControl);
+    return false;
+  }
+
+  function validateAnimalTag(input) {
+    if (!input) return true;
+    const tag = input.value.trim();
+    const animalId = $("#animal-id").value;
+    const duplicate = tag && state.animals.some(animal =>
+      animal.id !== animalId && animal.tag?.toLocaleLowerCase() === tag.toLocaleLowerCase());
+    if (duplicate) {
+      setAnimalFormError("Ya existe un animal con este número de arete.", input);
+      return false;
+    }
+    clearFieldError(input);
+    if (!$("#animal-form").querySelector(".field-error:not([hidden])")) {
+      $("#animal-form-error-summary").hidden = true;
+      $("#animal-form-error-summary").textContent = "";
+    }
+    return true;
+  }
+
+  function clearAnimalFormError(control) {
+    clearFieldError(control);
+    if (!$("#animal-form").querySelector(".field-error:not([hidden])")) {
+      $("#animal-form-error-summary").hidden = true;
+      $("#animal-form-error-summary").textContent = "";
+    }
+  }
+
+  function focusAnimalTag() {
+    setTimeout(() => {
+      const tag = $("#animal-tag");
+      if (tag) tag.focus();
+    }, 0);
+  }
+
+  async function startTagScanner() {
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      showToast("El escaneo requiere abrir Ganadero en una conexión segura y permitir el acceso a la cámara.");
+      return;
+    }
+    if (typeof window.BarcodeDetector !== "function") {
+      showToast("Este navegador no admite el escaneo de códigos. Captura el arete manualmente.");
+      return;
+    }
+    if (typeof window.BarcodeDetector.getSupportedFormats !== "function") {
+      showToast("Este navegador no informa los formatos de código disponibles. Captura el arete manualmente.");
+      return;
+    }
+    let supported;
+    try {
+      supported = await window.BarcodeDetector.getSupportedFormats();
+    } catch (error) {
+      showToast(`No se pudo preparar el escáner: ${error.message}`);
+      return;
+    }
+    const formats = ["code_128", "code_39", "codabar", "ean_13", "ean_8", "itf", "upc_a", "upc_e", "qr_code", "data_matrix", "pdf417", "aztec"]
+      .filter(format => supported.includes(format));
+    if (!formats.length) {
+      showToast("Este navegador no reconoce formatos de código compatibles. Captura el arete manualmente.");
+      return;
+    }
+    const dialog = $("#tag-scanner-dialog");
+    const video = $("#tag-scanner-video");
+    const status = $("#tag-scanner-status");
+    dialog.showModal();
+    status.textContent = "Solicitando acceso a la cámara…";
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: "environment" } }
+      });
+      if (!dialog.open) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      state.scannerStream = stream;
+      video.srcObject = state.scannerStream;
+      await video.play();
+      const detector = new window.BarcodeDetector({ formats });
+      status.textContent = "Centra el código del arete dentro de la imagen.";
+      const scan = async () => {
+        if (!state.scannerStream || !dialog.open) return;
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          try {
+            const codes = await detector.detect(video);
+            const value = codes.find(code => code.rawValue?.trim())?.rawValue?.trim();
+            if (value) {
+              const tag = $("#animal-tag");
+              tag.value = value;
+              tag.dispatchEvent(new Event("input", { bubbles: true }));
+              dialog.close();
+              focusAnimalTag();
+              showToast("Arete escaneado.");
+              return;
+            }
+          } catch (error) {
+            stopTagScanner();
+            if (dialog.open) dialog.close();
+            showToast(`No se pudo leer el código: ${error.message}`);
+            return;
+          }
+        }
+        state.scannerFrame = requestAnimationFrame(scan);
+      };
+      state.scannerFrame = requestAnimationFrame(scan);
+    } catch (error) {
+      stopTagScanner();
+      if (dialog.open) dialog.close();
+      showToast(`No se pudo iniciar la cámara: ${error.message}`);
+    }
+  }
+
+  function stopTagScanner() {
+    if (state.scannerFrame !== null) cancelAnimationFrame(state.scannerFrame);
+    state.scannerFrame = null;
+    state.scannerStream?.getTracks().forEach(track => track.stop());
+    state.scannerStream = null;
+    const video = $("#tag-scanner-video");
+    if (video) video.srcObject = null;
+  }
+
+  function openAnimalForm(animal = null, options = {}) {
     if (!canManageRanch()) {
       showToast("Solo el propietario o administrador puede crear o editar fichas de animales.");
       return;
     }
     const form = $("#animal-form");
+    const isEdit = Boolean(animal);
+    const prefill = options.prefill || null;
     form.reset();
     renderAnimalFormFields(animal);
+    restoreAnimalFormErrors();
+    $("#animal-undo-feedback").hidden = true;
     $("#animal-id").value = animal?.id || "";
-    $("#animal-dialog-title").textContent = animal ? "Editar animal" : "Añadir animal";
-    form.querySelector('[type="submit"]').textContent = animal ? "Guardar cambios" : "Guardar animal";
-    $("#initial-records").hidden = Boolean(animal);
+    $("#animal-dialog-title").textContent = isEdit ? "Editar animal" : "Añadir animal";
+    $("#animal-save").textContent = isEdit ? "Guardar cambios" : "Guardar animal";
+    $("#animal-save-and-add").hidden = isEdit;
+    $("#initial-records").hidden = isEdit;
+    state.animalFormMode = isEdit ? "edit" : "create";
+    state.animalFormStep = 0;
+    state.animalFormWeightWarning = null;
+    state.quickCaptureSeed = prefill || null;
+    $("#animal-undo-last").hidden = !state.pendingUndo;
+
+    if (prefill && !isEdit) {
+      Object.entries(prefill).forEach(([fieldId, value]) => {
+        const input = $(`[data-animal-field="${fieldId}"]`, form);
+        if (input) input.value = value;
+      });
+    }
+
+    if (!isEdit && !prefill) {
+      const restored = loadAnimalDraft();
+      if (restored) showToast("Se recuperó el borrador del formulario.");
+    }
+
     applyAnimalFieldVisibility(form);
+    updateConditionalAnimalFields();
+    attachDateShortcuts(form);
+    refreshChipSelections();
+    renderInitialPhotosPreview();
+    resetAnimalStepBaseVisibility();
+    updateAnimalFormStepper();
     state.animalFormSnapshot = animalFormValues();
     $("#animal-dialog").showModal();
+    focusAnimalTag();
+    updateInitialWeightFeedback();
   }
 
   function animalFormValues() {
@@ -3028,9 +3510,415 @@
   }
 
   function requestClose(dialogId) {
-    if (dialogId === "animal-dialog" && animalFormValues() !== state.animalFormSnapshot &&
-        !confirm("Hay cambios sin guardar. ¿Salir sin guardarlos?")) return;
+    const hasAnimalChanges = dialogId === "animal-dialog" && animalFormValues() !== state.animalFormSnapshot;
+    if (hasAnimalChanges && !confirm("Hay cambios sin guardar. ¿Salir sin guardarlos?")) return;
+    if (hasAnimalChanges) saveAnimalDraft();
     $("#" + dialogId).close();
+  }
+
+  function validationMessageFor(control) {
+    if (control.validity.valueMissing) return "Este campo es obligatorio.";
+    if (control.validity.badInput || control.validity.typeMismatch) return "El formato capturado no es válido.";
+    if (control.validity.rangeOverflow || control.validity.rangeUnderflow) return "El valor está fuera del rango permitido.";
+    if (control.validity.stepMismatch) return "Revisa el valor capturado.";
+    return control.validationMessage || "Revisa este campo.";
+  }
+
+  function setFieldError(control, message) {
+    const label = control.closest("label") || control.closest("[data-config-field]");
+    if (!label) return;
+    label.classList.add("is-invalid");
+    let error = $(".field-error", label);
+    if (!error) {
+      error = document.createElement("small");
+      error.className = "field-error";
+      label.appendChild(error);
+    }
+    error.hidden = false;
+    error.textContent = message;
+  }
+
+  function clearFieldError(control) {
+    const label = control.closest("label") || control.closest("[data-config-field]");
+    if (!label) return;
+    label.classList.remove("is-invalid");
+    const error = $(".field-error", label);
+    if (error) {
+      error.hidden = true;
+      error.textContent = "";
+    }
+  }
+
+  function refreshChipSelections(fieldId = null) {
+    const scope = $("#animal-form");
+    const wrappers = fieldId
+      ? $$(`[data-chip-select="${fieldId}"]`, scope)
+      : $$("[data-chip-select]", scope);
+    wrappers.forEach(wrapper => {
+      const key = wrapper.dataset.chipSelect;
+      const select = $(`[data-animal-field="${key}"]`, wrapper) || $(`[data-animal-field="${key}"]`, scope);
+      if (!select) return;
+      $$(`[data-chip-option="${key}"]`, wrapper).forEach(button => {
+        const selected = button.dataset.chipValue === select.value;
+        button.classList.toggle("selected", selected);
+        button.setAttribute("aria-pressed", selected ? "true" : "false");
+      });
+    });
+  }
+
+  function setChipFieldValue(fieldId, value) {
+    const form = $("#animal-form");
+    const select = $(`[data-animal-field="${fieldId}"]`, form);
+    if (!select) return;
+    if (![...select.options].some(option => option.value === value)) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      select.appendChild(option);
+    }
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    select.dispatchEvent(new Event("input", { bubbles: true }));
+    refreshChipSelections(fieldId);
+  }
+
+  async function createAnimalListOption(fieldId) {
+    const list = ANIMAL_LISTS.find(item => item.id === fieldId);
+    if (!list || !["breed", "lot", "paddock"].includes(fieldId)) return;
+    if (!canManageRanch()) {
+      showToast("Solo el propietario o administrador puede añadir opciones a estas listas.");
+      return;
+    }
+    const label = prompt(`Nombre de la nueva opción para ${list.label.toLocaleLowerCase("es-MX")}:`)?.trim();
+    if (!label) return;
+    const currentOptions = state.fieldConfig?.lists?.[fieldId] || [];
+    const duplicate = currentOptions.find(option =>
+      option.label.toLocaleLowerCase("es-MX") === label.toLocaleLowerCase("es-MX"));
+    if (duplicate) {
+      setChipFieldValue(fieldId, duplicate.value);
+      return;
+    }
+    const option = { value: `${fieldId}-${newId()}`, label, enabled: true };
+    const config = normalizeAnimalFieldConfig({
+      ...state.fieldConfig,
+      lists: { ...state.fieldConfig.lists, [fieldId]: [...currentOptions, option] }
+    });
+    try {
+      const previous = await getOne("ranchSettings", "animal-fields");
+      const record = {
+        id: "animal-fields",
+        ownerId: state.ranchOwnerId,
+        config,
+        revision: (previous?.revision || 0) + 1,
+        baseRevision: previous?.baseRevision || 0,
+        dirty: true,
+        updatedAt: new Date().toISOString()
+      };
+      await put("ranchSettings", record);
+      state.fieldConfigRecord = record;
+      state.fieldConfig = config;
+      const select = $(`[data-animal-field="${fieldId}"]`, $("#animal-form"));
+      const nativeOption = document.createElement("option");
+      nativeOption.value = option.value;
+      nativeOption.textContent = option.label;
+      select.append(nativeOption);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "chip-option";
+      button.dataset.chipOption = fieldId;
+      button.dataset.chipValue = option.value;
+      button.textContent = option.label;
+      const createButton = $(`[data-chip-create="${fieldId}"]`, $("#animal-form"));
+      createButton.before(button);
+      setChipFieldValue(fieldId, option.value);
+      saveAnimalDraft();
+      scheduleSync();
+    } catch (error) {
+      showToast(`No se pudo añadir la opción: ${error.message}`);
+    }
+  }
+
+  function attachDateShortcuts(root = document) {
+    $$('input[type="date"]', root).forEach(input => {
+      if (!input.id || input.dataset.shortcutsReady === "1") return;
+      const label = input.closest("label");
+      if (!label) return;
+      const row = document.createElement("div");
+      row.className = "date-shortcuts";
+      row.innerHTML = `<button type="button" data-date-shortcut="today" data-date-target="${input.id}">Hoy</button>
+        <button type="button" data-date-shortcut="yesterday" data-date-target="${input.id}">Ayer</button>`;
+      label.appendChild(row);
+      input.dataset.shortcutsReady = "1";
+    });
+  }
+
+  function monthsBetween(dateValue, compare = today()) {
+    if (!isDateOnly(dateValue) || !isDateOnly(compare)) return null;
+    const left = new Date(`${dateValue}T12:00:00`);
+    const right = new Date(`${compare}T12:00:00`);
+    if (Number.isNaN(left.getTime()) || Number.isNaN(right.getTime()) || left > right) return null;
+    let months = (right.getFullYear() - left.getFullYear()) * 12 + right.getMonth() - left.getMonth();
+    if (right.getDate() < left.getDate()) months -= 1;
+    return Math.max(0, months);
+  }
+
+  function ageMonthsFromAnimalForm() {
+    const birthDate = $("#animal-birth")?.value;
+    const fromBirth = birthDate ? monthsBetween(birthDate) : null;
+    if (fromBirth !== null) return fromBirth;
+    const yearsValue = $("#animal-age-years")?.value.trim() || "";
+    const monthsValue = $("#animal-age-months")?.value.trim() || "";
+    if (!yearsValue && !monthsValue) return null;
+    const years = yearsValue ? Number(yearsValue) : 0;
+    const months = monthsValue ? Number(monthsValue) : 0;
+    if (!Number.isFinite(years) || !Number.isFinite(months) || years < 0 || months < 0) return null;
+    return Math.round(years * 12 + months);
+  }
+
+  function estimateWeightRangeForAge(ageMonths) {
+    if (!Number.isFinite(ageMonths)) return null;
+    const sample = state.animals
+      .map(animal => {
+        const months = animal.birthDate
+          ? monthsBetween(animal.birthDate)
+          : estimatedAgeMonths(animal.estimatedAge);
+        const latest = eventFor(animal.id, "weight");
+        const weight = Number(latest?.weight);
+        if (!Number.isFinite(months) || !Number.isFinite(weight) || weight < 0) return null;
+        return { months, weight };
+      })
+      .filter(Boolean)
+      .filter(item => Math.abs(item.months - ageMonths) <= 3)
+      .map(item => item.weight)
+      .sort((a, b) => a - b);
+    if (sample.length < 4) return null;
+    const q1 = sample[Math.floor((sample.length - 1) * 0.25)];
+    const q3 = sample[Math.floor((sample.length - 1) * 0.75)];
+    return {
+      min: Math.max(0, Number((q1 - 20).toFixed(1))),
+      max: Number((q3 + 20).toFixed(1)),
+      count: sample.length
+    };
+  }
+
+  function updateInitialWeightFeedback() {
+    const feedback = $("#initial-weight-feedback");
+    const weightInput = $("#initial-weight");
+    if (!feedback || !weightInput || state.animalFormMode !== "create") return;
+    const weight = Number(weightInput.value);
+    feedback.textContent = "";
+    feedback.classList.remove("warning", "success");
+    state.animalFormWeightWarning = null;
+    if (!Number.isFinite(weight) || weight <= 0) return;
+    const ageMonths = ageMonthsFromAnimalForm();
+    const estimatedRange = Number.isFinite(ageMonths) ? estimateWeightRangeForAge(ageMonths) : null;
+    if (!estimatedRange) {
+      feedback.textContent = "Captura válida. No hay suficiente historial comparable para estimar un rango.";
+      return;
+    }
+    if (weight < estimatedRange.min || weight > estimatedRange.max) {
+      const ageLabel = ageMonths === 1 ? "1 mes" : `${ageMonths} meses`;
+      const rangeLabel = `${estimatedRange.min}–${estimatedRange.max} kg`;
+      const message = `${weight.toFixed(1)} kg para ~${ageLabel}. Rango reciente esperado: ${rangeLabel}.`;
+      feedback.textContent = `${message} ¿Seguro que deseas guardarlo?`;
+      feedback.classList.add("warning");
+      state.animalFormWeightWarning = { message };
+      return;
+    }
+    feedback.textContent = `Dentro del rango reciente (${estimatedRange.min}–${estimatedRange.max} kg).`;
+    feedback.classList.add("success");
+  }
+
+  function updateRecordWeightFeedback() {
+    const feedback = $("#record-weight-feedback");
+    if (!feedback) return;
+    const form = $("#record-form");
+    const weight = Number($('[name="weight"]', form)?.value);
+    const date = $('[name="date"]', form)?.value;
+    const animalId = $("#record-animal-id").value;
+    const animal = state.animals.find(item => item.id === animalId);
+    const parts = [];
+    feedback.classList.remove("warning", "success");
+    state.recordFormWeightWarning = null;
+    if (!Number.isFinite(weight) || weight <= 0) {
+      feedback.textContent = "";
+      return;
+    }
+
+    const history = weightHistory(animalId);
+    const previous = history[history.length - 1];
+    if (previous) {
+      const difference = weight - previous.weight;
+      const arrow = difference > 0 ? "↑" : difference < 0 ? "↓" : "→";
+      parts.push(`${arrow} ${Math.abs(difference).toFixed(1)} kg frente a la pesada anterior (${previous.weight.toFixed(1)} kg, ${formatDate(previous.date)}).`);
+      const elapsedDays = date && isDateOnly(date)
+        ? (Date.parse(`${date}T00:00:00Z`) - Date.parse(`${previous.date}T00:00:00Z`)) / 86400000
+        : 0;
+      if (elapsedDays > 0) {
+        parts.push(`GMD: ${(difference / elapsedDays).toFixed(2)} kg/día.`);
+      } else if (elapsedDays < 0) {
+        parts.push("La fecha es anterior a la última pesada; no se calcula GMD.");
+      } else {
+        parts.push("Usa una fecha posterior para calcular la GMD.");
+      }
+    } else {
+      parts.push("Primera pesada registrada; la GMD aparecerá con la siguiente.");
+    }
+
+    const ageMonths = animal?.birthDate
+      ? monthsBetween(animal.birthDate)
+      : estimatedAgeMonths(animal?.estimatedAge);
+    const estimatedRange = Number.isFinite(ageMonths) ? estimateWeightRangeForAge(ageMonths) : null;
+    if (estimatedRange && (weight < estimatedRange.min || weight > estimatedRange.max)) {
+      const ageLabel = ageMonths === 1 ? "1 mes" : `${ageMonths} meses`;
+      const warning = `${weight.toFixed(1)} kg para ~${ageLabel}; el rango reciente comparable es ${estimatedRange.min}–${estimatedRange.max} kg.`;
+      parts.push(`${warning} ¿Seguro?`);
+      feedback.classList.add("warning");
+      state.recordFormWeightWarning = warning;
+    } else {
+      feedback.classList.add("success");
+    }
+    feedback.textContent = parts.join(" ");
+  }
+
+  function updateJourneyWeightFeedback() {
+    const feedback = $("#journey-weight-feedback");
+    const input = $("#journey-weight-input");
+    const journey = state.journeys.find(item => item.id === state.currentJourneyId);
+    if (!feedback || !input || !journey) return;
+    const weight = Number(input.value);
+    const rosterAnimal = journey.roster.find(item => item.id === state.journeyWeightTargetId);
+    const animal = state.animals.find(item => item.id === state.journeyWeightTargetId);
+    const parts = [];
+    feedback.classList.remove("warning", "success");
+    state.journeyWeightWarning = null;
+    if (!Number.isFinite(weight) || weight <= 0) {
+      feedback.textContent = "";
+      return;
+    }
+
+    const previousPoints = weightHistory(state.journeyWeightTargetId)
+      .filter(point => point.date < journey.date);
+    const previous = previousPoints[previousPoints.length - 1];
+    if (previous) {
+      const difference = weight - previous.weight;
+      const arrow = difference > 0 ? "↑" : difference < 0 ? "↓" : "→";
+      parts.push(`${arrow} ${Math.abs(difference).toFixed(1)} kg frente a la pesada anterior (${previous.weight.toFixed(1)} kg).`);
+      const elapsedDays = (Date.parse(`${journey.date}T00:00:00Z`) -
+        Date.parse(`${previous.date}T00:00:00Z`)) / 86400000;
+      if (elapsedDays > 0) parts.push(`GMD: ${(difference / elapsedDays).toFixed(2)} kg/día.`);
+    } else {
+      parts.push(rosterAnimal?.attended ? "No hay una pesada anterior para comparar." : "Primera pesada registrada.");
+    }
+
+    const ageMonths = animal?.birthDate
+      ? monthsBetween(animal.birthDate)
+      : estimatedAgeMonths(animal?.estimatedAge);
+    const estimatedRange = Number.isFinite(ageMonths) ? estimateWeightRangeForAge(ageMonths) : null;
+    if (estimatedRange && (weight < estimatedRange.min || weight > estimatedRange.max)) {
+      const warning = `${weight.toFixed(1)} kg para ~${ageMonths} meses; el rango reciente comparable es ${estimatedRange.min}–${estimatedRange.max} kg.`;
+      parts.push(`${warning} ¿Seguro?`);
+      feedback.classList.add("warning");
+      state.journeyWeightWarning = warning;
+    } else {
+      feedback.classList.add("success");
+    }
+    feedback.textContent = parts.join(" ");
+  }
+
+  function renderInitialPhotosPreview() {
+    const input = $("#initial-photos");
+    const preview = $("#initial-photos-preview");
+    if (!input || !preview) return;
+    $$("img[data-object-url]", preview).forEach(image => URL.revokeObjectURL(image.dataset.objectUrl));
+    const files = [...input.files];
+    if (!files.length) {
+      preview.hidden = true;
+      preview.innerHTML = "";
+      return;
+    }
+    preview.hidden = false;
+    preview.innerHTML = files.map((file, index) => {
+      const url = URL.createObjectURL(file);
+      return `<div class="photo-preview-item"><img src="${url}" data-object-url="${url}" alt="Vista previa ${escapeHtml(file.name)}"><button type="button" data-remove-initial-photo="${index}" aria-label="Quitar fotografía">×</button></div>`;
+    }).join("");
+  }
+
+  function removeInitialPhoto(index) {
+    const input = $("#initial-photos");
+    if (!input || !Number.isInteger(index)) return;
+    if (typeof DataTransfer === "undefined") {
+      showToast("Este navegador no permite quitar una fotografía seleccionada hasta limpiar el campo completo.");
+      return;
+    }
+    const files = [...input.files];
+    const transfer = new DataTransfer();
+    files.forEach((file, fileIndex) => {
+      if (fileIndex !== index) transfer.items.add(file);
+    });
+    input.files = transfer.files;
+    renderInitialPhotosPreview();
+    saveAnimalDraft();
+  }
+
+  async function undoAnimalCreate(payload) {
+    if (!payload?.animalId) return;
+    await transaction(["animals", "events", "photos", "growthForecasts", "deletedAnimals"], "readwrite", tx => {
+      tx.objectStore("animals").delete(payload.animalId);
+      tx.objectStore("deletedAnimals").put({ id: payload.animalId, deletedAt: new Date().toISOString() });
+      (payload.eventIds || []).forEach(id => tx.objectStore("events").delete(id));
+      (payload.photoIds || []).forEach(id => tx.objectStore("photos").delete(id));
+      const forecastStore = tx.objectStore("growthForecasts");
+      const cursorRequest = forecastStore.index("animalId").openCursor(IDBKeyRange.only(payload.animalId));
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (cursor) {
+          cursor.delete();
+          cursor.continue();
+        }
+      };
+    });
+    await refresh();
+    scheduleSync();
+  }
+
+  async function undoMostRecentAnimalCreate(payload = state.pendingUndo) {
+    if (!payload) return;
+    await undoAnimalCreate(payload);
+    state.toastAction = null;
+    clearTimeout(state.toastTimer);
+    $("#toast").classList.remove("show");
+    if (state.pendingUndo?.animalId === payload.animalId) {
+      state.pendingUndo = null;
+      clearTimeout(state.undoTimer);
+      state.undoTimer = null;
+      $("#animal-undo-last").hidden = true;
+    }
+    showToast("Alta deshecha.");
+    if ($("#animal-dialog").open) {
+      $("#animal-undo-feedback").textContent = "Alta deshecha.";
+      $("#animal-undo-feedback").hidden = false;
+    }
+  }
+
+  function offerAnimalCreateUndo(payload, message) {
+    state.pendingUndo = payload;
+    $("#animal-undo-last").hidden = false;
+    if ($("#animal-dialog").open) {
+      $("#animal-undo-feedback").textContent = "Alta guardada. Puedes deshacer durante unos segundos.";
+      $("#animal-undo-feedback").hidden = false;
+    }
+    clearTimeout(state.undoTimer);
+    state.undoTimer = setTimeout(() => {
+      state.pendingUndo = null;
+      $("#animal-undo-last").hidden = true;
+      $("#animal-undo-feedback").hidden = true;
+      state.undoTimer = null;
+    }, 6000);
+    showToast(message, {
+      label: "Deshacer",
+      onClick: () => undoMostRecentAnimalCreate(payload)
+    });
   }
 
   function makeEvent(animalId, type, date, fields = {}) {
@@ -3079,26 +3967,13 @@
       showToast("Solo el propietario o administrador puede crear o editar fichas de animales.");
       return;
     }
-    const invalidControl = [...$("#animal-form").elements].find(control =>
-      control.willValidate && !control.checkValidity());
-    if (invalidControl) {
-      const advanced = invalidControl.closest("#animal-advanced-details");
-      if (advanced) advanced.open = true;
-      invalidControl.reportValidity();
-      return;
-    }
+    if (!validateAnimalControls([...$("#animal-form").elements])) return;
     const id = $("#animal-id").value || newId();
     const existing = state.animals.find(animal => animal.id === id);
     const tagInput = $("#animal-tag");
     const tag = tagInput?.value.trim() || "";
-    if (tag && state.animals.some(animal => animal.id !== id && animal.tag?.toLocaleLowerCase() === tag.toLocaleLowerCase())) {
-      if (tagInput) {
-        tagInput.setCustomValidity("Ya existe un animal con este número de arete.");
-        tagInput.reportValidity();
-        tagInput.setCustomValidity("");
-      }
-      return;
-    }
+    if (!validateAnimalTag(tagInput)) return;
+    const saveAndAdd = event.submitter?.dataset.submitMode === "save-and-add" && !existing;
     const birthDateField = ANIMAL_FIELD_CATALOG.find(field => field.id === "birthDate");
     const ageField = ANIMAL_FIELD_CATALOG.find(field => field.id === "estimatedAge");
     const birthDate = animalFormFieldValue(birthDateField);
@@ -3107,22 +3982,22 @@
     try {
       estimatedAge = animalFormFieldValue(ageField);
     } catch (error) {
-      showToast(error.message);
+      setAnimalFormError(error.message, $("#animal-age-months"));
       return;
     }
     const todayDay = Date.parse(`${today()}T00:00:00Z`);
     const birthDay = birthDate ? Date.parse(`${birthDate}T00:00:00Z`) : NaN;
     if (birthDateEditable && birthDate && (!Number.isFinite(birthDay) || birthDay > todayDay)) {
-      showToast("La fecha de nacimiento confirmada no puede estar en el futuro.");
+      setAnimalFormError("La fecha de nacimiento no puede estar en el futuro.", $("#animal-birth"));
       return;
     }
     const ageEditable = animalFieldActive("estimatedAge") && animalFieldConfig("estimatedAge").form;
     if (birthDateEditable && ageEditable && birthDate && estimatedAge) {
-      showToast("Indica la fecha de nacimiento confirmada o una edad aproximada, no ambas.");
+      setAnimalFormError("Indica la fecha de nacimiento confirmada o una edad aproximada, no ambas.", $("#animal-birth"));
       return;
     }
     if (ageEditable && animalFieldConfig("estimatedAge").required && !birthDate && !estimatedAge) {
-      showToast("Indica la edad aproximada de este animal.");
+      setAnimalFormError("Indica la edad aproximada de este animal.", $("#animal-age-years"));
       return;
     }
     const selectedStatus = animalFieldActive("status") && animalFieldConfig("status").form
@@ -3131,13 +4006,20 @@
     const exitReasonConfig = animalFieldConfig("exitReason");
     if (!isActiveAnimal({ status: selectedStatus }) && animalFieldActive("exitReason") &&
         exitReasonConfig.form && exitReasonConfig.required && !animalFormFieldValue(ANIMAL_FIELD_CATALOG.find(field => field.id === "exitReason"))) {
-      showToast("Indica el motivo de baja para este animal.");
+      setAnimalFormError("Indica el motivo de baja para este animal.", $('[data-animal-field="exitReason"]', $("#animal-form")));
       return;
     }
+    const originTypeForSave = animalFormFieldValue(ANIMAL_FIELD_CATALOG.find(field => field.id === "originType"));
     const values = {};
     for (const field of ANIMAL_FIELD_CATALOG) {
       if (field.type === "automatic" || !animalFieldActive(field.id) || !animalFieldConfig(field.id).form) continue;
       if (["exitReason", "exitNotes"].includes(field.id) && isActiveAnimal({ status: selectedStatus })) continue;
+      if (["lot", "paddock", "pen", "locationSince", "responsible"].includes(field.id) &&
+          !isActiveAnimal({ status: selectedStatus })) continue;
+      if (["originName", "entryDate"].includes(field.id) &&
+          !["", "Compra"].includes(originTypeForSave)) continue;
+      if (["motherId", "fatherId"].includes(field.id) &&
+          !["", "Nacimiento propio"].includes(originTypeForSave)) continue;
       const currentValue = animalFormFieldValue(field);
       values[field.id] = existing && field.id === "internalId" ? existing.internalId : currentValue;
     }
@@ -3145,7 +4027,10 @@
       const parentId = values[fieldId];
       if (!parentId) continue;
       if (parentId === id || !state.animals.some(animal => animal.id === parentId)) {
-        showToast(`La referencia de ${animalFieldConfig(fieldId).label.toLocaleLowerCase("es-MX")} debe ser otro animal del mismo rancho.`);
+        setAnimalFormError(
+          `La referencia de ${animalFieldConfig(fieldId).label.toLocaleLowerCase("es-MX")} debe ser otro animal del mismo rancho.`,
+          $(`[data-animal-field="${fieldId}"]`, $("#animal-form"))
+        );
         return;
       }
     }
@@ -3178,13 +4063,14 @@
       const note = $("#initial-observation").value.trim();
       const selectedPhotos = [...$("#initial-photos").files];
       if (selectedPhotos.some(file => !file.type.startsWith("image/"))) {
-        showToast("Solo se pueden añadir archivos de imagen.");
+        setAnimalFormError("Solo se pueden añadir archivos de imagen.", $("#initial-photos"));
         return;
       }
       if (bathDate) events.push(makeEvent(id, "bath", bathDate));
       if (weight || weightDate) {
         if (!weight || !weightDate) {
-          showToast("Para guardar un pesaje, indica tanto el peso como la fecha.");
+          const missingControl = weight ? $("#initial-weight-date") : $("#initial-weight");
+          setAnimalFormError("Para guardar un pesaje, indica tanto el peso como la fecha.", missingControl);
           return;
         }
         events.push(makeEvent(id, "weight", weightDate, { weight: Number(weight) }));
@@ -3198,6 +4084,8 @@
           primary: index === 0, cropX: 50, cropY: 50, createdAt: new Date().toISOString()
         });
       });
+      if (state.animalFormWeightWarning &&
+          !confirm(`${state.animalFormWeightWarning.message}\n\n¿Guardar de todas formas?`)) return;
     }
     try {
       await transaction(["animals", "events", "photos"], "readwrite", tx => {
@@ -3211,8 +4099,21 @@
       if (existing) {
         openDetail(id, true);
         showToast("Cambios guardados.");
+      } else {
+        clearAnimalDraft();
+        const undoPayload = {
+          animalId: id,
+          eventIds: events.map(record => record.id),
+          photoIds: photos.map(photo => photo.id)
+        };
+        if (saveAndAdd) {
+          state.quickCaptureSeed = quickCaptureSeedFromAnimal(animal);
+          openAnimalForm(null, { prefill: state.quickCaptureSeed });
+          offerAnimalCreateUndo(undoPayload, "Animal añadido. Captura el siguiente.");
+        } else {
+          offerAnimalCreateUndo(undoPayload, "Animal añadido al inventario.");
+        }
       }
-      else showToast("Animal añadido al inventario.");
     } catch (error) {
       showToast(`No se pudo guardar: ${error.message}`);
     }
@@ -3375,18 +4276,27 @@
     $("#record-dialog-title").textContent = type === "note" ? "Añadir observación" : `Añadir ${title.toLocaleLowerCase("es-MX")}`;
     const fields = $("#record-fields");
     if (type === "weight") {
-      fields.innerHTML = `<label>Fecha<input name="date" type="date" value="${today()}" required></label><label>Peso (kg)<input name="weight" type="number" min="0" step="0.1" placeholder="Ej. 420" required></label><label class="full-width">Observaciones<textarea name="notes" rows="2" maxlength="1000" placeholder="Opcional"></textarea></label>`;
+      fields.innerHTML = `<label>Fecha<input id="record-date" name="date" type="date" value="${today()}" required></label><label>Peso (kg)<div class="weight-capture"><input name="weight" type="number" min="0" step="0.1" placeholder="Ej. 420" inputmode="decimal" required><div class="weight-capture-controls" role="group" aria-label="Ajustar peso"><button type="button" data-adjust-weight="record-weight" data-weight-delta="-1">−1</button><button type="button" data-adjust-weight="record-weight" data-weight-delta="1">+1</button><button type="button" data-adjust-weight="record-weight" data-weight-delta="5">+5</button></div></div><small id="record-weight-feedback" class="field-help" aria-live="polite"></small></label><label class="full-width">Observaciones<textarea name="notes" rows="2" maxlength="1000" placeholder="Opcional · Usa el dictado del teclado para hablar"></textarea></label>`;
     } else if (type === "note") {
-      fields.innerHTML = `<label>Fecha<input name="date" type="date" value="${today()}" required></label><label class="full-width">Observación<textarea name="notes" rows="4" maxlength="2000" placeholder="Escribe una observación..." required></textarea></label>`;
+      fields.innerHTML = `<label>Fecha<input id="record-date" name="date" type="date" value="${today()}" required></label><label class="full-width">Observación<textarea name="notes" rows="4" maxlength="2000" placeholder="Escribe o dicta una observación..." required></textarea></label>`;
     } else {
       const label = type === "vaccine" ? "Vacuna" : type === "deworm" ? "Producto utilizado" : "Tipo / producto";
-      fields.innerHTML = `<label>Fecha<input name="date" type="date" value="${today()}" required></label>${type === "bath" ? "" : `<label>${label}<input name="label" maxlength="120" placeholder="Opcional"></label>`}<label class="full-width">Observaciones<textarea name="notes" rows="2" maxlength="1000" placeholder="Opcional"></textarea></label>`;
+      fields.innerHTML = `<label>Fecha<input id="record-date" name="date" type="date" value="${today()}" required></label>${type === "bath" ? "" : `<label>${label}<input name="label" maxlength="120" placeholder="Opcional"></label>`}<label class="full-width">Observaciones<textarea name="notes" rows="2" maxlength="1000" placeholder="Opcional"></textarea></label>`;
     }
+    attachDateShortcuts(fields);
     $("#record-dialog").showModal();
+    updateRecordWeightFeedback();
   }
 
   async function saveRecord(event) {
     event.preventDefault();
+    const invalidControl = [...event.currentTarget.elements].find(control =>
+      control.willValidate && !control.checkValidity());
+    if (invalidControl) {
+      setFieldError(invalidControl, validationMessageFor(invalidControl));
+      invalidControl.focus();
+      return;
+    }
     const formData = new FormData(event.currentTarget);
     const type = $("#record-type").value;
     if (!hasRanchAccess() || (isRanchWorker() && !["weight", "bath", "vaccine", "deworm", "injection", "medication", "review"].includes(type))) {
@@ -3396,6 +4306,8 @@
     const date = String(formData.get("date") || "");
     const fields = {};
     if (type === "weight") fields.weight = Number(formData.get("weight"));
+    if (type === "weight" && state.recordFormWeightWarning &&
+        !confirm(`${state.recordFormWeightWarning}\n\n¿Guardar de todas formas?`)) return;
     if (formData.has("label")) fields.label = String(formData.get("label")).trim();
     if (formData.has("notes")) fields.notes = String(formData.get("notes")).trim();
     try {
@@ -3783,6 +4695,62 @@
     $("#add-animal-button").addEventListener("click", () => openAnimalForm());
     $("#empty-add-button").addEventListener("click", () => openAnimalForm());
     $("#animal-form").addEventListener("submit", saveAnimal);
+    $("#animal-form").addEventListener("input", event => {
+      const input = event.target;
+      clearAnimalFormError(input);
+      if (input.id === "animal-birth" || input.id === "animal-status" ||
+          input.dataset.animalField === "originType") updateConditionalAnimalFields();
+      if (["initial-weight", "animal-birth", "animal-age-years", "animal-age-months"].includes(input.id)) {
+        updateInitialWeightFeedback();
+      }
+      saveAnimalDraft();
+    });
+    $("#animal-form").addEventListener("change", event => {
+      const input = event.target;
+      if (input.id === "animal-status" || input.dataset.animalField === "originType" || input.id === "animal-birth") {
+        updateConditionalAnimalFields();
+      }
+      if (input.matches("[data-animal-field]")) refreshChipSelections(input.dataset.animalField);
+      if (input.id === "initial-photos") renderInitialPhotosPreview();
+      if (["initial-weight", "animal-birth", "animal-age-years", "animal-age-months"].includes(input.id)) {
+        updateInitialWeightFeedback();
+      }
+      saveAnimalDraft();
+    });
+    $("#animal-form").addEventListener("focusout", event => {
+      if (event.target.id === "animal-tag") validateAnimalTag(event.target);
+    });
+    $("#animal-form").addEventListener("keydown", event => {
+      if (event.key !== "Enter" || event.target.tagName !== "INPUT" ||
+          ["button", "submit", "file", "hidden"].includes(event.target.type)) return;
+      event.preventDefault();
+      const steps = animalStepSequence();
+      const current = steps[state.animalFormStep];
+      if (!current) return;
+      const validationControls = [...current.element.querySelectorAll("input, select, textarea")]
+        .filter(control => !control.disabled && control.type !== "hidden" && control.offsetParent !== null);
+      if (!validateAnimalControls(validationControls)) return;
+      const keyboardControls = [...current.element.querySelectorAll("input, select, textarea, button.chip-option")]
+        .filter(control => !control.disabled && control.type !== "hidden" && control.offsetParent !== null &&
+          !control.matches(".chip-select-native"));
+      const controlIndex = keyboardControls.indexOf(event.target);
+      if (controlIndex >= 0 && keyboardControls[controlIndex + 1]) {
+        keyboardControls[controlIndex + 1].focus();
+      } else if (state.animalFormStep < steps.length - 1) {
+        setAnimalFormStep(state.animalFormStep + 1);
+        focusAnimalFormStep();
+      } else {
+        $("#animal-form").requestSubmit($("#animal-save"));
+      }
+    });
+    $("#record-form").addEventListener("input", event => {
+      clearFieldError(event.target);
+      updateRecordWeightFeedback();
+    });
+    $("#record-form").addEventListener("change", event => {
+      clearFieldError(event.target);
+      updateRecordWeightFeedback();
+    });
     $("#record-form").addEventListener("submit", saveRecord);
     document.addEventListener("submit", event => {
       if (event.target.id === "growth-target-form") saveGrowthTarget(event);
@@ -3945,13 +4913,87 @@
       const { error } = await cloud.auth.signOut();
       if (error) showToast(`No se pudo cerrar la sesión: ${error.message}`);
     });
-    window.addEventListener("resize", updatePhotoCropControls);
+    window.addEventListener("resize", () => {
+      updatePhotoCropControls();
+      if ($("#animal-dialog").open) updateAnimalFormStepper();
+    });
     $("#restore-button").addEventListener("click", () => $("#restore-input").click());
     $("#restore-input").addEventListener("change", event => restore(event.target.files[0]));
     document.addEventListener("click", event => {
       const target = event.target.closest("button, img, label");
       if (!target) return;
       if (target.dataset.close) { requestClose(target.dataset.close); return; }
+      if (target.dataset.toastAction === "undo" && state.toastAction) {
+        const action = state.toastAction;
+        state.toastAction = null;
+        clearTimeout(state.toastTimer);
+        $("#toast").classList.remove("show");
+        Promise.resolve(action.onClick()).catch(error =>
+          showToast(`No se pudo deshacer el alta: ${error.message}`)
+        );
+        return;
+      }
+      if (target.id === "animal-undo-last" && state.pendingUndo) {
+        undoMostRecentAnimalCreate().catch(error =>
+          showToast(`No se pudo deshacer el alta: ${error.message}`)
+        );
+        return;
+      }
+      if (target.id === "animal-tag-scan") { startTagScanner(); return; }
+      if (target.dataset.chipOption) {
+        setChipFieldValue(target.dataset.chipOption, target.dataset.chipValue);
+        return;
+      }
+      if (target.dataset.chipCreate) {
+        createAnimalListOption(target.dataset.chipCreate);
+        return;
+      }
+      if (target.dataset.adjustWeight) {
+        const input = target.dataset.adjustWeight === "record-weight"
+          ? $('[name="weight"]', $("#record-form"))
+          : $(`#${target.dataset.adjustWeight}`);
+        if (input) {
+          const current = Number(input.value) || 0;
+          const delta = Number(target.dataset.weightDelta);
+          input.value = Math.max(0, current + delta).toFixed(1);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        return;
+      }
+      if (target.dataset.removeInitialPhoto !== undefined) {
+        removeInitialPhoto(Number(target.dataset.removeInitialPhoto));
+        return;
+      }
+      if (target.dataset.dateShortcut) {
+        const input = $(`#${target.dataset.dateTarget}`);
+        if (input) {
+          const selectedDate = new Date(`${today()}T12:00:00`);
+          if (target.dataset.dateShortcut === "yesterday") selectedDate.setDate(selectedDate.getDate() - 1);
+          input.value = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(2, "0")}`;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        return;
+      }
+      if (target.id === "animal-step-next") {
+        const steps = animalStepSequence();
+        const current = steps[state.animalFormStep];
+        if (!current) return;
+        const controls = [...current.element.querySelectorAll("input, select, textarea")]
+          .filter(control => !control.disabled && control.type !== "hidden" && control.offsetParent !== null);
+        if (!validateAnimalControls(controls)) return;
+        if (state.animalFormStep < steps.length - 1) {
+          setAnimalFormStep(state.animalFormStep + 1);
+          focusAnimalFormStep();
+        }
+        else $("#animal-form").requestSubmit($("#animal-save"));
+        return;
+      }
+      if (target.id === "animal-step-prev") {
+        setAnimalFormStep(Math.max(0, state.animalFormStep - 1));
+        focusAnimalFormStep();
+        return;
+      }
       if (target.dataset.accountView) { showAccountView(target.dataset.accountView); return; }
       if (target.dataset.reviewRequest) {
         reviewRanchRequest(target.dataset.reviewRequest, target.dataset.approve === "true");
@@ -4033,6 +5075,10 @@
     });
     document.addEventListener("input", event => {
       const input = event.target;
+      if (input.id === "journey-weight-input") {
+        updateJourneyWeightFeedback();
+        return;
+      }
       if (!input.dataset.photoCrop) return;
       const panel = input.closest(".detail-crop-panel");
       const x = Number(panel.querySelector('[data-photo-crop="x"]').value);
@@ -4085,11 +5131,12 @@
         $("#search-input").focus();
       }
     });
-    [$("#animal-dialog"), $("#detail-dialog"), $("#record-dialog"), $("#photo-dialog"), $("#journey-create-dialog"), $("#journey-dialog")].forEach(dialog => {
+    [$("#animal-dialog"), $("#detail-dialog"), $("#record-dialog"), $("#photo-dialog"), $("#journey-create-dialog"), $("#journey-dialog"), $("#tag-scanner-dialog")].forEach(dialog => {
       dialog.addEventListener("click", event => {
         if (event.target === dialog) requestClose(dialog.id);
       });
     });
+    $("#tag-scanner-dialog").addEventListener("close", stopTagScanner);
     [$("#account-dialog"), $("#ranch-dialog")].forEach(dialog => dialog.addEventListener("click", event => {
       if (event.target === event.currentTarget) dialog.close();
     }));
@@ -4107,6 +5154,7 @@
     try {
       db = await openDatabase();
       registerEvents();
+      attachDateShortcuts(document);
       $("#calculator-price-date").value = today();
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
         navigator.serviceWorker.register("./service-worker.js").catch(error => {
@@ -4182,6 +5230,7 @@
       window.addEventListener("online", () => syncData());
       window.addEventListener("offline", () => setSyncStatus("Sin conexión · cambios guardados aquí"));
       document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") saveAnimalDraft();
         if (document.visibilityState === "visible") syncData();
       });
     } catch (error) {
