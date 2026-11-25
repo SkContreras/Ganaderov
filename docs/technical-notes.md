@@ -1,0 +1,109 @@
+# Ganadero
+
+Aplicación para administrar el inventario y los expedientes individuales del ganado bovino. Los datos se guardan primero en el navegador y, al iniciar sesión y tener conexión, se sincronizan con Supabase para compartirlos entre dispositivos.
+
+El logo y el icono de la pestaña se sirven desde [`ganaderov-icon.svg`](./ganaderov-icon.svg), que también se incluye en el caché de la aplicación para uso offline.
+
+## Iconografía e interfaz accesible
+
+Los iconos de la interfaz usan símbolos SVG sólidos en una biblioteca común, con el mismo color, proporciones y remates, de acuerdo con la guía visual del proyecto. Conserva los `id` y atributos `data-*` existentes al cambiar su presentación. No uses emojis ni caracteres como sustitutos de iconos de navegación. Los iconos decorativos deben ocultarse a lectores de pantalla cuando el botón ya tenga un nombre accesible. Las acciones destructivas deben comunicar claramente qué dato eliminan; los estados se muestran con texto, icono y color, nunca solo con color.
+
+## Configurar Supabase
+
+Consulta el [README principal](../README.md#instalación-y-configuración) para la configuración vigente. Los detalles siguientes proceden de la documentación técnica histórica; contrástalos con el código actual antes de utilizarlos.
+
+## Limpiar Supabase
+
+Los scripts de limpieza son deliberadamente destructivos:
+
+- [`supabase-clean-data.sql`](./supabase-clean-data.sql) borra animales sincronizados, jornadas, membresías, solicitudes y configuración de rancho; conserva el esquema, las fotos y las cuentas.
+- [`supabase-clean-schema.sql`](./supabase-clean-schema.sql) elimina la estructura creada por Ganadero y sus políticas de Storage; conserva el bucket, sus fotos y las cuentas de Auth.
+- [`supabase-reset.sql`](./supabase-reset.sql) elimina los datos y la estructura de Ganadero. Actualmente tiene su confirmación activa (`REINICIAR-TODO`); cambia `v_confirm` a `''` para desactivarla antes de compartir el archivo.
+
+Haz una copia de seguridad del proyecto antes de ejecutar cualquiera de ellos y pruébalo primero en staging. Los archivos SQL no borran objetos ni buckets de Storage, ni usuarios de Auth: no se deben modificar directamente `storage.objects`, `storage.buckets` ni `auth.users`. Para borrar fotos o el bucket, usa la API de Storage desde un entorno confiable; para borrar cuentas, usa Supabase Auth Admin API o el panel de Supabase. Nunca incluyas una clave `service_role` en el repositorio ni en el navegador.
+
+## Sincronización y conflictos
+
+- Cada animal tiene una fecha y hora de última modificación, que también se actualiza al cambiar su historial o sus fotografías.
+- La fotografía principal se encuadra sin deformarla; el propietario o administrador puede ajustar su posición horizontal y vertical desde **Ajustar encuadre**. El encuadre se guarda y sincroniza con la ficha, y forma parte de las copias de seguridad.
+- Los cambios se guardan en IndexedDB en el dispositivo y se envían cuando hay conexión. La app debe haberse abierto al menos una vez con conexión para instalar el modo sin conexión.
+- Si el mismo animal cambió en la nube y en el dispositivo desde la última sincronización, Ganadero pregunta qué versión conservar. **Aceptar** sube la versión de este dispositivo; **Cancelar** descarga la versión de la nube. La decisión reemplaza la ficha completa del animal, incluido su historial y sus fotos.
+- Los cambios en animales diferentes se sincronizan por separado. Las eliminaciones también se propagan a los demás dispositivos.
+- Usa **Crear copia de seguridad** periódicamente. El archivo JSON incluye animales, historial, jornadas, estimaciones, fotos codificadas dentro del archivo y tombstones de animales eliminados. Las fotos pueden hacer crecer considerablemente la copia. **Importar copia** reemplaza los datos locales del dispositivo; las eliminaciones se propagan a la nube en la siguiente sincronización.
+
+## Jornadas de manejo
+
+El inventario muestra solo animales activos. Los marcados como vendidos, fallecidos, dados de baja, «Otro» o desaparecidos se excluyen de la lista y de los conteos del inventario, pero sus fichas, eventos y jornadas anteriores se conservan. El botón **Ver archivo** permite buscarlos, abrir sus expedientes y, con permisos de propietario o administrador, reactivarlos. Al reactivarlos vuelven al inventario y pueden incluirse en jornadas nuevas. Tampoco se pueden incluir en jornadas nuevas ni agregarse a una jornada en curso mientras estén archivados. Si alguno ya estaba en una jornada activa, deja de aparecer en la lista operativa y ya no cuenta como pendiente; la participación histórica no se elimina.
+
+En **Jornadas** puedes crear jornadas de baño, vacunación, desparasitación, inyección, medicamento, pesaje, revisión veterinaria u otra actividad. La lista se toma de los animales activos al iniciar la jornada y puedes incorporar animales activos después sin reemplazar el progreso existente. Las marcas se guardan en IndexedDB y la jornada puede continuar sin internet.
+
+Al finalizar una jornada incompleta, puedes abrirla desde el historial y pulsar **Reanudar jornada**. Los animales ya atendidos quedan bloqueados para evitar marcarlos o registrar su actividad dos veces; se atienden solo los pendientes y se finaliza de nuevo. Los registros de atención usan un identificador estable por jornada y animal, por lo que la sincronización y una reapertura actualizan el mismo registro, no crean otro evento. En jornadas de pesaje, al seleccionar un animal pendiente aparece la captura de peso en la misma pantalla; el peso se guarda localmente y marca al animal como atendido. También se puede corregir el peso de un animal atendido mientras la jornada está activa o reanudada; al finalizarla de nuevo, el historial conserva el mismo evento y no duplica el pesaje.
+
+Cada marca guarda la hora y la cuenta autenticada disponible. Sin sesión, queda indicada como «Usuario local (sin sesión)»; esa etiqueta no verifica la identidad de una persona. La finalización también conserva responsable y hora. La información se sincroniza con Supabase al recuperar conexión, pero la sincronización entre dos dispositivos necesita una configuración real de Supabase y no se da por probada solo porque funcione el guardado local.
+
+Para proteger el historial, un animal que tenga registros o esté incluido en una jornada no se puede eliminar definitivamente desde la interfaz; se puede dar de baja manteniendo su ficha y participación. Las jornadas se incluyen en las copias de seguridad.
+
+## Campos y ficha de animales
+
+En **Configuración → Campos y ficha de animales**, el propietario o administrador configura módulos y campos por separado: activación, etiqueta, obligatoriedad, formulario básico o **Mostrar datos adicionales**, tabla y visibilidad de ficha (`hidden`, `full` o `summary`). Identificación básica permanece disponible; fechas/procedencia, ubicación y seguimiento tienen interruptores de módulo. Desactivar un módulo o campo no borra sus valores.
+
+El catálogo ahora incluye ID interno `ANM-00001` (generado y estable), arete, nombre, sexo, raza, color, cruza, señas, identificador oficial, fechas de nacimiento/ingreso/destete, edad derivada, procedencia, origen, referencias de madre y padre, ubicación actual, responsable, motivo/observaciones de baja, observaciones generales y metadatos automáticos de creación/modificación. Las listas de raza, lote, potrero, corral y estado tienen valores estables, etiquetas editables y opciones que se pueden desactivar; no se permite desactivar una opción asignada. Edad se deriva de la fecha de nacimiento o de la estimación registrada. Los pesos al nacimiento/destete no se guardan en la ficha: los pesajes siguen siendo registros históricos independientes.
+
+El formulario básico nuevo ofrece arete y sexo como obligatorios, más nombre y raza. El resto se organiza como datos adicionales. Los campos configurables aparecen en la ficha resumida/completa y la tabla según su ajuste. En ficha completa se ocultan valores vacíos de forma predeterminada; **Mostrar campos vacíos** los presenta como «Sin registrar». El peso actual y la fecha del último pesaje siguen derivándose del historial de pesajes.
+
+La configuración local usa `schemaVersion: 4`; las versiones 1, 2 y 3 se normalizan y sus visibilidades booleanas `detail` siguen convirtiéndose (`true` → `summary`, `false` → `hidden`). Los módulos y campos introducidos después de la versión original de cada configuración se inicializan desactivados para evitar cambios inesperados en ranchos existentes. Para compatibilidad con la función RPC ya instalada en Supabase (que valida `schemaVersion: 1`), la envoltura de red mantiene ese valor y agrega `configVersion: 4`, `detailVisibility` y el booleano `detail` para clientes antiguos. La sincronización usa la configuración revisionada del rancho.
+
+Los animales nuevos guardan los campos en el `payload` existente de `animal_sync_records`; no se agregan columnas ni se toca su esquema. A los animales existentes se les asigna un ID interno único si no lo tienen y se normaliza la clave `birthEstimated` desde formatos heredados, sin borrar datos ni fotos. Las copias JSON incluyen configuración y campos nuevos; se aceptan copias antiguas, se validan tipos/referencias/IDs internos y se asignan IDs a animales antiguos que aún no tengan uno.
+
+El formulario de animales sigue restringido al propietario/administrador. El trigger de trabajadores permite añadir registros operativos autorizados (pesos y tratamientos) y corregir el valor de una pesada propia; rechaza cambios a `payload.animal`, fotos, pronósticos y registros previos.
+
+## Acceso y usuarios del rancho
+
+La pantalla de acceso permite iniciar sesión con contraseña o enlace mágico, crear una cuenta, reenviar confirmación y solicitar recuperación por correo. Desde **Mi cuenta** se puede cambiar el correo o la contraseña, previa verificación por código enviada por Supabase, y vincular/desvincular proveedores externos. Habilita en Supabase los proveedores OAuth que quieras ofrecer (Google, Apple o GitHub); las notificaciones de correo cambiado, contraseña cambiada y métodos vinculados/desvinculados se envían automáticamente. Los HTML de `plantillas_correo/` son cuerpos para configurar en los templates de Supabase, no páginas de destino de la aplicación. La plantilla de teléfono no está conectada a la interfaz.
+
+Las contraseñas deben tener al menos 8 caracteres y cumplir también la política configurada en Supabase. Si la confirmación por correo está habilitada, el usuario verá un mensaje que le indica que confirme la dirección antes de iniciar sesión; el enlace de recuperación permite definir y confirmar una contraseña nueva. Para que estos enlaces regresen a Ganaderov, agrega el origen y las URL desplegadas (incluida `confirmar-correo.html`) en **Authentication → URL Configuration → Redirect URLs** de Supabase.
+
+Después de iniciar sesión, el usuario puede crear el primer perfil y rancho, o solicitar acceso con un código compartido por el propietario. La solicitud no concede acceso hasta que el propietario la apruebe. El propietario puede revisar solicitudes, retirar trabajadores y consultar los perfiles del rancho. Una cuenta solo puede pertenecer a un rancho activo. El rol trabajador puede registrar pesos, tratamientos y jornadas, pero no editar fichas, borrar registros, administrar permisos ni modificar fotografías. El propietario conserva la administración completa. Las políticas RLS y triggers del esquema hacen cumplir estas restricciones en el servidor, además de los controles de interfaz.
+
+El almacenamiento local se separa por identificador del rancho. Al asociar por primera vez una cuenta, los datos locales anteriores se copian al almacén aislado de ese rancho y solo se vacía el almacén anterior después de confirmar la copia local. Conserva una copia de seguridad antes de ese primer cambio como protección adicional. Una sesión offline previamente reconocida reutiliza el perfil cacheado del rancho; al reconectar, Ganadero consulta de nuevo la membresía y Supabase vuelve a aplicar RLS.
+
+### Validar el esquema y los permisos en forma segura
+
+1. Descarga una copia desde la aplicación y conserva el archivo original fuera del navegador.
+2. Restaura una copia de la base de datos/proyecto en Supabase Staging, o crea un proyecto temporal y migra allí los datos actuales.
+3. Prueba `supabase-schema.sql` en esa instancia de staging. Verifica que las filas de `animal_sync_records`, `journey_sync_records` y los objetos del bucket `animal-photos` permanezcan intactos.
+4. Con dos cuentas de prueba, comprueba que el propietario pueda crear el perfil, que un trabajador solicite acceso, que la aprobación habilite solo ese rancho y que una cuenta de otro rancho no pueda leer datos, jornadas ni fotos.
+5. Comprueba también que el trabajador pueda añadir pesajes, tratamientos y jornadas, pero no alterar datos base del animal, borrar eventos, cambiar fotos, dar de baja animales ni modificar roles.
+6. Solo después de verificar el respaldo, las políticas y las cuentas, programa la actualización en producción. La aplicación no ejecuta cambios de esquema por sí sola.
+
+El esquema actual no ejecuta `DELETE`, `TRUNCATE` ni `DROP TABLE` y conserva los `owner_id` existentes, pero reemplaza políticas y triggers. Las cuentas que ya tienen datos mantienen su `owner_id`; las cuentas legacy pueden requerir completar su perfil de rancho antes de habilitar el modo multiusuario.
+
+### Estado de validación y publicación
+
+Consulta los resultados de las pruebas de cada versión. No se garantiza la validación de todos los escenarios descritos.
+
+## Crecimiento y peso objetivo
+
+La ficha individual muestra los pesajes reales y la fecha de la última pesada. Para estimar la ganancia media diaria (GMD), Ganaderov toma todas las fechas distintas dentro de los 30 días anteriores a la pesada más reciente, promedia las mediciones hechas en el mismo día y calcula el cambio entre el primer y el último peso de esa ventana dividido por los días reales transcurridos. Con una sola pesada, fechas repetidas o sin dos fechas distintas en la ventana no se calcula una GMD automática. Si hay varios intervalos recientes con aumentos y pérdidas, se advierte que la GMD resume un ritmo variable.
+
+Cuando hay GMD reciente, la ficha muestra su proyección lineal a 90 días. Una GMD negativa permanece negativa y puede producir una estimación de pérdida de peso; la app no la sustituye por una ganancia positiva. Si pasan 30 días o más desde la última pesada, la ficha y la calculadora muestran un aviso para recordar que la información puede ser antigua. La proyección es una estimación matemática, no una garantía, y no considera alimentación, genética, salud o manejo. No se usan modelos de Brody, Gompertz o Richards.
+
+En la ficha se puede indicar fecha de nacimiento confirmada o, en su lugar, una edad aproximada en años y meses. La edad aproximada se guarda con la fecha en que fue registrada, se conserva como estimación y nunca se convierte en una fecha de nacimiento inventada.
+
+El rango de peso objetivo se configura por animal, se guarda en su ficha y se sincroniza junto con los datos existentes. Es opcional y puede quitarse dejando vacíos ambos límites. Ningún rango de mercado se impone como universal.
+
+No se utiliza todavía un modelo de Brody, Gompertz o Richards. La aplicación no estima parámetros de crecimiento ni trata una edad aproximada como fecha de nacimiento confirmada; un modelo por edad requiere primero datos de edad confiables y validación adecuada para el hato.
+
+## Calculadora de peso y valor de mercado
+
+En **Gestión → Calculadora** puedes seleccionar un animal y cargar su última pesada. Si hay dos o más fechas distintas en los 30 días anteriores a la última pesada, propone la GMD calculada con las fechas y los días reales de esa ventana; esta GMD se puede modificar. Una pesada por sí sola no produce una tendencia. También acepta peso y GMD manuales, pero estos valores se identifican como supuestos y no como crecimiento medido. Al indicar los días de espera, estima el peso futuro con `peso actual + GMD × días`. Una proyección inferior a cero se muestra como tal y no se utiliza para estimar valor de mercado.
+
+Puedes guardar una estimación para un animal desde la calculadora, incluso sin completar una cotización. Se conserva el peso y fecha base, GMD y su origen, las pesadas usadas, el plazo, el peso estimado y la fecha objetivo. Una pesada individual posterior o una jornada de pesaje compara la primera pesada registrada después de la estimación que tenga fecha igual o posterior a la fecha objetivo, y registra el peso real, la fecha de esa pesada, el error firmado (`real − estimado`), el error absoluto y el error porcentual absoluto cuando se puede calcular. Este registro permite comparar estimaciones con resultados reales; no modifica los pesajes ni representa una validación científica del modelo.
+
+La cotización se captura manualmente: categoría actual, fecha y precios mínimo, promedio y máximo por kg. Opcionalmente puedes ingresar el siguiente rango de peso y sus precios; si el peso proyectado alcanza el umbral, se usa el precio promedio de esa categoría, a menos que se capture un precio futuro supuesto. La pantalla compara el valor bruto de vender hoy con el bruto del escenario de espera y resta el costo diario por el plazo indicado. No incluye transporte, comisiones, mermas ni otros gastos.
+
+La calculadora enlaza a [México Ganadero](https://www.mexicoganadero.com/precios/) como referencia, pero no descarga sus datos automáticamente: la página consultada no ofrece una respuesta estructurada accesible para integrarla con fiabilidad desde esta aplicación estática. Verifica la categoría, clasificación, fecha y región antes de capturar precios. Las cotizaciones, precios futuros y costos se usan solo durante la sesión de la calculadora; no se guardan, sincronizan ni incluyen en las copias de seguridad. Las estimaciones de crecimiento guardadas sí se conservan en el dispositivo, se incluyen en la sincronización por animal y en las copias de seguridad. Son referencias editables, no ofertas ni predicciones de mercado.
+
+## Uso local
+
+Consulta el [README principal](../README.md#instalación-y-configuración).

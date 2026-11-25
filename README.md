@@ -1,119 +1,238 @@
-# Ganadero
+<div align="center">
+  <img src="./ganaderov-icon.svg" width="96" alt="Logotipo Ganaderov" />
 
-Aplicación para administrar el inventario y los expedientes individuales del ganado bovino. Los datos se guardan primero en el navegador y, al iniciar sesión y tener conexión, se sincronizan con Supabase para compartirlos entre dispositivos.
+  # Ganaderov
 
-El logo y el icono de la pestaña se sirven desde [`ganaderov-icon.svg`](./ganaderov-icon.svg), que también se incluye en el caché de la aplicación para uso offline.
+  **Gestión ganadera inteligente · Del campo a la nube**
 
-## Iconografía e interfaz accesible
+  Aplicación web para registrar, organizar y analizar ganado bovino, diseñada para acompañar el trabajo cotidiano del rancho, incluso cuando la conexión es intermitente.
 
-Los iconos de la interfaz usan símbolos SVG sólidos en una biblioteca común, con el mismo color, proporciones y remates, de acuerdo con la guía visual del proyecto. Conserva los `id` y atributos `data-*` existentes al cambiar su presentación. No uses emojis ni caracteres como sustitutos de iconos de navegación. Los iconos decorativos deben ocultarse a lectores de pantalla cuando el botón ya tenga un nombre accesible. Las acciones destructivas deben comunicar claramente qué dato eliminan; los estados se muestran con texto, icono y color, nunca solo con color.
+  [Abrir aplicación](https://ganaderov.vercel.app/) · [Documentación](#arquitectura) · [Reportar un problema](https://github.com/SkContreras/Ganaderov/issues)
 
-## Configurar Supabase
+  ![HTML5](https://img.shields.io/badge/HTML5-E34F26?style=flat-square&logo=html5&logoColor=white)
+  ![CSS3](https://img.shields.io/badge/CSS3-1572B6?style=flat-square&logo=css3&logoColor=white)
+  ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black)
+  ![Supabase](https://img.shields.io/badge/Supabase-3FCF8E?style=flat-square&logo=supabase&logoColor=white)
+  ![Vercel](https://img.shields.io/badge/Vercel-000000?style=flat-square&logo=vercel&logoColor=white)
+  ![Offline](https://img.shields.io/badge/Offline--first-41654C?style=flat-square)
 
-1. Crea un proyecto en [Supabase](https://supabase.com/).
-2. En un proyecto nuevo, ejecuta [`supabase-schema.sql`](./supabase-schema.sql) en **SQL Editor**. Es el esquema completo actual: sincronización de animales y jornadas, perfiles y permisos de rancho, fotos y configuración sincronizada de campos. Para una base existente, respáldala y prueba primero el esquema en staging restaurado; aunque no borra los datos, reemplaza políticas RLS y triggers y cambia permisos. No lo ejecutes directamente en producción sin validar las cuentas, políticas y comportamiento de trabajadores.
-3. En **Project Settings → API**, copia la **Project URL** y la clave **anon/public**. En [`config.js`](./config.js), colócalas en `supabaseUrl` y `supabaseAnonKey`.
-4. Publica de nuevo estos archivos en Vercel. La clave `anon/public` está diseñada para el navegador y las políticas RLS limitan los datos a la cuenta autenticada. **Nunca pongas una clave `service_role` en `config.js`.**
-5. En **Authentication → URL Configuration**, configura la URL de la app como sitio y agrega `https://tu-dominio/confirmar-correo.html` a las URLs de redirección permitidas. El enlace de registro regresa a esa página para confirmar el correo y continuar a Ganaderov. Sustituye `tu-dominio` por el dominio real del despliegue.
-6. Abre la app con conexión, elige **Crear cuenta**, y confirma el correo si Supabase lo solicita. Inicia sesión con esa misma cuenta en los demás dispositivos.
+  <img src="./ranch-cover.svg" width="720" alt="Ilustración de un rancho de Ganaderov" />
+</div>
 
-El archivo `config.js` contiene solo valores públicos del proyecto; no contiene contraseñas. Si se usa un repositorio público, no agregues claves privadas ni credenciales de administrador.
+## Acerca del proyecto
 
-## Limpiar Supabase
+Ganaderov reúne el inventario, los expedientes individuales, las jornadas de manejo y las herramientas de análisis económico en un solo lugar. Su arquitectura prioriza el almacenamiento local y la sincronización posterior, para que la falta de cobertura en el campo no interrumpa la captura de datos.
 
-Los scripts de limpieza son deliberadamente destructivos:
+## Contenido
 
-- [`supabase-clean-data.sql`](./supabase-clean-data.sql) borra animales sincronizados, jornadas, membresías, solicitudes y configuración de rancho; conserva el esquema, las fotos y las cuentas.
-- [`supabase-clean-schema.sql`](./supabase-clean-schema.sql) elimina la estructura creada por Ganadero y sus políticas de Storage; conserva el bucket, sus fotos y las cuentas de Auth.
-- [`supabase-reset.sql`](./supabase-reset.sql) elimina los datos y la estructura de Ganadero. Actualmente tiene su confirmación activa (`REINICIAR-TODO`); cambia `v_confirm` a `''` para desactivarla antes de compartir el archivo.
+- [Funcionalidades](#funcionalidades)
+- [Interfaz](#interfaz)
+- [Arquitectura](#arquitectura)
+- [Estructura del repositorio](#estructura-del-repositorio)
+- [Base de datos](#base-de-datos)
+- [Instalación y configuración](#instalación-y-configuración)
+- [Despliegue](#despliegue)
+- [Seguridad y privacidad](#seguridad-y-privacidad)
+- [Pruebas y mantenimiento](#pruebas-y-mantenimiento)
+- [Contribuciones, autoría y agradecimientos](#contribuciones-autoría-y-agradecimientos)
 
-Haz una copia de seguridad del proyecto antes de ejecutar cualquiera de ellos y pruébalo primero en staging. Los archivos SQL no borran objetos ni buckets de Storage, ni usuarios de Auth: no se deben modificar directamente `storage.objects`, `storage.buckets` ni `auth.users`. Para borrar fotos o el bucket, usa la API de Storage desde un entorno confiable; para borrar cuentas, usa Supabase Auth Admin API o el panel de Supabase. Nunca incluyas una clave `service_role` en el repositorio ni en el navegador.
+## Funcionalidades
 
-## Sincronización y conflictos
+| Módulo | Capacidades |
+| --- | --- |
+| Inventario | Identificación, búsqueda, filtros, expedientes, fotografías, ubicación y archivo de animales inactivos. |
+| Historial | Pesajes, tratamientos, eventos sanitarios y seguimiento del crecimiento individual. |
+| Jornadas | Vacunación, desparasitación, pesaje y otras actividades; progreso por animal, historial y reanudación. |
+| Análisis ganadero | Comparación de venta y espera, proyección de peso, presupuesto de alimentación y escenarios de rentabilidad por lote homogéneo. |
+| Configuración | Campos personalizados, plantillas de captura, listas de razas y ubicaciones, preferencias de trabajo. |
+| Rancho y usuarios | Creación de rancho, solicitudes de acceso, aprobación y roles de colaboración. |
+| Autenticación | Correo y contraseña, enlace mágico, recuperación y acceso OAuth con Google y Facebook según configuración y aprobación del proveedor. |
+| Datos | Persistencia local, sincronización, resolución de conflictos y copias JSON. |
 
-- Cada animal tiene una fecha y hora de última modificación, que también se actualiza al cambiar su historial o sus fotografías.
-- La fotografía principal se encuadra sin deformarla; el propietario o administrador puede ajustar su posición horizontal y vertical desde **Ajustar encuadre**. El encuadre se guarda y sincroniza con la ficha, y forma parte de las copias de seguridad.
-- Los cambios se guardan en IndexedDB en el dispositivo y se envían cuando hay conexión. La app debe haberse abierto al menos una vez con conexión para instalar el modo sin conexión.
-- Si el mismo animal cambió en la nube y en el dispositivo desde la última sincronización, Ganadero pregunta qué versión conservar. **Aceptar** sube la versión de este dispositivo; **Cancelar** descarga la versión de la nube. La decisión reemplaza la ficha completa del animal, incluido su historial y sus fotos.
-- Los cambios en animales diferentes se sincronizan por separado. Las eliminaciones también se propagan a los demás dispositivos.
-- Usa **Crear copia de seguridad** periódicamente. El archivo JSON incluye animales, historial, jornadas, estimaciones, fotos codificadas dentro del archivo y tombstones de animales eliminados. Las fotos pueden hacer crecer considerablemente la copia. **Importar copia** reemplaza los datos locales del dispositivo; las eliminaciones se propagan a la nube en la siguiente sincronización.
+Las estimaciones de peso y rentabilidad son escenarios matemáticos con datos de entrada y no garantías de producción ni de precios de mercado.
 
-## Jornadas de manejo
+## Interfaz
 
-El inventario muestra solo animales activos. Los marcados como vendidos, fallecidos, dados de baja, «Otro» o desaparecidos se excluyen de la lista y de los conteos del inventario, pero sus fichas, eventos y jornadas anteriores se conservan. El botón **Ver archivo** permite buscarlos, abrir sus expedientes y, con permisos de propietario o administrador, reactivarlos. Al reactivarlos vuelven al inventario y pueden incluirse en jornadas nuevas. Tampoco se pueden incluir en jornadas nuevas ni agregarse a una jornada en curso mientras estén archivados. Si alguno ya estaba en una jornada activa, deja de aparecer en la lista operativa y ya no cuenta como pendiente; la participación histórica no se elimina.
+La interfaz está diseñada alrededor de cuatro áreas: inventario, jornadas, análisis y configuración. Usa iconografía SVG, estados textuales y una identidad visual inspirada en el campo.
 
-En **Jornadas** puedes crear jornadas de baño, vacunación, desparasitación, inyección, medicamento, pesaje, revisión veterinaria u otra actividad. La lista se toma de los animales activos al iniciar la jornada y puedes incorporar animales activos después sin reemplazar el progreso existente. Las marcas se guardan en IndexedDB y la jornada puede continuar sin internet.
+<!-- Galería: archivos WebP reales preparados para agregar en docs/screenshots/. -->
+| Inventario | Jornadas de manejo | Análisis ganadero |
+| --- | --- | --- |
+| Identificación y expedientes | Control de actividades | Simulación y proyecciones |
 
-Al finalizar una jornada incompleta, puedes abrirla desde el historial y pulsar **Reanudar jornada**. Los animales ya atendidos quedan bloqueados para evitar marcarlos o registrar su actividad dos veces; se atienden solo los pendientes y se finaliza de nuevo. Los registros de atención usan un identificador estable por jornada y animal, por lo que la sincronización y una reapertura actualizan el mismo registro, no crean otro evento. En jornadas de pesaje, al seleccionar un animal pendiente aparece la captura de peso en la misma pantalla; el peso se guarda localmente y marca al animal como atendido. También se puede corregir el peso de un animal atendido mientras la jornada está activa o reanudada; al finalizarla de nuevo, el historial conserva el mismo evento y no duplica el pesaje.
+<!-- Al incorporar las capturas, sustituir esta nota por:
+![Inventario](docs/screenshots/inventario.webp)
+![Jornadas de manejo](docs/screenshots/jornadas.webp)
+![Análisis ganadero](docs/screenshots/analisis.webp)
+-->
 
-Cada marca guarda la hora y la cuenta autenticada disponible. Sin sesión, queda indicada como «Usuario local (sin sesión)»; esa etiqueta no verifica la identidad de una persona. La finalización también conserva responsable y hora. La información se sincroniza con Supabase al recuperar conexión, pero la sincronización entre dos dispositivos necesita una configuración real de Supabase y no se da por probada solo porque funcione el guardado local.
+La galería de capturas reales se incorporará en `docs/screenshots/`. No se muestran datos personales ni registros de ranchos reales.
 
-Para proteger el historial, un animal que tenga registros o esté incluido en una jornada no se puede eliminar definitivamente desde la interfaz; se puede dar de baja manteniendo su ficha y participación. Las jornadas se incluyen en las copias de seguridad.
+## Arquitectura
 
-## Campos y ficha de animales
+Ganaderov utiliza HTML, CSS y JavaScript nativos, sin un framework de frontend. Supabase proporciona autenticación, PostgreSQL y Storage; Vercel distribuye la aplicación estática.
 
-En **Configuración → Campos y ficha de animales**, el propietario o administrador configura módulos y campos por separado: activación, etiqueta, obligatoriedad, formulario básico o **Mostrar datos adicionales**, tabla y visibilidad de ficha (`hidden`, `full` o `summary`). Identificación básica permanece disponible; fechas/procedencia, ubicación y seguimiento tienen interruptores de módulo. Desactivar un módulo o campo no borra sus valores.
+```mermaid
+flowchart TD
+    U[Usuario del rancho] --> UI[Interfaz web]
+    UI --> APP[JavaScript: estado y lógica]
+    APP <--> IDB[(IndexedDB)]
+    UI <--> SW[Service Worker / Cache Storage]
+    APP <-->|Sincronización HTTPS| API[Supabase API]
+    APP <--> AUTH[Supabase Auth]
+    AUTH <--> OAUTH[Google / Facebook]
+    API <--> DB[(PostgreSQL / RLS)]
+    API <--> ST[(Storage privado)]
+    G[GitHub] --> V[Vercel build]
+    E[Variables de entorno] --> V
+    V --> UI
+```
 
-El catálogo ahora incluye ID interno `ANM-00001` (generado y estable), arete, nombre, sexo, raza, color, cruza, señas, identificador oficial, fechas de nacimiento/ingreso/destete, edad derivada, procedencia, origen, referencias de madre y padre, ubicación actual, responsable, motivo/observaciones de baja, observaciones generales y metadatos automáticos de creación/modificación. Las listas de raza, lote, potrero, corral y estado tienen valores estables, etiquetas editables y opciones que se pueden desactivar; no se permite desactivar una opción asignada. Edad se deriva de la fecha de nacimiento o de la estimación registrada. Los pesos al nacimiento/destete no se guardan en la ficha: los pesajes siguen siendo registros históricos independientes.
+### Flujo de datos y funcionamiento sin conexión
 
-El formulario básico nuevo ofrece arete y sexo como obligatorios, más nombre y raza. El resto se organiza como datos adicionales. Los campos configurables aparecen en la ficha resumida/completa y la tabla según su ajuste. En ficha completa se ocultan valores vacíos de forma predeterminada; **Mostrar campos vacíos** los presenta como «Sin registrar». El peso actual y la fecha del último pesaje siguen derivándose del historial de pesajes.
+1. Las operaciones se registran localmente en IndexedDB.
+2. Al existir conexión y sesión autorizada, la aplicación sincroniza los registros con Supabase.
+3. Las políticas de acceso del servidor limitan las operaciones según la membresía y el rol.
+4. Si la misma ficha cambió en ambos lados, la aplicación solicita elegir la versión que se conservará. La resolución reemplaza la ficha completa.
+5. El service worker almacena los recursos necesarios para volver a abrir la aplicación offline tras una primera visita en línea. Las URL de autenticación con parámetros no se incorporan a la caché.
 
-La configuración local usa `schemaVersion: 4`; las versiones 1, 2 y 3 se normalizan y sus visibilidades booleanas `detail` siguen convirtiéndose (`true` → `summary`, `false` → `hidden`). Los módulos y campos introducidos después de la versión original de cada configuración se inicializan desactivados para evitar cambios inesperados en ranchos existentes. Para compatibilidad con la función RPC ya instalada en Supabase (que valida `schemaVersion: 1`), la envoltura de red mantiene ese valor y agrega `configVersion: 4`, `detailVisibility` y el booleano `detail` para clientes antiguos. La sincronización usa la configuración revisionada del rancho.
+La autenticación inicial, la aprobación de solicitudes y la sincronización requieren conexión. Los datos locales no equivalen a un respaldo remoto.
 
-Los animales nuevos guardan los campos en el `payload` existente de `animal_sync_records`; no se agregan columnas ni se toca su esquema. A los animales existentes se les asigna un ID interno único si no lo tienen y se normaliza la clave `birthEstimated` desde formatos heredados, sin borrar datos ni fotos. Las copias JSON incluyen configuración y campos nuevos; se aceptan copias antiguas, se validan tipos/referencias/IDs internos y se asignan IDs a animales antiguos que aún no tengan uno.
+## Estructura del repositorio
 
-El formulario de animales sigue restringido al propietario/administrador. El trigger de trabajadores permite añadir registros operativos autorizados (pesos y tratamientos) y corregir el valor de una pesada propia; rechaza cambios a `payload.animal`, fotos, pronósticos y registros previos.
+```text
+Ganaderov/
+├── index.html                 # Interfaz principal y diálogos
+├── styles.css                 # Sistema visual y diseño adaptable
+├── app.js                     # Estado, inventario, jornadas, análisis y sincronización
+├── login-scene.js             # Animaciones de la pantalla de acceso
+├── service-worker.js          # Recursos offline y actualización de caché
+├── config.example.js          # Plantilla de configuración pública
+├── config.js                  # Generado en Vercel o local; ignorado por Git
+├── scripts/
+│   └── generate-config.cjs    # Generación de config.js desde variables de entorno
+├── confirmar-correo.html      # Retorno de confirmación de correo
+├── confirmar-correo.css
+├── confirmar-correo.js
+├── privacidad.html            # Aviso de privacidad
+├── terminos.html              # Términos del servicio
+├── eliminar-datos.html        # Instrucciones de eliminación
+├── legal.css
+├── ganaderov-icon.svg         # Identidad gráfica
+├── ranch-cover.svg            # Ilustración del rancho
+├── plantillas_correo/         # Plantillas para Supabase Auth
+├── supabase-schema.sql        # Esquema, funciones, políticas y triggers
+├── supabase-clean-data.sql    # Limpieza destructiva de datos
+├── supabase-clean-schema.sql  # Limpieza destructiva del esquema
+├── supabase-reset.sql         # Reinicio destructivo
+├── vercel.json                # Configuración de compilación
+├── .gitignore
+└── README.md
+```
 
-## Acceso y usuarios del rancho
+## Base de datos
 
-La pantalla de acceso permite iniciar sesión con contraseña o enlace mágico, crear una cuenta, reenviar confirmación y solicitar recuperación por correo. Desde **Mi cuenta** se puede cambiar el correo o la contraseña, previa verificación por código enviada por Supabase, y vincular/desvincular proveedores externos. Habilita en Supabase los proveedores OAuth que quieras ofrecer (Google, Apple o GitHub); las notificaciones de correo cambiado, contraseña cambiada y métodos vinculados/desvinculados se envían automáticamente. Los HTML de `plantillas_correo/` son cuerpos para configurar en los templates de Supabase, no páginas de destino de la aplicación. La plantilla de teléfono no está conectada a la interfaz.
+| Tabla | Responsabilidad |
+| --- | --- |
+| `animal_sync_records` | Fichas, registros y estado de sincronización de animales. |
+| `journey_sync_records` | Jornadas y sus registros operativos. |
+| `ranches` | Identidad de los ranchos. |
+| `ranch_members` | Membresías y roles. |
+| `ranch_access_requests` | Solicitudes de acceso. |
+| `ranch_animal_configs` | Configuración sincronizada de campos del rancho. |
 
-Las contraseñas deben tener al menos 8 caracteres y cumplir también la política configurada en Supabase. Si la confirmación por correo está habilitada, el usuario verá un mensaje que le indica que confirme la dirección antes de iniciar sesión; el enlace de recuperación permite definir y confirmar una contraseña nueva. Para que estos enlaces regresen a Ganaderov, agrega el origen y las URL desplegadas (incluida `confirmar-correo.html`) en **Authentication → URL Configuration → Redirect URLs** de Supabase.
+Las fotografías se sincronizan mediante el bucket privado `animal-photos`. Las funciones RPC y los triggers del esquema complementan RLS para validar operaciones y permisos. Consulta el [esquema SQL](./supabase-schema.sql) como fuente de verdad.
 
-Después de iniciar sesión, el usuario puede crear el primer perfil y rancho, o solicitar acceso con un código compartido por el propietario. La solicitud no concede acceso hasta que el propietario la apruebe. El propietario puede revisar solicitudes, retirar trabajadores y consultar los perfiles del rancho. Una cuenta solo puede pertenecer a un rancho activo. El rol trabajador puede registrar pesos, tratamientos y jornadas, pero no editar fichas, borrar registros, administrar permisos ni modificar fotografías. El propietario conserva la administración completa. Las políticas RLS y triggers del esquema hacen cumplir estas restricciones en el servidor, además de los controles de interfaz.
+### Roles
 
-El almacenamiento local se separa por identificador del rancho. Al asociar por primera vez una cuenta, los datos locales anteriores se copian al almacén aislado de ese rancho y solo se vacía el almacén anterior después de confirmar la copia local. Conserva una copia de seguridad antes de ese primer cambio como protección adicional. Una sesión offline previamente reconocida reutiliza el perfil cacheado del rancho; al reconectar, Ganadero consulta de nuevo la membresía y Supabase vuelve a aplicar RLS.
+- **Propietario / administrador:** administración de fichas y configuración según el rol asignado; el propietario gestiona solicitudes y trabajadores.
+- **Trabajador:** captura operativa autorizada de pesajes, tratamientos y jornadas, sin permisos para administrar roles o editar fichas base.
 
-### Validar el esquema y los permisos en forma segura
+La interfaz no sustituye la autorización del servidor.
 
-1. Descarga una copia desde la aplicación y conserva el archivo original fuera del navegador.
-2. Restaura una copia de la base de datos/proyecto en Supabase Staging, o crea un proyecto temporal y migra allí los datos actuales.
-3. Prueba `supabase-schema.sql` en esa instancia de staging. Verifica que las filas de `animal_sync_records`, `journey_sync_records` y los objetos del bucket `animal-photos` permanezcan intactos.
-4. Con dos cuentas de prueba, comprueba que el propietario pueda crear el perfil, que un trabajador solicite acceso, que la aprobación habilite solo ese rancho y que una cuenta de otro rancho no pueda leer datos, jornadas ni fotos.
-5. Comprueba también que el trabajador pueda añadir pesajes, tratamientos y jornadas, pero no alterar datos base del animal, borrar eventos, cambiar fotos, dar de baja animales ni modificar roles.
-6. Solo después de verificar el respaldo, las políticas y las cuentas, programa la actualización en producción. La aplicación no ejecuta cambios de esquema por sí sola.
+## Instalación y configuración
 
-El esquema actual no ejecuta `DELETE`, `TRUNCATE` ni `DROP TABLE` y conserva los `owner_id` existentes, pero reemplaza políticas y triggers. Las cuentas que ya tienen datos mantienen su `owner_id`; las cuentas legacy pueden requerir completar su perfil de rancho antes de habilitar el modo multiusuario.
+### Requisitos
 
-### Estado de validación y publicación
+Git, un navegador moderno, Node.js (para generar la configuración), Python 3 o un servidor HTTP estático equivalente y, para sincronización, un proyecto Supabase.
 
-- El esquema completo está preparado localmente. No se ha ejecutado en Supabase ni se ha validado contra un proyecto PostgreSQL de pruebas.
-- No se han probado cuentas reales, confirmaciones o recuperación por correo, separación RLS entre dos ranchos, ni la aprobación/revocación con trabajadores reales.
-- No se ha comprobado sincronización entre dos dispositivos, pérdida y restauración de conexión, ni respaldo/restauración de una fotografía real.
-- Los cambios de esta etapa no están publicados en Vercel; antes de publicarlos hay que completar las pruebas de staging y autorizar el despliegue.
+```bash
+git clone https://github.com/SkContreras/Ganaderov.git
+cd Ganaderov
+cp config.example.js config.js
+```
 
-## Crecimiento y peso objetivo
+Edita `config.js` con la URL y la clave publicable de tu propio proyecto:
 
-La ficha individual muestra los pesajes reales y la fecha de la última pesada. Para estimar la ganancia media diaria (GMD), Ganaderov toma todas las fechas distintas dentro de los 30 días anteriores a la pesada más reciente, promedia las mediciones hechas en el mismo día y calcula el cambio entre el primer y el último peso de esa ventana dividido por los días reales transcurridos. Con una sola pesada, fechas repetidas o sin dos fechas distintas en la ventana no se calcula una GMD automática. Si hay varios intervalos recientes con aumentos y pérdidas, se advierte que la GMD resume un ritmo variable.
+```js
+window.GANADERO_CONFIG = {
+  supabaseUrl: "https://YOUR_PROJECT.supabase.co",
+  supabaseAnonKey: "sb_publishable_YOUR_KEY"
+};
+```
 
-Cuando hay GMD reciente, la ficha muestra su proyección lineal a 90 días. Una GMD negativa permanece negativa y puede producir una estimación de pérdida de peso; la app no la sustituye por una ganancia positiva. Si pasan 30 días o más desde la última pesada, la ficha y la calculadora muestran un aviso para recordar que la información puede ser antigua. La proyección es una estimación matemática, no una garantía, y no considera alimentación, genética, salud o manejo. No se usan modelos de Brody, Gompertz o Richards.
+```bash
+python -m http.server 8000
+```
 
-En la ficha se puede indicar fecha de nacimiento confirmada o, en su lugar, una edad aproximada en años y meses. La edad aproximada se guarda con la fecha en que fue registrada, se conserva como estimación y nunca se convierte en una fecha de nacimiento inventada.
+Abre [http://localhost:8000](http://localhost:8000). No es necesario instalar dependencias npm para ejecutar el frontend. La biblioteca Supabase JS se carga desde un CDN con versión fijada.
 
-El rango de peso objetivo se configura por animal, se guarda en su ficha y se sincroniza junto con los datos existentes. Es opcional y puede quitarse dejando vacíos ambos límites. Ningún rango de mercado se impone como universal.
+### Supabase
 
-No se utiliza todavía un modelo de Brody, Gompertz o Richards. La aplicación no estima parámetros de crecimiento ni trata una edad aproximada como fecha de nacimiento confirmada; un modelo por edad requiere primero datos de edad confiables y validación adecuada para el hato.
+1. Crea un proyecto de desarrollo independiente.
+2. Ejecuta [supabase-schema.sql](./supabase-schema.sql) en SQL Editor de ese proyecto nuevo. Para una base existente, valida primero una restauración en staging.
+3. Configura la URL del sitio y las redirecciones permitidas para el origen local y el de producción, incluyendo `/confirmar-correo.html`.
+4. Habilita los proveedores OAuth necesarios; usa el callback que indica Supabase en los paneles de Google y Meta.
+5. Configura las [plantillas de correo](./plantillas_correo/) cuando corresponda.
+6. Verifica la separación entre ranchos con dos cuentas de prueba.
 
-## Calculadora de peso y valor de mercado
+## Despliegue
 
-En **Gestión → Calculadora** puedes seleccionar un animal y cargar su última pesada. Si hay dos o más fechas distintas en los 30 días anteriores a la última pesada, propone la GMD calculada con las fechas y los días reales de esa ventana; esta GMD se puede modificar. Una pesada por sí sola no produce una tendencia. También acepta peso y GMD manuales, pero estos valores se identifican como supuestos y no como crecimiento medido. Al indicar los días de espera, estima el peso futuro con `peso actual + GMD × días`. Una proyección inferior a cero se muestra como tal y no se utiliza para estimar valor de mercado.
+El proyecto se conecta a GitHub desde Vercel. El comando de build definido en `vercel.json` es `node scripts/generate-config.cjs`.
 
-Puedes guardar una estimación para un animal desde la calculadora, incluso sin completar una cotización. Se conserva el peso y fecha base, GMD y su origen, las pesadas usadas, el plazo, el peso estimado y la fecha objetivo. Una pesada individual posterior o una jornada de pesaje compara la primera pesada registrada después de la estimación que tenga fecha igual o posterior a la fecha objetivo, y registra el peso real, la fecha de esa pesada, el error firmado (`real − estimado`), el error absoluto y el error porcentual absoluto cuando se puede calcular. Este registro permite comparar estimaciones con resultados reales; no modifica los pesajes ni representa una validación científica del modelo.
+| Variable de entorno | Uso |
+| --- | --- |
+| `SUPABASE_URL` | URL pública del proyecto Supabase. |
+| `SUPABASE_PUBLISHABLE_KEY` | Clave publicable del cliente, con prefijo `sb_publishable_`. |
 
-La cotización se captura manualmente: categoría actual, fecha y precios mínimo, promedio y máximo por kg. Opcionalmente puedes ingresar el siguiente rango de peso y sus precios; si el peso proyectado alcanza el umbral, se usa el precio promedio de esa categoría, a menos que se capture un precio futuro supuesto. La pantalla compara el valor bruto de vender hoy con el bruto del escenario de espera y resta el costo diario por el plazo indicado. No incluye transporte, comisiones, mermas ni otros gastos.
+El generador valida estos valores y crea `config.js` durante el build. Configura las variables en los entornos apropiados de Vercel antes de desplegar. No guardes secretos de administrador en estos campos.
 
-La calculadora enlaza a [México Ganadero](https://www.mexicoganadero.com/precios/) como referencia, pero no descarga sus datos automáticamente: la página consultada no ofrece una respuesta estructurada accesible para integrarla con fiabilidad desde esta aplicación estática. Verifica la categoría, clasificación, fecha y región antes de capturar precios. Las cotizaciones, precios futuros y costos se usan solo durante la sesión de la calculadora; no se guardan, sincronizan ni incluyen en las copias de seguridad. Las estimaciones de crecimiento guardadas sí se conservan en el dispositivo, se incluyen en la sincronización por animal y en las copias de seguridad. Son referencias editables, no ofertas ni predicciones de mercado.
+## Seguridad y privacidad
 
-## Uso local
+- La clave publicable está destinada al navegador; no es un secreto ni reemplaza RLS.
+- Las claves `service_role`, `sb_secret_`, contraseñas y secretos OAuth nunca deben incorporarse al frontend ni al repositorio.
+- `config.js`, archivos de entorno y configuración local de Vercel están excluidos de Git.
+- La separación local por rancho y las políticas RLS son capas complementarias.
+- Exporta copias de seguridad y protege los dispositivos que guardan información offline.
+- Reporta vulnerabilidades de forma privada, sin publicar credenciales, tokens, datos personales ni expedientes en los issues.
 
-Abre `index.html` en una versión reciente de Chrome o Edge. Sin configurar Supabase, la app conserva el modo local de un solo dispositivo. Las fotos se almacenan en IndexedDB cuando está sin conexión y en el bucket privado de Supabase al sincronizar. El caché offline del service worker usa la versión `ganadero-v19`.
+Documentos: [Privacidad](https://ganaderov.vercel.app/privacidad.html) · [Términos](https://ganaderov.vercel.app/terminos.html) · [Eliminación de datos](https://ganaderov.vercel.app/eliminar-datos.html).
+
+## Pruebas y mantenimiento
+
+Antes de publicar cambios, valida captura y edición, filtros de animales activos, jornadas reanudadas, estimaciones, copias JSON, sincronización entre dos dispositivos, trabajo offline y recuperación de sesión. Verifica que una cuenta no pueda consultar ni modificar datos de otro rancho, y que un trabajador no pueda exceder sus permisos.
+
+Facebook Login está sujeto a la verificación y aprobación de Meta; la presencia del botón no demuestra disponibilidad pública. La validación integral de RLS, recuperación, fotos y sincronización debe realizarse en staging con cuentas independientes. No se afirma aquí una certificación de seguridad ni una cobertura automatizada completa.
+
+> [!WARNING]
+> Los scripts `supabase-clean-data.sql`, `supabase-clean-schema.sql` y `supabase-reset.sql` son destructivos. No los ejecutes en producción sin respaldo, revisión y autorización explícita. El reset incluye una confirmación que debe revisarse antes de ejecutar el archivo. No manipules directamente las tablas internas de Auth y Storage para borrar usuarios o archivos.
+
+## Contribuciones, autoría y agradecimientos
+
+**Autor y mantenedor:** [SkContreras](https://github.com/SkContreras).
+
+Las contribuciones pueden comenzar con un issue que describa el problema o la propuesta. Trabaja en una rama independiente, mantén los cambios acotados, documenta las pruebas y abre un pull request hacia `main`. No adjuntes datos reales ni secretos.
+
+Gracias a los ganaderos y trabajadores del campo que inspiran el diseño de Ganaderov, y a las comunidades y equipos de [Supabase](https://supabase.com/), [PostgreSQL](https://www.postgresql.org/), [Vercel](https://vercel.com/), [GitHub](https://github.com/) y [MDN](https://developer.mozilla.org/) por las herramientas y documentación que hacen posible este proyecto.
+
+### Licencia
+
+No se ha encontrado un archivo LICENSE en el repositorio. La licencia de distribución y reutilización está pendiente de definición por el titular del proyecto.
+
+---
+
+<div align="center">
+  <strong>Ganaderov</strong><br />
+  Tecnología al servicio del campo.<br />
+  <a href="https://ganaderov.vercel.app/">ganaderov.vercel.app</a>
+</div>
