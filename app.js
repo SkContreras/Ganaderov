@@ -533,6 +533,28 @@
     return message || "No se pudo completar la solicitud. Inténtalo de nuevo.";
   }
 
+  function readOAuthReturnError(href) {
+    const url = new URL(href);
+    const fragment = new URLSearchParams(url.hash.slice(1));
+    const keys = ["error", "error_code", "error_description"];
+    const params = url.searchParams.has("error") || url.searchParams.has("error_code") ? url.searchParams :
+      fragment.has("error") || fragment.has("error_code") ? fragment : null;
+    if (!params) return null;
+    // Leave valid session and recovery credentials to the Supabase SDK.
+    if (["code","access_token","refresh_token","token_hash"].some(key => url.searchParams.has(key) || fragment.has(key))) return null;
+    const code = params.get("error_code") || params.get("error") || "";
+    const description = params.get("error_description") || "";
+    const message = code === "bad_oauth_callback" || /oauth state parameter missing/i.test(description)
+      ? "No se pudo completar el inicio de sesión: el proveedor devolvió una respuesta inválida. Vuelve a intentarlo desde Ganaderov o utiliza otro método de acceso."
+      : code === "access_denied" ? "El acceso no fue autorizado. Puedes intentarlo nuevamente."
+      : "No se pudo completar la autenticación. Vuelve a intentarlo o utiliza otro método de acceso.";
+    keys.forEach(key => params.delete(key));
+    if (params === fragment) url.hash = fragment.toString();
+    if (url.hash === "#_=_") url.hash = "";
+    return { message, url: url.href };
+  }
+
+  let oauthStarting = false;
   function authRedirectUrl() {
     if (location.protocol !== "http:" && location.protocol !== "https:") return undefined;
     return new URL(location.pathname, location.origin).href;
@@ -5170,6 +5192,7 @@
       $("#ranch-dialog").showModal();
     });
     $$("[data-google-login], [data-facebook-login]").forEach(button => button.addEventListener("click", async () => {
+      if (oauthStarting) return;
       const provider = button.hasAttribute("data-facebook-login") ? "facebook" : "google";
       const view = button.closest("form")?.id === "sign-up-form" ? "register" : "login";
       const redirectTo = authRedirectUrl();
@@ -5178,17 +5201,20 @@
         return;
       }
       const buttons = $$("[data-google-login], [data-facebook-login]");
+      oauthStarting = true;
       buttons.forEach(item => { item.disabled = true; });
       try {
-        const { error } = await cloud.auth.signInWithOAuth({
+        const { data, error } = await cloud.auth.signInWithOAuth({
           provider,
-          options: provider === "google" ? { redirectTo, queryParams: { prompt: "select_account" } } : { redirectTo, scopes: "email,public_profile" }
+          options: provider === "google" ? { redirectTo, skipBrowserRedirect: true, queryParams: { prompt: "select_account" } } : { redirectTo, skipBrowserRedirect: true, scopes: "email,public_profile" }
         });
         if (error) throw error;
+        if (!data?.url) throw new Error("No se recibió una dirección de autenticación.");
+        location.assign(data.url);
       } catch (error) {
-        showAccountView(view, authErrorMessage(error));
-      } finally {
+        oauthStarting = false;
         buttons.forEach(item => { item.disabled = false; });
+        showAccountView(view, authErrorMessage(error));
       }
     }));
     $("#sign-in-form").addEventListener("submit", async event => {
@@ -5707,8 +5733,15 @@
       return;
     }
     try {
+      const oauthReturnError = readOAuthReturnError(location.href);
+      if (oauthReturnError) history.replaceState(history.state, "", oauthReturnError.url);
       db = await openDatabase();
       registerEvents();
+      window.addEventListener("pageshow", event => {
+        if (!event.persisted) return;
+        oauthStarting = false;
+        $$("[data-google-login], [data-facebook-login]").forEach(button => { button.disabled = false; });
+      });
       attachDateShortcuts(document);
       $("#calculator-price-date").value = today();
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
@@ -5785,6 +5818,14 @@
         $("#sync-button").disabled = true;
       }
       await refresh();
+      if (oauthReturnError) {
+        if (!currentUser) {
+          showAccountView("login", oauthReturnError.message);
+          if (!$("#account-dialog").open) $("#account-dialog").showModal();
+        } else {
+          showToast(oauthReturnError.message);
+        }
+      }
       window.addEventListener("online", () => syncData());
       window.addEventListener("offline", () => setSyncStatus("Sin conexión · cambios guardados aquí"));
       document.addEventListener("visibilitychange", () => {

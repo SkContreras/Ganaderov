@@ -1,4 +1,4 @@
-const CACHE_NAME = "ganadero-v41";
+const CACHE_NAME = "ganadero-v42";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -42,6 +42,12 @@ self.addEventListener("activate", event => {
 self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
   const request = event.request;
+  const url = new URL(request.url);
+  // Authentication and recovery query strings must not enter the offline cache.
+  if (url.origin === self.location.origin && url.search) {
+    event.respondWith(fetch(request, { cache: "no-store" }));
+    return;
+  }
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
     if (new URL(request.url).origin === self.location.origin) {
