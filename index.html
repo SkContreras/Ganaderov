@@ -57,7 +57,7 @@
         <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-journeys"></use></svg> Jornadas
       </button>
       <button id="calculator-nav" class="nav-item" type="button" aria-current="false">
-        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-calculator"></use></svg> Calculadora
+        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-calculator"></use></svg> Análisis ganadero
       </button>
       <div class="sidebar-label settings-nav-label">ADMINISTRACIÓN</div>
       <button id="settings-nav" class="nav-item" type="button" aria-current="false">
@@ -210,7 +210,7 @@
                 <label>Fecha base del peso<input id="calculator-baseline-date" type="date"></label>
                 <label>GMD reciente (kg/día)<input id="calculator-gain" type="number" step="0.01" placeholder="Calculada con dos pesajes o captura manual" inputmode="decimal"></label>
                 <p id="calculator-weight-note" class="calculator-note full-width">Selecciona un animal para cargar sus pesajes. La GMD reciente usa las fechas distintas dentro de los últimos 30 días de pesajes.</p>
-                <div class="analysis-days full-width"><label>Días que esperas<input id="calculator-days" type="number" min="0" step="1" value="30" inputmode="numeric"></label><input id="analysis-days-slider" type="range" min="0" max="180" value="30" aria-label="Días de espera"><div class="analysis-chips"><button type="button" data-analysis-days="7" aria-pressed="false">7 días</button><button type="button" data-analysis-days="15" aria-pressed="false">15 días</button><button type="button" data-analysis-days="30" aria-pressed="true">30 días</button><button type="button" data-analysis-days="45" aria-pressed="false">45 días</button><button type="button" data-analysis-days="60" aria-pressed="false">60 días</button><button type="button" data-analysis-days="90" aria-pressed="false">90 días</button></div></div>
+                <div class="analysis-days full-width"><label>Días que esperas<input id="calculator-days" type="number" min="0" max="3650" step="1" value="30" inputmode="numeric"></label><input id="analysis-days-slider" type="range" min="0" max="180" value="30" aria-label="Días de espera"><div class="analysis-chips"><button type="button" data-analysis-days="7" aria-pressed="false">7 días</button><button type="button" data-analysis-days="15" aria-pressed="false">15 días</button><button type="button" data-analysis-days="30" aria-pressed="true">30 días</button><button type="button" data-analysis-days="45" aria-pressed="false">45 días</button><button type="button" data-analysis-days="60" aria-pressed="false">60 días</button><button type="button" data-analysis-days="90" aria-pressed="false">90 días</button></div></div>
                 <label>Costo diario por animal (MXN)<input id="calculator-cost" type="number" min="0" step="0.01" value="0" inputmode="decimal"></label>
               </div>
             </section>

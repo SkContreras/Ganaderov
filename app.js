@@ -1816,7 +1816,7 @@
   function projectWeight(weight, gainKgPerDay, days, baselineDate) {
     const baselineDay = Date.parse(`${baselineDate}T00:00:00Z`) / 86400000;
     if (!Number.isFinite(weight) || !Number.isFinite(gainKgPerDay) ||
-        !Number.isFinite(days) || days < 0 || !Number.isFinite(baselineDay)) return null;
+        !Number.isInteger(days) || days < 0 || days > 3650 || !Number.isFinite(baselineDay) || !Number.isFinite(weight + gainKgPerDay * days)) return null;
     const targetDay = baselineDay + days;
     return {
       baselineDate,
@@ -2059,7 +2059,8 @@
     analysisText("#analysis-base-weight",weight!==null?formatProjectedWeight(weight):"—");
     analysisText("#analysis-base-gain",gain!==null?gain.toFixed(3)+" kg/día":"—");
     analysisText("#analysis-base-date",baselineDate?formatDate(baselineDate):"—");
-    $("#analysis-days-slider").value=String(Math.max(0,Math.min(180,days??0)));
+    $("#analysis-days-slider").max=String(Math.max(180,Math.min(3650,days??0)));
+    $("#analysis-days-slider").value=String(Math.max(0,Math.min(3650,days??0)));
     $("[data-analysis-days]").forEach(b=>b.setAttribute("aria-pressed",String(Number(b.dataset.analysisDays)===days)));
     $("#analysis-decision").dataset.tone="neutral";
     analysisText("#analysis-decision-title","Completa los datos");
@@ -2157,7 +2158,7 @@
       setCalculatorMessage("Selecciona un animal o captura manualmente su peso actual.");
       return;
     }
-    if (weight < 0 || days === null || days < 0 || dailyCost === null || dailyCost < 0 ||
+    if (weight <= 0 || days === null || !Number.isInteger(days) || days < 0 || days > 3650 || dailyCost === null || dailyCost < 0 ||
         !baselineDate || !Number.isFinite(Date.parse(`${baselineDate}T00:00:00Z`))) {
       setCalculatorMessage("Ingresa un peso, fecha base, número de días y costo diario válidos.", true);
       return;
@@ -2188,7 +2189,7 @@
     } else {
       $("#calculator-projection-detail").textContent = "No hay GMD reciente; sin ingresar una GMD manual no se proyecta el crecimiento.";
     }
-    if (selectedAnimalId && state.calculatorProjection) {
+    if (selectedAnimalId && state.calculatorProjection && projectedWeight >= 0) {
       $("#calculator-save-forecast").disabled = false;
       $("#calculator-save-forecast").hidden = !canManageRanch();
       $("#calculator-forecast-save-note").textContent = state.calculatorProjection.source === "manual-gmd"
@@ -2235,9 +2236,10 @@
       return;
     }
     const usesNextRange = nextThreshold !== null && nextAverage !== null && projectedWeight >= nextThreshold;
-    const salePrice = futurePrice !== null ? futurePrice : usesNextRange ? nextAverage : currentAverage;
+    const salePrice = days === 0 ? currentAverage : futurePrice !== null ? futurePrice : usesNextRange ? nextAverage : currentAverage;
     const futureValue = projectedWeight * salePrice;
     const netDifference = futureValue - currentValue - dailyCost * days;
+    if (![currentValue,futureValue,netDifference,dailyCost*days].every(Number.isFinite)) { setCalculatorMessage("Los importes exceden el rango de cálculo. Revisa los valores.",true); return; }
     const futureMinPrice = futurePrice !== null ? null : usesNextRange ? nextMin : currentMin;
     const futureMaxPrice = futurePrice !== null ? null : usesNextRange ? nextMax : currentMax;
     $("#calculator-future-value").textContent = formatCurrency(futureValue);
@@ -2277,7 +2279,7 @@
     }
     const projection = state.calculatorProjection;
     const animalId = $("#calculator-animal").value;
-    if (!projection || !animalId || projection.animalId !== animalId ||
+    if (!projection || projection.predictedWeight < 0 || !animalId || projection.animalId !== animalId ||
         !state.animals.some(animal => animal.id === animalId)) {
       showToast("Selecciona un animal y calcula una proyección válida antes de guardarla.");
       return;
@@ -2612,7 +2614,7 @@
     $("#journeys-nav").setAttribute("aria-current", journeys ? "page" : "false");
     $("#calculator-nav").setAttribute("aria-current", calculator ? "page" : "false");
     $("#settings-nav").setAttribute("aria-current", settings ? "page" : "false");
-    $("#breadcrumb-current").textContent = settings ? "Configuración" : calculator ? "Calculadora" : journeys ? "Jornadas" : "Ganado";
+    $("#breadcrumb-current").textContent = settings ? "Configuración" : calculator ? "Análisis ganadero" : journeys ? "Jornadas" : "Ganado";
     renderJourneys();
     if (settings) renderAnimalSettings();
     if (calculator) renderCalculatorAnimalOptions();
