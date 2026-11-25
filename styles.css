@@ -712,6 +712,90 @@ td { height: 54px; }
 .account-facebook-button:hover { background: #f0f6ff; }
 
 
+/* Animated login: scoped to the account dialog. */
+#account-dialog.account-modal{width:min(1040px,calc(100vw - 32px));max-width:none;max-height:calc(100dvh - 32px);padding:0;border-radius:22px;overflow:auto}
+#account-dialog .account-layout{grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:0;align-items:stretch}
+#account-dialog .account-brand-panel{display:flex;min-width:0;gap:20px;justify-content:center;padding:clamp(20px,3vw,36px);background:#f8f4e9;color:#0f3d2c}
+#account-dialog .account-brand-panel::after{display:none}
+#account-dialog .account-brand strong{font-size:23px}
+#account-dialog .account-brand small{color:#61753d;letter-spacing:1px}
+#account-dialog .account-brand img{box-shadow:none}
+#account-dialog .account-brand-copy{padding:0;margin:0;max-width:none}
+#account-dialog .account-brand-copy h2{font-size:clamp(24px,3vw,35px);margin:0 0 8px}
+#account-dialog .account-brand-copy p{color:#5d6c50;max-width:none}
+#account-dialog .account-brand-foot{color:#617453}
+#account-dialog .account-panel{min-width:0;min-height:0;padding:36px clamp(24px,3.5vw,48px) 22px;justify-content:center}
+#account-dialog .account-form-heading{margin:0 0 18px;padding-right:26px}
+#account-dialog .account-form-heading h2{font-size:30px;margin:6px 0}
+#account-dialog .form-grid{gap:12px}
+#account-dialog .form-grid input{min-height:43px}
+#account-dialog .modal-actions{margin-top:16px}
+#account-dialog .modal-actions .button{min-height:44px}
+#account-dialog .account-social-divider{margin:12px 0 9px}
+#account-dialog .account-google-button{min-height:42px;border-color:#d5ded2}
+#account-dialog .account-facebook-button{margin-top:8px}
+#account-dialog .account-links{margin-top:12px;gap:5px 12px}
+#account-dialog .account-panel-foot{padding-top:14px;margin:0}
+.login-scene-wrap{border-radius:22px;overflow:hidden;line-height:0;box-shadow:0 10px 30px #344c2520}
+.login-ranch-scene{display:block;width:100%;height:auto}
+.login-sky-top,.login-sky-bottom,.login-night-tint,.login-sun,.login-moon,.login-stars,.login-fireflies{transition:opacity 1.4s,stop-color 1.4s}
+.login-night-tint,.login-moon,.login-stars,.login-fireflies{opacity:0}
+[data-ranch-time="dawn"] .login-sky-top{stop-color:#b6b4d2}
+[data-ranch-time="dawn"] .login-sky-bottom{stop-color:#ffd0a3}
+[data-ranch-time="dusk"] .login-sky-top{stop-color:#d1a3a1}
+[data-ranch-time="dusk"] .login-sky-bottom{stop-color:#ffd18c}
+[data-ranch-time="night"] .login-sky-top{stop-color:#243d53}
+[data-ranch-time="night"] .login-sky-bottom{stop-color:#526b78}
+[data-ranch-time="night"] .login-night-tint{opacity:.35}
+[data-ranch-time="night"] .login-sun,[data-ranch-time="night"] .login-cloud,[data-ranch-time="night"] .login-birds{opacity:0}
+[data-ranch-time="night"] .login-moon,[data-ranch-time="night"] .login-stars,[data-ranch-time="night"] .login-fireflies{opacity:1}
+.login-grass{transform-box:fill-box;transform-origin:bottom;animation:login-sway 3s ease-in-out infinite alternate;animation-delay:var(--delay)}
+.login-cloud{animation:login-cloud-drift 35s linear infinite}
+.login-cloud-two{animation-delay:-19s}
+.login-cow-body{transform-box:fill-box;transform-origin:bottom;animation:login-breathe 4s ease-in-out infinite}
+.login-calf .login-cow-body{animation-delay:-2s}
+.login-head{transform-origin:45px -90px;animation:login-nod 8s ease-in-out infinite}
+.login-tail{transform-origin:-66px -80px;animation:login-tail-wave 3.6s ease-in-out infinite}
+.login-eyes{transform-origin:50px -85px;animation:login-blink 5s infinite}
+.login-ear{transform-origin:50px -90px;animation:login-ear-twitch 7s infinite}
+.login-birds{animation:login-flight 20s linear infinite}
+.login-wing{transform-box:fill-box;transform-origin:center;animation:login-flap .65s ease-in-out infinite alternate}
+.login-firefly{animation:login-spark 4s ease-in-out infinite alternate;animation-delay:var(--delay)}
+#account-dialog[data-scene-focus="password"] .login-eyes{animation:none;transform:scaleY(.08)}
+#account-dialog[data-scene-focus="password"] .login-head{animation:none;transform:rotate(-11deg);transition:transform .35s}
+#account-dialog[data-scene-focus="email"] .login-head{animation:none;transform:rotate(7deg);transition:transform .35s}
+#account-dialog[data-scene-error="true"] .login-head{animation:login-curious .65s ease-in-out 2}
+#account-dialog[data-scene-focus="password"] .login-head{animation:none}
+#account-dialog:not([open]) .login-ranch-scene *{animation-play-state:paused}
+@keyframes login-sway{to{transform:rotate(7deg)}}
+@keyframes login-cloud-drift{to{transform:translateX(590px)}}
+@keyframes login-breathe{50%{transform:scaleY(1.023)}}
+@keyframes login-nod{0%,40%,100%{transform:rotate(0)}60%,75%{transform:rotate(8deg)}}
+@keyframes login-tail-wave{50%{transform:rotate(18deg)}}
+@keyframes login-blink{0%,45%,49%,100%{transform:scaleY(1)}47%{transform:scaleY(.06)}}
+@keyframes login-ear-twitch{0%,86%,100%{transform:rotate(0)}90%,94%{transform:rotate(5deg)}}
+@keyframes login-flight{from{transform:translate(-40px,80px)}to{transform:translate(480px,32px)}}
+@keyframes login-flap{to{transform:scaleY(.25)}}
+@keyframes login-spark{to{opacity:.1;transform:translate(9px,-14px)}}
+@keyframes login-curious{50%{transform:rotate(-13deg)}}
+@media(max-width:650px){
+ #account-dialog.account-modal{width:min(460px,calc(100vw - 20px));max-height:calc(100dvh - 20px)}
+ #account-dialog .account-layout{grid-template-columns:1fr}
+ #account-dialog .account-panel{grid-row:1;padding:32px 24px 20px}
+ #account-dialog .account-brand-panel{padding:18px 24px;gap:12px}
+ #account-dialog .login-scene-wrap{max-height:160px}
+ #account-dialog .login-ranch-scene{margin-top:-12%;width:100%}
+ #account-dialog .account-brand-copy h2{font-size:23px}
+ #account-dialog .account-brand-foot{display:none}
+}
+@media(max-height:760px) and (min-width:651px){
+ #account-dialog .account-brand-panel{gap:12px;padding:22px}
+ #account-dialog .login-scene-wrap{max-width:350px;align-self:center;width:100%}
+ #account-dialog .account-panel{padding-top:26px;padding-bottom:16px}
+}
+@media(prefers-reduced-motion:reduce){#account-dialog .login-ranch-scene *{animation:none!important;transition:none!important}}
+
+
 /* Animated Ganaderov cover */
 .ranch-cover { position:relative; isolation:isolate; overflow:hidden; margin:24px 0 0; min-height:clamp(190px,21vw,300px); display:flex; align-items:center; border:1px solid #e7e6d8; border-radius:18px; background:#f8f4e9; }
 .ranch-cover-art { position:absolute; z-index:-1; inset:0 0 0 43%; background:url("./ranch-cover.svg") center right/cover no-repeat; border-top-left-radius:45% 100%; overflow:hidden; }
