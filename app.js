@@ -768,6 +768,107 @@
     }
   }
 
+  function capturePreferences() {
+    const raw = state.fieldConfig?.layout?.capture || {};
+    return { reuse: raw.reuse !== false, nextTag: raw.nextTag !== false, today: raw.today !== false, draft: raw.draft !== false, large: raw.large === true, defaults: raw.defaults || {} };
+  }
+  function settingsControl(id, property) {
+    return $(`[data-field-setting="${property}"][data-field-id="${id}"]`, $("#animal-field-settings"));
+  }
+  function settingsFieldDraft(field) {
+    const enabled = field.locked || !!settingsControl(field.id,"enabled")?.checked;
+    const module = !!$(`[data-module-setting="${field.module}"]`)?.checked;
+    const required = !!settingsControl(field.id,"required")?.checked;
+    return { enabled: enabled && (module || field.locked), required, form: !!settingsControl(field.id,"form")?.checked || required, basic: settingsControl(field.id,"formLevel")?.value === "basic", label: $(`[data-field-label="${field.id}"]`)?.value || field.label };
+  }
+  function updateSettingsWorkspace() {
+    const query = $("#settings-field-search").value.trim().toLocaleLowerCase("es-MX").normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+    const filter = $("#settings-field-filter").value;
+    let shown = 0;
+    const preview = [];
+    ANIMAL_FIELD_CATALOG.forEach(field => {
+      const d = settingsFieldDraft(field);
+      const row = $(`[data-field-label="${field.id}"]`)?.closest("tr");
+      if (!row) return;
+      const matches = (field.label+" "+field.description+" "+d.label).toLocaleLowerCase("es-MX").normalize("NFD").replace(/[\u0300-\u036f]/g,"").includes(query);
+      const visible = matches && (filter === "all" || filter === "active" && d.enabled || filter === "required" && d.required || filter === "basic" && d.enabled && d.form && d.basic || filter === "hidden" && !d.enabled);
+      row.hidden = !visible;
+      if (visible) shown++;
+      if (field.form && d.enabled && d.form) preview.push(d);
+    });
+    $("#settings-field-count").textContent = shown + " de " + ANIMAL_FIELD_CATALOG.length + " campos";
+    $("#settings-preview-count").textContent = preview.length + " campos";
+    const target = $("#settings-capture-preview");
+    target.replaceChildren();
+    for (const basic of [true,false]) {
+      const group = document.createElement("section");
+      const title = document.createElement("h3"); title.textContent = basic ? "Formulario básico" : "Datos adicionales"; group.append(title);
+      for (const d of preview.filter(item => item.basic === basic)) {
+        const item = document.createElement("div"); item.className = "settings-preview-field"; item.textContent = d.label + (d.required ? " *" : ""); group.append(item);
+      }
+      if (group.children.length === 1) { const empty = document.createElement("p"); empty.textContent = "Sin campos"; group.append(empty); }
+      target.append(group);
+    }
+    $("#settings-dirty-status").textContent = state.fieldSettingsDirty ? "Cambios sin guardar" : "Configuración guardada";
+    $("#settings-save-bottom").hidden = !canManageRanch();
+  }
+  function renderCapturePreferences() {
+    const prefs = capturePreferences();
+    $("[data-capture-pref]").forEach(el => { el.checked = !!prefs[el.dataset.capturePref]; el.disabled = !canManageRanch(); });
+    $("[data-capture-default]").forEach(el => {
+      const key = el.dataset.captureDefault;
+      if (el.tagName === "SELECT") {
+        el.replaceChildren(new Option("Sin valor", ""));
+        (state.fieldConfig.lists[key] || []).filter(x=>x.enabled).forEach(x=>el.add(new Option(x.label,x.value)));
+      }
+      el.value = String(prefs.defaults[key] || "");
+      el.disabled = !canManageRanch();
+    });
+    $("[data-settings-preset], [data-settings-batch]").forEach(el=>el.disabled=!canManageRanch());
+    updateSettingsWorkspace();
+  }
+  function readCapturePreferences() {
+    return { ...Object.fromEntries($("[data-capture-pref]").map(el=>[el.dataset.capturePref,el.checked])),
+      defaults: Object.fromEntries($("[data-capture-default]").map(el=>[el.dataset.captureDefault,el.value.trim()])) };
+  }
+  function markSettingsWorkspaceDirty() {
+    state.fieldSettingsDirty = true;
+    $("#save-animal-settings").textContent = "Guardar cambios pendientes";
+    updateSettingsWorkspace();
+  }
+  function applySettingsShortcut(preset, batch) {
+    if (!canManageRanch()) return;
+    const groups = {quick:["tag","name","sex","breed","color","status"],identification:["tag","name","sex","breed","color"],location:["tag","sex","status","lot","paddock","pen","responsible"],dates:["tag","sex","birthDate","entryDate","originType","originName"]};
+    for (const field of ANIMAL_FIELD_CATALOG) {
+      const enabled = settingsControl(field.id,"enabled"), form = settingsControl(field.id,"form"), level = settingsControl(field.id,"formLevel"), required = settingsControl(field.id,"required");
+      const row = enabled?.closest("tr");
+      if (batch && row?.hidden) continue;
+      if (batch === "enable" && enabled && !enabled.disabled) { enabled.checked = true; const mod = $(`[data-module-setting="${field.module}"]`); if (mod && !mod.disabled) mod.checked = true; }
+      if (!field.form || !level || level.disabled) continue;
+      if (preset) {
+        const selected = preset === "complete" ? enabled?.checked : groups[preset]?.includes(field.id);
+        if (selected) { if (enabled && !enabled.disabled) enabled.checked = true; if (form && !form.disabled) form.checked = true; const mod = $(`[data-module-setting="${field.module}"]`); if (mod && !mod.disabled) mod.checked = true; }
+        level.value = selected || required?.checked ? "basic" : "advanced";
+      } else if (batch === "basic" && enabled?.checked && form?.checked) level.value = "basic";
+      else if (batch === "advanced" && !required?.checked) level.value = "advanced";
+    }
+    markSettingsWorkspaceDirty();
+  }
+  function registerSettingsWorkspace() {
+    $("#settings-field-search").addEventListener("input",updateSettingsWorkspace);
+    $("#settings-field-filter").addEventListener("change",updateSettingsWorkspace);
+    $("#settings-save-bottom").addEventListener("click",saveAnimalFieldSettings);
+    $("#settings-view").addEventListener("click",event=>{
+      const button=event.target.closest("[data-settings-preset],[data-settings-batch]");
+      if(button) applySettingsShortcut(button.dataset.settingsPreset,button.dataset.settingsBatch);
+    });
+    $("#settings-view").addEventListener("change",event=>{
+      if(event.target.matches("[data-capture-pref],[data-capture-default]") && canManageRanch()) markSettingsWorkspaceDirty();
+      else if(event.target.matches("[data-field-setting],[data-field-label],[data-module-setting],[data-list-label],[data-list-enabled],[data-list-active]")) queueMicrotask(updateSettingsWorkspace);
+    });
+    $("#settings-view").addEventListener("input",event=>{if(event.target.matches("[data-field-label]")) updateSettingsWorkspace();});
+  }
+
   function renderAnimalSettings() {
     const config = normalizeAnimalFieldConfig(state.fieldConfig);
     state.fieldConfig = config;
@@ -827,6 +928,7 @@
         <td>${field.form && field.type !== "automatic" ? checkbox("required", `Hacer ${field.label} obligatorio`) : '<span class="settings-not-applicable">—</span>'}</td>
       </tr>`;
     }).join("");
+    renderCapturePreferences();
   }
 
   function animalListOptionMarkup(listId, option, inUse = false, canEdit = canManageRanch()) {
@@ -882,7 +984,7 @@
         };
       });
     });
-    const config = { ...state.fieldConfig, schemaVersion: 4, modules, fields, lists };
+    const config = { ...state.fieldConfig, schemaVersion: 4, modules, fields, lists, layout: { ...state.fieldConfig.layout, capture: readCapturePreferences() } };
     void persistAnimalFieldConfig(config, "Configuración de campos guardada.").catch(error => {
       showToast(`No se pudo guardar la configuración: ${error.message}`);
     });
@@ -917,6 +1019,7 @@
     if (state.mainView === "calculator") renderCalculatorAnimalOptions();
     scheduleSync();
     state.fieldSettingsDirty = false;
+    updateSettingsWorkspace();
     $("#save-animal-settings").textContent = "Guardar configuración";
     showToast(successMessage);
   }
@@ -3189,13 +3292,11 @@
 
   function quickCaptureSeedFromAnimal(animal) {
     if (!animal) return null;
-    return {
-      tag: nextTagValue(animal.tag || ""),
-      breed: animal.breed || "",
-      lot: animal.lot || "",
-      paddock: animal.paddock || "",
-      entryDate: animal.entryDate || today()
-    };
+    const prefs = capturePreferences();
+    let tag = prefs.nextTag ? nextTagValue(animal.tag || "") : "";
+    for (let i=0; tag && state.animals.some(a=>String(a.tag).toLowerCase()===tag.toLowerCase()) && i<1000; i++) { const next=nextTagValue(tag); if(next===tag){tag="";break;} tag=next; }
+    if(state.animals.some(a=>String(a.tag).toLowerCase()===tag.toLowerCase())) tag="";
+    return { ...(prefs.reuse ? {breed:animal.breed || "",lot:animal.lot || "",paddock:animal.paddock || ""} : {}), ...(tag ? {tag} : {}), ...(prefs.today ? {entryDate:today()} : {}) };
   }
 
   function restoreAnimalFormErrors() {
@@ -3210,7 +3311,7 @@
   }
 
   function saveAnimalDraft() {
-    if (state.animalFormMode !== "create" || !$("#animal-dialog")?.open) return;
+    if (!capturePreferences().draft || state.animalFormMode !== "create" || !$("#animal-dialog")?.open) return;
     const form = $("#animal-form");
     const payload = {
       controls: {},
@@ -3238,11 +3339,11 @@
   }
 
   function loadAnimalDraft() {
-    if (state.animalFormMode !== "create") return false;
+    if (!capturePreferences().draft || state.animalFormMode !== "create") return false;
     try {
       const payload = JSON.parse(localStorage.getItem(animalFormDraftKey()) || "null");
       if (!payload?.controls || typeof payload.controls !== "object") return false;
-      applyFormValuesById(payload.controls, true);
+      applyFormValuesById(payload.controls, false);
       return true;
     } catch (error) {
       setAnimalFormError(`No se pudo recuperar el borrador: ${error.message}`);
@@ -3504,10 +3605,19 @@
     state.quickCaptureSeed = prefill || null;
     $("#animal-undo-last").hidden = !state.pendingUndo;
 
+    const capture = capturePreferences();
+    form.classList.toggle("capture-large", capture.large);
+    if (!isEdit) {
+      const defaults = {...capture.defaults};
+      if(capture.today) defaults.entryDate = today();
+      if(defaults.prefix && !prefill?.tag) defaults.tag = defaults.prefix;
+      delete defaults.prefix;
+      Object.entries(defaults).forEach(([id,value])=>{const control=$(`[data-animal-field="${id}"]`,form); if(control && value && (control.tagName!=="SELECT" || [...control.options].some(o=>o.value===value && !o.disabled))) control.value=value;});
+    }
     if (prefill && !isEdit) {
       Object.entries(prefill).forEach(([fieldId, value]) => {
         const input = $(`[data-animal-field="${fieldId}"]`, form);
-        if (input) input.value = value;
+        if (input && (input.tagName !== "SELECT" || [...input.options].some(o=>o.value===value && !o.disabled))) input.value = value;
       });
     }
 
@@ -4718,6 +4828,7 @@
   }
 
   function registerEvents() {
+    registerSettingsWorkspace();
     $("#add-animal-button").addEventListener("click", () => openAnimalForm());
     $("#empty-add-button").addEventListener("click", () => openAnimalForm());
     $("#animal-form").addEventListener("submit", saveAnimal);
