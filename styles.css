@@ -807,3 +807,22 @@ td { height: 54px; }
 .ranch-cover-description { border-left:3px solid #7ba43e; padding-left:12px; color:#28382d; line-height:1.5; max-width:340px; margin:0; font-size:clamp(11px,1.1vw,15px); }
 @media(max-width:760px) { .ranch-cover { display:block; min-height:0; padding-bottom:clamp(130px,37vw,230px); } .ranch-cover-copy { width:100%; padding:20px; } .ranch-cover-art { inset:auto 0 0; height:clamp(130px,37vw,230px); border-radius:0; background-position:center; } .ranch-cover-art::after { background:linear-gradient(180deg,#f8f4e9,transparent 22%); } }
 @media(prefers-reduced-motion:reduce) { .ranch-cover-art { background-image:url("./ranch-cover.svg"); } }
+
+
+/* Jornadas: a compact illustrated field-work header. */
+#journeys-view .journey-page-heading{position:relative;isolation:isolate;overflow:hidden;display:flex;align-items:center;gap:16px;min-height:190px;margin:24px 0;padding:28px clamp(18px,3vw,34px);border:1px solid #e5e6d8;border-radius:18px;background:#f8f4e9}
+#journeys-view .journey-page-heading>div{position:relative;z-index:1;max-width:49%;margin-right:auto}
+#journeys-view .journey-page-heading h1{color:#0f3d2c;font-size:clamp(25px,3vw,39px);margin:9px 0}
+#journeys-view .journey-page-heading .subtitle{color:#56664e;line-height:1.6;max-width:330px}
+#journeys-view .journey-page-heading .eyebrow{color:#607641}
+#journeys-view .journey-page-heading>.button{position:relative;z-index:1;align-self:flex-end;white-space:nowrap;box-shadow:0 3px 14px #173f2a25}
+.journey-art{position:absolute;z-index:-1;right:0;top:0;width:52%;height:100%;object-fit:cover;overflow:hidden;mask-image:linear-gradient(90deg,transparent,#000 18%);pointer-events:none}
+#journeys-view .journey-section-heading{background:linear-gradient(110deg,#f4f7ed,#fff 65%);display:flex;align-items:center;gap:12px}
+#journeys-view .journey-section-heading::before{content:"";width:36px;height:36px;border-radius:11px;flex:0 0 auto;background:#e5edda url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2350713a' stroke-width='1.8' stroke-linecap='round'%3E%3Crect x='4' y='5' width='16' height='16' rx='3'/%3E%3Cpath d='M8 3v4m8-4v4M4 10h16m-12 5 3 3 5-5'/%3E%3C/svg%3E") center/22px no-repeat}
+#journeys-view .journey-empty{padding:35px 20px;background:radial-gradient(ellipse at bottom,#f5f8ee,white 80%);line-height:1.7}
+#journeys-view .journey-empty::before{content:"";display:block;width:64px;height:64px;margin:0 auto 13px;border-radius:20px;background:#e9efdf url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236c8748' stroke-width='1.6' stroke-linecap='round'%3E%3Crect x='5' y='4' width='14' height='17' rx='2'/%3E%3Crect x='9' y='2' width='6' height='4' rx='1' fill='%23e9efdf'/%3E%3Cpath d='M9 11h6m-6 4h6'/%3E%3C/svg%3E") center/34px no-repeat}
+.journey-cloud{animation:journey-drift 12s ease-in-out infinite alternate}.journey-cow{transform-box:fill-box;transform-origin:bottom;animation:journey-breathe 4s ease-in-out infinite}.journey-head{transform-origin:49px -75px;animation:journey-nod 7s ease-in-out infinite}.journey-tail{transform-origin:-53px -70px;animation:journey-tail 3s ease-in-out infinite}.journey-eyes{transform-origin:49px -70px;animation:journey-blink 6s infinite}.journey-blade{transform-box:fill-box;transform-origin:bottom;animation:journey-wind 2.8s ease-in-out infinite alternate;animation-delay:var(--delay)}.journey-check{animation:journey-mark 5s ease-in-out infinite}
+@keyframes journey-drift{to{transform:translateX(55px)}}@keyframes journey-breathe{50%{transform:scaleY(1.025)}}@keyframes journey-nod{50%{transform:rotate(7deg)}}@keyframes journey-tail{50%{transform:rotate(18deg)}}@keyframes journey-blink{0%,46%,50%,100%{transform:scaleY(1)}48%{transform:scaleY(.06)}}@keyframes journey-wind{to{transform:rotate(8deg)}}@keyframes journey-mark{0%,20%{stroke-dashoffset:15}45%,90%{stroke-dashoffset:0}100%{stroke-dashoffset:15}}
+#journeys-view[hidden] .journey-art *{animation-play-state:paused}
+@media(max-width:700px){#journeys-view .journey-page-heading{min-height:0;display:flex;flex-wrap:wrap;padding:20px 18px 130px;gap:12px}#journeys-view .journey-page-heading>div{max-width:100%;width:100%}#journeys-view .journey-page-heading>.button{align-self:auto} .journey-art{top:auto;bottom:0;width:100%;height:125px;mask-image:linear-gradient(180deg,transparent,#000 17%)}}
+@media(prefers-reduced-motion:reduce){.journey-art *{animation:none!important}.journey-check{stroke-dashoffset:0}}
