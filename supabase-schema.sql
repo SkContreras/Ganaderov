@@ -635,7 +635,7 @@ language sql
 stable
 security invoker
 set search_path = ''
-as $
+as $$
   select coalesce(
     (select case when jsonb_typeof(item->'active') = 'boolean'
                  then (item->>'active')::boolean
@@ -649,7 +649,7 @@ as $
        limit 1),
     coalesce(p_status, '') not in ('Vendido','Fallecido','Baja','Otro','Otros','Desaparecido')
   );
-$;
+$$;
 revoke all on function public.ganaderov_animal_status_active(uuid,text) from public, anon, authenticated;
 
 create or replace function public.validate_worker_journey_sync_record()
