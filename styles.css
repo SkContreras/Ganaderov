@@ -701,3 +701,7 @@ td { height: 54px; }
 .account-google-button:disabled { opacity: .6; cursor: wait; }
 .account-google-button svg { flex: 0 0 auto; }
 .account-modal { overflow-y: auto; }
+
+/* Facebook OAuth */
+.account-facebook-button { margin-top: 10px; }
+.account-facebook-button:hover { background: #f0f6ff; }
