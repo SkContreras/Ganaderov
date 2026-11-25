@@ -1,5 +1,6 @@
 -- Elimina la estructura creada por Ganadero.
--- Conserva los usuarios de auth.users y otros objetos ajenos al proyecto.
+-- Conserva los usuarios de Auth, el bucket y sus archivos.
+-- El bucket y sus objetos se gestionan por la API de Storage, no con SQL.
 --
 -- Antes de ejecutar, cambia el valor v_confirm para aceptar la eliminación.
 
@@ -15,11 +16,14 @@ $$;
 
 begin;
 
-delete from storage.objects
-where bucket_id = 'animal-photos';
-
-delete from storage.buckets
-where id = 'animal-photos';
+drop policy if exists "Users can read their animal photos" on storage.objects;
+drop policy if exists "Users can add their animal photos" on storage.objects;
+drop policy if exists "Users can update their animal photos" on storage.objects;
+drop policy if exists "Users can delete their animal photos" on storage.objects;
+drop policy if exists "Ranch members can read animal photos" on storage.objects;
+drop policy if exists "Ranch admins can add animal photos" on storage.objects;
+drop policy if exists "Ranch admins can update animal photos" on storage.objects;
+drop policy if exists "Ranch admins can delete animal photos" on storage.objects;
 
 drop table if exists public.ranch_animal_configs cascade;
 drop table if exists public.ranch_access_requests cascade;

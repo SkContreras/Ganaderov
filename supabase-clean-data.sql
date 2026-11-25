@@ -1,5 +1,6 @@
 -- Limpia solo los datos de Ganadero.
--- Conserva tablas, funciones, trigger, políticas y usuarios de Supabase.
+-- Conserva tablas, funciones, trigger, políticas, fotos y usuarios de Supabase.
+-- Vacía las fotos por separado usando la API de Storage; no borres storage.objects desde SQL.
 --
 -- Antes de ejecutar, cambia el valor v_confirm para aceptar la eliminación.
 
@@ -14,9 +15,6 @@ end;
 $$;
 
 begin;
-
-delete from storage.objects
-where bucket_id = 'animal-photos';
 
 delete from public.ranch_animal_configs;
 delete from public.ranch_access_requests;

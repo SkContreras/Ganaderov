@@ -363,7 +363,7 @@
       return;
     }
     if (state.legacyAccount) {
-      host.innerHTML = `<p class="account-help">La cuenta aún usa el aislamiento anterior por cuenta. Para habilitar perfiles y solicitudes de acceso, primero aplica en Supabase el archivo <strong>supabase-ranch-access-migration.sql</strong>. La migración es aditiva; no la ejecutes en producción hasta probarla en una copia o proyecto de pruebas.</p>`;
+      host.innerHTML = `<p class="account-help">La cuenta aún usa el aislamiento anterior por cuenta. Para habilitar perfiles y solicitudes de acceso, actualiza Supabase al esquema actual de <strong>supabase-schema.sql</strong>. Antes de aplicarlo en un proyecto existente, valida el cambio de permisos en una copia de pruebas.</p>`;
       return;
     }
     if (context.status === "unassigned") {
@@ -1275,7 +1275,7 @@
       if (fetchError.code === "PGRST205" || fetchError.code === "42P01" ||
           /ranch_animal_configs|schema cache|does not exist/i.test(fetchError.message || "")) {
         if (local?.dirty) {
-          showToast("La configuración se guardó en este dispositivo. Para sincronizarla, aplica supabase-animal-settings-migration.sql en Supabase.");
+          showToast("La configuración se guardó en este dispositivo. Para sincronizarla, actualiza Supabase al esquema actual de supabase-schema.sql.");
         }
         return "Configuración de campos solo local · falta la migración de Supabase";
       }

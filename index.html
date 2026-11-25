@@ -417,64 +417,85 @@
     <div id="journey-content"></div>
   </dialog>
 
-  <dialog id="account-dialog" class="modal compact-modal">
-    <div class="modal-heading">
-      <div><div class="eyebrow">ACCESO A GANADEROV</div><h2 id="account-title">Iniciar sesión</h2></div>
-      <button class="icon-button" type="button" data-close="account-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
+  <dialog id="account-dialog" class="modal account-modal" aria-labelledby="account-title">
+    <div class="account-layout">
+      <aside class="account-brand-panel">
+        <div class="account-brand">
+          <img src="./ganaderov-icon.svg" alt="" width="42" height="42">
+          <span><strong>Ganaderov</strong><small>GESTIÓN GANADERA</small></span>
+        </div>
+        <div class="account-brand-copy">
+          <span class="account-brand-kicker">TODO TU RANCHO, EN ORDEN</span>
+          <h2>Una gestión clara empieza con buenos datos.</h2>
+          <p>Consulta inventario, expedientes y jornadas desde un solo lugar.</p>
+        </div>
+        <div class="account-brand-foot">
+          <span class="account-brand-dot" aria-hidden="true"></span>
+          <span>Tu información, protegida y sincronizada</span>
+        </div>
+      </aside>
+      <section class="account-panel">
+        <button class="icon-button account-close" type="button" data-close="account-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
+        <div class="account-form-heading">
+          <div class="eyebrow">ACCESO A GANADEROV</div>
+          <h2 id="account-title">Iniciar sesión</h2>
+          <p id="account-help" class="account-help">Usa tu correo y contraseña. Tus datos locales permanecen en este dispositivo aunque no haya conexión.</p>
+        </div>
+        <form id="sign-in-form">
+          <div class="form-grid">
+            <label class="full-width">Correo electrónico<input id="account-email" type="email" autocomplete="email" placeholder="nombre@ejemplo.com" autofocus required></label>
+            <label class="full-width">Contraseña<input id="account-password" type="password" autocomplete="current-password" minlength="8" placeholder="Tu contraseña" required></label>
+          </div>
+          <div class="modal-actions">
+            <button class="button button-primary" type="submit">Iniciar sesión</button>
+          </div>
+          <div class="account-links">
+            <button class="account-link" type="button" data-account-view="register">Crear cuenta</button>
+            <button class="account-link" type="button" data-account-view="recovery">¿Olvidaste tu contraseña?</button>
+          </div>
+        </form>
+        <form id="sign-up-form" hidden>
+          <div class="form-grid">
+            <label class="full-width">Correo electrónico<input id="signup-email" type="email" autocomplete="email" placeholder="nombre@ejemplo.com" required></label>
+            <label class="full-width">Contraseña<input id="signup-password" type="password" autocomplete="new-password" minlength="8" placeholder="Mínimo 8 caracteres" required></label>
+            <label class="full-width">Confirmar contraseña<input id="signup-password-confirm" type="password" autocomplete="new-password" minlength="8" placeholder="Escríbela de nuevo" required></label>
+          </div>
+          <div class="modal-actions">
+            <button class="button button-primary" type="submit">Crear cuenta</button>
+          </div>
+          <div class="account-links">
+            <button class="account-link" type="button" data-account-view="login">Volver a iniciar sesión</button>
+          </div>
+        </form>
+        <form id="recovery-form" hidden>
+          <div class="form-grid">
+            <label class="full-width">Correo electrónico<input id="recovery-email" type="email" autocomplete="email" placeholder="nombre@ejemplo.com" required></label>
+          </div>
+          <div class="modal-actions">
+            <button class="button button-primary" type="submit">Enviar enlace de recuperación</button>
+          </div>
+          <div class="account-links">
+            <button class="account-link" type="button" data-account-view="login">Volver a iniciar sesión</button>
+          </div>
+        </form>
+        <form id="reset-password-form" hidden>
+          <div class="form-grid">
+            <label class="full-width">Nueva contraseña<input id="reset-password" type="password" autocomplete="new-password" minlength="8" placeholder="Mínimo 8 caracteres" required></label>
+            <label class="full-width">Confirmar nueva contraseña<input id="reset-password-confirm" type="password" autocomplete="new-password" minlength="8" placeholder="Escríbela de nuevo" required></label>
+          </div>
+          <div class="modal-actions">
+            <button class="button button-primary" type="submit">Guardar contraseña</button>
+          </div>
+        </form>
+        <section id="account-message-view" hidden>
+          <div class="account-message-actions">
+            <button class="button button-primary" type="button" data-account-view="login">Ir a iniciar sesión</button>
+          </div>
+        </section>
+        <p id="account-error" class="account-error" role="alert" hidden></p>
+        <p class="account-panel-foot">Acceso seguro para la administración de tu rancho.</p>
+      </section>
     </div>
-    <p id="account-help" class="account-help">Usa tu correo y contraseña. Tus datos locales permanecen en este dispositivo aunque no haya conexión.</p>
-    <form id="sign-in-form">
-      <div class="form-grid">
-        <label class="full-width">Correo electrónico<input id="account-email" type="email" autocomplete="email" required></label>
-        <label class="full-width">Contraseña<input id="account-password" type="password" autocomplete="current-password" minlength="8" required></label>
-      </div>
-      <div class="modal-actions">
-        <button class="button button-primary" type="submit">Iniciar sesión</button>
-      </div>
-      <div class="account-links">
-        <button class="account-link" type="button" data-account-view="register">Crear cuenta</button>
-        <button class="account-link" type="button" data-account-view="recovery">¿Olvidaste tu contraseña?</button>
-      </div>
-    </form>
-    <form id="sign-up-form" hidden>
-      <div class="form-grid">
-        <label class="full-width">Correo electrónico<input id="signup-email" type="email" autocomplete="email" required></label>
-        <label class="full-width">Contraseña<input id="signup-password" type="password" autocomplete="new-password" minlength="8" required></label>
-        <label class="full-width">Confirmar contraseña<input id="signup-password-confirm" type="password" autocomplete="new-password" minlength="8" required></label>
-      </div>
-      <div class="modal-actions">
-        <button class="button button-primary" type="submit">Crear cuenta</button>
-      </div>
-      <div class="account-links">
-        <button class="account-link" type="button" data-account-view="login">Volver a iniciar sesión</button>
-      </div>
-    </form>
-    <form id="recovery-form" hidden>
-      <div class="form-grid">
-        <label class="full-width">Correo electrónico<input id="recovery-email" type="email" autocomplete="email" required></label>
-      </div>
-      <div class="modal-actions">
-        <button class="button button-primary" type="submit">Enviar enlace de recuperación</button>
-      </div>
-      <div class="account-links">
-        <button class="account-link" type="button" data-account-view="login">Volver a iniciar sesión</button>
-      </div>
-    </form>
-    <form id="reset-password-form" hidden>
-      <div class="form-grid">
-        <label class="full-width">Nueva contraseña<input id="reset-password" type="password" autocomplete="new-password" minlength="8" required></label>
-        <label class="full-width">Confirmar nueva contraseña<input id="reset-password-confirm" type="password" autocomplete="new-password" minlength="8" required></label>
-      </div>
-      <div class="modal-actions">
-        <button class="button button-primary" type="submit">Guardar contraseña</button>
-      </div>
-    </form>
-    <section id="account-message-view" hidden>
-      <div class="account-message-actions">
-        <button class="button button-primary" type="button" data-account-view="login">Ir a iniciar sesión</button>
-      </div>
-    </section>
-    <p id="account-error" class="account-error" role="alert" hidden></p>
   </dialog>
 
   <dialog id="ranch-dialog" class="modal compact-modal">
