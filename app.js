@@ -784,6 +784,7 @@
   function updateSettingsWorkspace() {
     const query = $("#settings-field-search").value.trim().toLocaleLowerCase("es-MX").normalize("NFD").replace(/[\u0300-\u036f]/g,"");
     const filter = $("#settings-field-filter").value;
+    const groupFilter = $("#settings-module-filter").value;
     let shown = 0;
     const preview = [];
     ANIMAL_FIELD_CATALOG.forEach(field => {
@@ -791,7 +792,7 @@
       const row = $(`[data-field-label="${field.id}"]`)?.closest("tr");
       if (!row) return;
       const matches = (field.label+" "+field.description+" "+d.label).toLocaleLowerCase("es-MX").normalize("NFD").replace(/[\u0300-\u036f]/g,"").includes(query);
-      const visible = matches && (filter === "all" || filter === "active" && d.enabled || filter === "required" && d.required || filter === "basic" && d.enabled && d.form && d.basic || filter === "hidden" && !d.enabled);
+      const visible = matches && (groupFilter === "all" || field.module === groupFilter || Boolean(query)) && (filter === "all" || filter === "active" && d.enabled || filter === "required" && d.required || filter === "basic" && d.enabled && d.form && d.basic || filter === "hidden" && !d.enabled);
       row.hidden = !visible;
       if (visible) shown++;
       if (field.form && d.enabled && d.form) preview.push(d);
@@ -799,23 +800,27 @@
     $("#settings-field-count").textContent = shown + " de " + ANIMAL_FIELD_CATALOG.length + " campos";
     $("#settings-preview-count").textContent = preview.length + " campos";
     const target = $("#settings-capture-preview");
+    const advancedOpen = target.querySelector("details")?.open || false;
     target.replaceChildren();
     for (const basic of [true,false]) {
-      const group = document.createElement("section");
-      const title = document.createElement("h3"); title.textContent = basic ? "Formulario básico" : "Datos adicionales"; group.append(title);
+      const group = document.createElement(basic ? "section" : "details");
+      const title = document.createElement(basic ? "h3" : "summary"); title.textContent = (basic ? "Formulario básico" : "Datos adicionales") + " · " + preview.filter(item=>item.basic===basic).length; group.append(title);
       for (const d of preview.filter(item => item.basic === basic)) {
         const item = document.createElement("div"); item.className = "settings-preview-field"; item.textContent = d.label + (d.required ? " *" : ""); group.append(item);
       }
       if (group.children.length === 1) { const empty = document.createElement("p"); empty.textContent = "Sin campos"; group.append(empty); }
+      if (!basic) group.open = advancedOpen;
       target.append(group);
     }
     $("#settings-dirty-status").textContent = state.fieldSettingsDirty ? "Cambios sin guardar" : "Configuración guardada";
     $("#settings-save-bottom").hidden = !canManageRanch();
   }
   function renderCapturePreferences() {
+    document.querySelectorAll("[data-settings-preset]").forEach(b=>b.setAttribute("aria-pressed","false"));
+    $("#settings-preset-feedback").textContent="Elige una plantilla para ver los cambios antes de guardar.";
     const prefs = capturePreferences();
-    $("[data-capture-pref]").forEach(el => { el.checked = !!prefs[el.dataset.capturePref]; el.disabled = !canManageRanch(); });
-    $("[data-capture-default]").forEach(el => {
+    Array.from(document.querySelectorAll("[data-capture-pref]")).forEach(el => { el.checked = !!prefs[el.dataset.capturePref]; el.disabled = !canManageRanch(); });
+    Array.from(document.querySelectorAll("[data-capture-default]")).forEach(el => {
       const key = el.dataset.captureDefault;
       if (el.tagName === "SELECT") {
         el.replaceChildren(new Option("Sin valor", ""));
@@ -824,12 +829,12 @@
       el.value = String(prefs.defaults[key] || "");
       el.disabled = !canManageRanch();
     });
-    $("[data-settings-preset], [data-settings-batch]").forEach(el=>el.disabled=!canManageRanch());
+    Array.from(document.querySelectorAll("[data-settings-preset], [data-settings-batch]")).forEach(el=>el.disabled=!canManageRanch());
     updateSettingsWorkspace();
   }
   function readCapturePreferences() {
-    return { ...Object.fromEntries($("[data-capture-pref]").map(el=>[el.dataset.capturePref,el.checked])),
-      defaults: Object.fromEntries($("[data-capture-default]").map(el=>[el.dataset.captureDefault,el.value.trim()])) };
+    return { ...Object.fromEntries(Array.from(document.querySelectorAll("[data-capture-pref]")).map(el=>[el.dataset.capturePref,el.checked])),
+      defaults: Object.fromEntries(Array.from(document.querySelectorAll("[data-capture-default]")).map(el=>[el.dataset.captureDefault,el.value.trim()])) };
   }
   function markSettingsWorkspaceDirty() {
     state.fieldSettingsDirty = true;
@@ -853,18 +858,33 @@
       else if (batch === "advanced" && !required?.checked) level.value = "advanced";
     }
     markSettingsWorkspaceDirty();
+    const feedback = $("#settings-preset-feedback");
+    if (preset) {
+      const selected = $(`[data-settings-preset="${preset}"]`);
+      document.querySelectorAll("[data-settings-preset]").forEach(button=>button.setAttribute("aria-pressed",String(button===selected)));
+      const count = ANIMAL_FIELD_CATALOG.filter(field=>{const d=settingsFieldDraft(field);return field.form && d.enabled && d.form && d.basic;}).length;
+      feedback.textContent = selected.querySelector("strong").textContent + " aplicada al borrador · " + count + " campos básicos. Guarda para confirmar.";
+      feedback.classList.remove("feedback-pop"); void feedback.offsetWidth; feedback.classList.add("feedback-pop");
+    } else {
+      showToast("Cambios aplicados a los campos visibles. Guarda la configuración.");
+      document.querySelectorAll("[data-settings-preset]").forEach(button=>button.setAttribute("aria-pressed","false"));
+      feedback.textContent="Configuración personalizada. Guarda para confirmar.";
+    }
   }
   function registerSettingsWorkspace() {
     $("#settings-field-search").addEventListener("input",updateSettingsWorkspace);
     $("#settings-field-filter").addEventListener("change",updateSettingsWorkspace);
+    $("#settings-module-filter").addEventListener("change",updateSettingsWorkspace);
     $("#settings-save-bottom").addEventListener("click",saveAnimalFieldSettings);
     $("#settings-view").addEventListener("click",event=>{
+      const tab=event.target.closest("[data-settings-tab]");
+      if(tab){const id=tab.dataset.settingsTab;document.querySelectorAll("[data-settings-tab]").forEach(b=>b.setAttribute("aria-pressed",String(b===tab)));document.querySelectorAll("[data-settings-panel]").forEach(panel=>{panel.hidden=panel.dataset.settingsPanel!==id;});return;}
       const button=event.target.closest("[data-settings-preset],[data-settings-batch]");
       if(button) applySettingsShortcut(button.dataset.settingsPreset,button.dataset.settingsBatch);
     });
     $("#settings-view").addEventListener("change",event=>{
       if(event.target.matches("[data-capture-pref],[data-capture-default]") && canManageRanch()) markSettingsWorkspaceDirty();
-      else if(event.target.matches("[data-field-setting],[data-field-label],[data-module-setting],[data-list-label],[data-list-enabled],[data-list-active]")) queueMicrotask(updateSettingsWorkspace);
+      else if(event.target.matches("[data-field-setting],[data-field-label],[data-module-setting],[data-list-label],[data-list-enabled],[data-list-active]")) { if(event.target.matches("[data-field-setting],[data-module-setting]")) {document.querySelectorAll("[data-settings-preset]").forEach(b=>b.setAttribute("aria-pressed","false"));$("#settings-preset-feedback").textContent="Configuración personalizada."; } queueMicrotask(updateSettingsWorkspace); }
     });
     $("#settings-view").addEventListener("input",event=>{if(event.target.matches("[data-field-label]") && canManageRanch()) markSettingsWorkspaceDirty();});
   }
