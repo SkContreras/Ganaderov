@@ -25,12 +25,12 @@ alter table public.animal_sync_records enable row level security;
 create or replace function public.set_animal_sync_modified_at()
 returns trigger
 language plpgsql
-as $$
+as $set_animal_sync_modified_at$
 begin
   new.modified_at = now();
   return new;
 end;
-$$;
+$set_animal_sync_modified_at$;
 
 drop trigger if exists set_animal_sync_modified_at on public.animal_sync_records;
 create trigger set_animal_sync_modified_at
@@ -111,12 +111,12 @@ alter table public.journey_sync_records enable row level security;
 create or replace function public.set_journey_sync_updated_at()
 returns trigger
 language plpgsql
-as $$
+as $set_journey_sync_updated_at$
 begin
   new.updated_at = now();
   return new;
 end;
-$$;
+$set_journey_sync_updated_at$;
 
 drop trigger if exists set_journey_sync_updated_at on public.journey_sync_records;
 create trigger set_journey_sync_updated_at
@@ -187,14 +187,14 @@ language sql
 stable
 security definer
 set search_path = public
-as $$
+as $is_ranch_member$
   select exists (
     select 1 from public.ranch_members m
     where m.owner_id = p_owner_id
       and m.user_id = (select auth.uid())
       and m.status = 'active'
   );
-$$;
+$is_ranch_member$;
 
 create or replace function public.is_ranch_admin(p_owner_id uuid)
 returns boolean
@@ -202,7 +202,7 @@ language sql
 stable
 security definer
 set search_path = public
-as $$
+as $is_ranch_admin$
   select exists (
     select 1 from public.ranch_members m
     where m.owner_id = p_owner_id
@@ -210,7 +210,7 @@ as $$
       and m.status = 'active'
       and m.role in ('owner', 'admin')
   );
-$$;
+$is_ranch_admin$;
 
 create or replace function public.ranch_member_role(p_owner_id uuid)
 returns text
@@ -218,14 +218,14 @@ language sql
 stable
 security definer
 set search_path = public
-as $$
+as $ranch_member_role$
   select m.role
   from public.ranch_members m
   where m.owner_id = p_owner_id
     and m.user_id = (select auth.uid())
     and m.status = 'active'
   limit 1;
-$$;
+$ranch_member_role$;
 
 create or replace function public.is_current_ranch_actor(p_owner_id uuid, p_actor jsonb)
 returns boolean
@@ -233,7 +233,7 @@ language sql
 stable
 security definer
 set search_path = public
-as $$
+as $is_current_ranch_actor$
   select exists (
     select 1 from public.ranch_members m
     where m.owner_id = p_owner_id
@@ -243,7 +243,7 @@ as $$
       and coalesce(p_actor->>'email', '') = coalesce((select auth.jwt())->>'email', '')
       and p_actor->>'authUserId' = (select auth.uid())::text
   );
-$$;
+$is_current_ranch_actor$;
 
 revoke all on function public.is_ranch_member(uuid) from public, anon;
 revoke all on function public.is_ranch_admin(uuid) from public, anon;
@@ -276,7 +276,7 @@ returns jsonb
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $create_my_ranch$
 declare
   v_user_id uuid := auth.uid();
   v_ranch public.ranches%rowtype;
@@ -312,14 +312,14 @@ begin
     'requests', '[]'::jsonb
   );
 end;
-$$;
+$create_my_ranch$;
 
 create or replace function public.request_ranch_access(p_join_code text, p_display_name text)
 returns jsonb
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $request_ranch_access$
 declare
   v_user_id uuid := auth.uid();
   v_owner_id uuid;
@@ -370,14 +370,14 @@ begin
 
   return jsonb_build_object('status', v_request.status, 'owner_id', v_owner_id);
 end;
-$$;
+$request_ranch_access$;
 
 create or replace function public.review_ranch_access_request(p_request_id uuid, p_approve boolean)
 returns void
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $review_ranch_access_request$
 declare
   v_request public.ranch_access_requests%rowtype;
 begin
@@ -415,14 +415,14 @@ begin
         reviewed_by = auth.uid()
     where id = v_request.id;
 end;
-$$;
+$review_ranch_access_request$;
 
 create or replace function public.revoke_ranch_worker(p_user_id uuid)
 returns void
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $revoke_ranch_worker$
 declare
   v_owner_id uuid;
 begin
@@ -440,7 +440,7 @@ begin
     set status = 'revoked'
     where owner_id = v_owner_id and user_id = p_user_id and role = 'worker';
 end;
-$$;
+$revoke_ranch_worker$;
 
 create or replace function public.get_my_ranch_context()
 returns jsonb
@@ -448,7 +448,7 @@ language plpgsql
 stable
 security definer
 set search_path = public
-as $$
+as $get_my_ranch_context$
 declare
   v_user_id uuid := auth.uid();
   v_result jsonb;
@@ -499,7 +499,7 @@ begin
   end if;
   return jsonb_build_object('status', 'unassigned');
 end;
-$$;
+$get_my_ranch_context$;
 
 revoke all on function public.create_my_ranch(text, text) from public, anon;
 revoke all on function public.request_ranch_access(text, text) from public, anon;
@@ -517,7 +517,7 @@ returns trigger
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $validate_worker_animal_sync_record$
 declare
   v_old_event jsonb;
   v_new_event jsonb;
@@ -590,7 +590,7 @@ begin
 
   return new;
 end;
-$$;
+$validate_worker_animal_sync_record$;
 
 drop trigger if exists validate_worker_animal_sync_record on public.animal_sync_records;
 create trigger validate_worker_animal_sync_record
@@ -635,7 +635,7 @@ language sql
 stable
 security invoker
 set search_path = ''
-as $$
+as $ganaderov_animal_status_active$
   select coalesce(
     (select case when jsonb_typeof(item->'active') = 'boolean'
                  then (item->>'active')::boolean
@@ -649,7 +649,7 @@ as $$
        limit 1),
     coalesce(p_status, '') not in ('Vendido','Fallecido','Baja','Otro','Otros','Desaparecido')
   );
-$$;
+$ganaderov_animal_status_active$;
 revoke all on function public.ganaderov_animal_status_active(uuid,text) from public, anon, authenticated;
 
 create or replace function public.validate_worker_journey_sync_record()
@@ -657,7 +657,7 @@ returns trigger
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $validate_worker_journey_sync_record$
 declare
   v_new_roster jsonb;
   v_old_animal jsonb;
@@ -822,7 +822,7 @@ begin
 
   return new;
 end;
-$$;
+$validate_worker_journey_sync_record$;
 
 drop trigger if exists validate_worker_journey_sync_record on public.journey_sync_records;
 create trigger validate_worker_journey_sync_record
@@ -929,7 +929,7 @@ returns jsonb
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $save_ranch_animal_config$
 declare
   v_revision integer;
   v_updated_at timestamptz;
@@ -997,7 +997,7 @@ begin
     'updated_at', v_updated_at
   );
 end;
-$$;
+$save_ranch_animal_config$;
 
 revoke all on function public.save_ranch_animal_config(uuid, integer, jsonb) from public, anon;
 grant execute on function public.save_ranch_animal_config(uuid, integer, jsonb) to authenticated;
