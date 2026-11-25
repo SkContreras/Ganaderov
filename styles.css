@@ -794,3 +794,16 @@ td { height: 54px; }
  #account-dialog .account-panel{padding-top:26px;padding-bottom:16px}
 }
 @media(prefers-reduced-motion:reduce){#account-dialog .login-ranch-scene *{animation:none!important;transition:none!important}}
+
+
+/* Animated Ganaderov cover */
+.ranch-cover { position:relative; isolation:isolate; overflow:hidden; margin:24px 0 0; min-height:clamp(190px,21vw,300px); display:flex; align-items:center; border:1px solid #e7e6d8; border-radius:18px; background:#f8f4e9; }
+.ranch-cover-art { position:absolute; z-index:-1; inset:0 0 0 43%; background:url("./ranch-cover.svg") center right/cover no-repeat; border-top-left-radius:45% 100%; overflow:hidden; }
+.ranch-cover-art::after { content:""; position:absolute; inset:0; background:linear-gradient(90deg,#f8f4e9 0%,rgba(248,244,233,0) 25%); pointer-events:none; }
+.ranch-cover-copy { display:flex; align-items:center; gap:clamp(12px,2vw,26px); width:62%; padding:clamp(18px,3vw,42px); }
+.ranch-cover-copy img { width:clamp(55px,8vw,112px); height:auto; flex-shrink:0; border-radius:24%; }
+.ranch-cover-copy h2 { color:#0f3d2c; font:800 clamp(28px,4vw,68px)/1.05 Manrope,"Segoe UI",sans-serif; letter-spacing:-.045em; margin:0 0 8px; }
+.ranch-cover-kicker { color:#536b2d; font-size:clamp(8px,.95vw,13px); font-weight:800; letter-spacing:.18em; margin:0 0 12px; }
+.ranch-cover-description { border-left:3px solid #7ba43e; padding-left:12px; color:#28382d; line-height:1.5; max-width:340px; margin:0; font-size:clamp(11px,1.1vw,15px); }
+@media(max-width:760px) { .ranch-cover { display:block; min-height:0; padding-bottom:clamp(130px,37vw,230px); } .ranch-cover-copy { width:100%; padding:20px; } .ranch-cover-art { inset:auto 0 0; height:clamp(130px,37vw,230px); border-radius:0; background-position:center; } .ranch-cover-art::after { background:linear-gradient(180deg,#f8f4e9,transparent 22%); } }
+@media(prefers-reduced-motion:reduce) { .ranch-cover-art { background-image:url("./ranch-cover.svg"); } }
