@@ -1113,3 +1113,43 @@ body{background-color:var(--canvas);background-image:radial-gradient(ellipse at 
 @media(max-width:1050px){.main-content>.topbar{height:auto;min-height:64px;grid-template-columns:minmax(0,1fr);gap:8px;padding:10px 12px}.topbar .account-controls{justify-content:flex-start;flex-wrap:wrap}.topbar .breadcrumb{min-height:20px}.topbar .account-controls .button{width:auto!important;min-width:0;padding:0 9px}}
 @media(max-width:480px){.main-content>.topbar{padding:9px;gap:7px;border-radius:12px}.topbar .breadcrumb{display:flex;font-size:10px}.topbar .account-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;width:100%}.topbar .account-controls .button{width:100%!important;min-width:0;font-size:10px;white-space:normal;line-height:1.25;min-height:36px;padding:5px;gap:5px}.topbar .account-controls .ui-icon{width:13px;height:13px}}
 @media(prefers-reduced-motion:reduce){.topbar .account-controls .button{transition:none!important}}
+
+/* Dialog refinement: visual only; existing form markup and event handlers preserved. */
+.modal:not(.account-modal):not(.photo-modal){scrollbar-width:thin;scrollbar-color:#b6c6ad transparent;overscroll-behavior:contain}
+.modal:not(.account-modal):not(.photo-modal)::-webkit-scrollbar{width:7px}
+.modal:not(.account-modal):not(.photo-modal)::-webkit-scrollbar-thumb{background:#b6c6ad;border:2px solid white;border-radius:10px}
+.compact-modal:not(.account-modal){padding:22px;background:#fbfcf9;border-color:#dfe7db}
+.compact-modal:not(.account-modal) .modal-heading{margin:0 0 18px;padding:0 0 15px;align-items:center;gap:12px}
+.compact-modal:not(.account-modal) .modal-heading h2{font-size:23px;color:#204b35}
+.compact-modal:not(.account-modal) .modal-heading .eyebrow{color:#71875e}
+.compact-modal .icon-button{flex:0 0 34px;width:34px;height:34px;border-radius:10px}
+#ranch-dialog{width:min(810px,calc(100vw - 28px));padding:18px;max-height:calc(100dvh - 28px)}
+#ranch-dialog .modal-heading{position:relative;isolation:isolate;overflow:hidden;min-height:100px;border:1px solid #e7e5d5;border-radius:14px;background:#f8f4e9;padding:18px 56px 18px 18px;margin:0 0 16px}
+#ranch-dialog .modal-heading>div{position:relative;z-index:1;min-width:0}
+#ranch-dialog .modal-heading h2{font-size:25px}
+#ranch-dialog .modal-heading .icon-button{position:absolute;right:12px;top:12px;z-index:2;background:#fffdf4;color:#52744c}
+.ranch-dialog-art{position:absolute;right:0;bottom:0;width:40%;height:100%;z-index:-1;pointer-events:none;mask-image:linear-gradient(90deg,transparent,#000 20%)}
+.ranch-dialog-leaf{transform-origin:bottom;animation:ranch-dialog-wind 3s ease-in-out infinite alternate}
+@keyframes ranch-dialog-wind{to{transform:skewX(5deg)}}
+#ranch-content{display:grid;gap:13px;min-width:0}
+#ranch-content:has(>#create-ranch-form):has(>#request-ranch-form){grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch}
+#ranch-content>.account-help{margin:0;padding:12px 14px;background:#eef3e8;border:1px solid #e1e9d8;border-radius:11px;color:#4e624b;font-size:12px;line-height:1.55;grid-column:1/-1}
+#ranch-content>.ranch-form,#ranch-content>.ranch-section{margin:0;padding:16px;gap:11px;border:1px solid #dfe7db;border-radius:13px;background:white;min-width:0}
+#ranch-content>.ranch-form{grid-template-rows:auto auto auto 1fr}
+#ranch-content>.ranch-form h3{display:flex;align-items:center;gap:9px;color:#315b3e;font-size:14px;line-height:1.4;margin-bottom:3px}
+#ranch-content>.ranch-form h3::before{content:"";display:block;flex:0 0 34px;height:34px;border-radius:10px;background:#e9efdf center/20px no-repeat}
+#create-ranch-form h3::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23547749' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 11 12 3l9 8v10H3zM9 21v-8h6v8'/%3E%3C/svg%3E")}
+#request-ranch-form h3::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23547749' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='9' cy='8' r='4'/%3E%3Cpath d='M2 21v-3a7 7 0 0 1 14 0v3M19 8v8m-4-4h8'/%3E%3C/svg%3E")}
+#ranch-content .ranch-form label{gap:7px;font-size:12px}
+#ranch-content .ranch-form input{min-height:44px;background:#fbfcfa}
+#ranch-content .ranch-form button{width:100%;align-self:end;justify-self:stretch;white-space:normal;min-height:44px;padding:9px 12px;font-size:12px;line-height:1.35}
+#ranch-content .ranch-summary{padding:16px;border:1px solid #dfe7db;background:#eef4e9;font-size:13px}
+#ranch-content .ranch-summary strong{font-size:13px}
+#ranch-content .ranch-section h3{font-size:14px;color:#315b3e}
+#ranch-content .ranch-list li{padding:11px;background:#fbfcfa;border-color:#e3e9df}
+#ranch-content .ranch-list strong{font-size:12px}#ranch-content .ranch-list small{font-size:11px}
+#ranch-content .ranch-code{padding:12px;border-radius:10px}
+#ranch-content .ranch-callout{margin:0;padding:15px;border:1px solid #eadfbe;border-radius:12px}
+#ranch-content>button{justify-self:start}
+@media(max-width:620px){#ranch-dialog{padding:12px}#ranch-dialog .modal-heading{min-height:88px;padding:14px 48px 14px 14px}#ranch-dialog .modal-heading h2{font-size:21px}.ranch-dialog-art{width:33%;opacity:.65}#ranch-content:has(>#create-ranch-form):has(>#request-ranch-form){grid-template-columns:minmax(0,1fr)}#ranch-content>.ranch-form{padding:13px}#ranch-content .ranch-form input{font-size:16px}}
+@media(prefers-reduced-motion:reduce){.ranch-dialog-leaf{animation:none!important}}
