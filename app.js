@@ -4851,7 +4851,7 @@
       renderRanchDialog();
       $("#ranch-dialog").showModal();
     });
-    $("[data-google-login], [data-facebook-login]").forEach(button => button.addEventListener("click", async () => {
+    $$("[data-google-login], [data-facebook-login]").forEach(button => button.addEventListener("click", async () => {
       const provider = button.hasAttribute("data-facebook-login") ? "facebook" : "google";
       const view = button.closest("form")?.id === "sign-up-form" ? "register" : "login";
       const redirectTo = authRedirectUrl();
@@ -4859,7 +4859,7 @@
         showAccountView(view, "Necesitas una conexión a Internet y una configuración válida de Supabase para continuar.");
         return;
       }
-      const buttons = $("[data-google-login], [data-facebook-login]");
+      const buttons = $$("[data-google-login], [data-facebook-login]");
       buttons.forEach(item => { item.disabled = true; });
       try {
         const { error } = await cloud.auth.signInWithOAuth({
