@@ -1863,7 +1863,7 @@
     analysisLoadDefaults();
     analysisRefreshLots();
     const selected = select.value;
-    const availableAnimals = state.animals.filter(animal => !["Vendido", "Fallecido", "Baja"].includes(animal.status));
+    const availableAnimals = state.animals.filter(isActiveAnimal);
     select.innerHTML = `<option value="">Sin seleccionar · captura manual</option>${availableAnimals.map(animal => {
       const label = [animal.tag ? `Arete ${animal.tag}` : "", animal.name || "Sin nombre"].filter(Boolean).join(" · ");
       return `<option value="${escapeHtml(animal.id)}">${escapeHtml(label)}</option>`;
