@@ -20,6 +20,16 @@ Los iconos de la interfaz usan símbolos SVG sólidos en una biblioteca común, 
 
 El archivo `config.js` contiene solo valores públicos del proyecto; no contiene contraseñas. Si se usa un repositorio público, no agregues claves privadas ni credenciales de administrador.
 
+## Limpiar Supabase
+
+Los scripts de limpieza son deliberadamente destructivos y incluyen una confirmación que debe modificarse antes de ejecutarlos:
+
+- [`supabase-clean-data.sql`](./supabase-clean-data.sql) borra animales sincronizados, jornadas, membresías, solicitudes, configuración de rancho y fotos; conserva el esquema y las cuentas.
+- [`supabase-clean-schema.sql`](./supabase-clean-schema.sql) elimina únicamente la estructura creada por Ganadero y las fotos; conserva las cuentas de `auth.users`.
+- [`supabase-reset.sql`](./supabase-reset.sql) ejecuta una limpieza completa: datos, fotos, estructura y todas las cuentas de `auth.users`.
+
+Haz una copia de seguridad del proyecto antes de ejecutar cualquiera de ellos. Prueba primero en staging. Para cada script, cambia `v_confirm` al valor indicado en su comentario antes de abrirlo en el SQL Editor de Supabase.
+
 ## Sincronización y conflictos
 
 - Cada animal tiene una fecha y hora de última modificación, que también se actualiza al cambiar su historial o sus fotografías.
