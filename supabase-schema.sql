@@ -1,3 +1,9 @@
+-- Ganaderov: compatible con app.js actual (configVersion 4, schemaVersion de transporte 1).
+-- Plantillas compartidas: config.layout.preset. Preferencias personales y cotizaciones: localStorage.
+-- Proyecciones de peso: payload.forecasts; no requieren una tabla adicional.
+-- Ejecutar como una transacción; no elimina registros existentes.
+begin;
+
 -- Esquema completo actual de Ganaderov para instalaciones nuevas.
 -- Incluye sincronizacion, acceso por rancho, permisos de trabajadores y
 -- configuracion revisionada de campos. Para bases existentes, respalda y
@@ -613,6 +619,39 @@ create policy "Ranch admins can delete animal records"
   on public.animal_sync_records for delete to authenticated
   using (public.is_ranch_admin(owner_id));
 
+create table if not exists public.ranch_animal_configs (
+  owner_id uuid primary key references public.ranches (owner_id) on delete cascade,
+  config jsonb not null default '{"schemaVersion":1,"modules":{},"fields":{},"layout":{}}'::jsonb,
+  revision integer not null default 0 check (revision >= 0),
+  updated_at timestamptz not null default now(),
+  constraint ranch_animal_configs_config_object check (jsonb_typeof(config) = 'object')
+);
+alter table public.ranch_animal_configs enable row level security;
+
+-- Match the current app's custom status catalog and legacy fallback.
+create or replace function public.ganaderov_animal_status_active(p_owner_id uuid, p_status text)
+returns boolean
+language sql
+stable
+security invoker
+set search_path = ''
+as $
+  select coalesce(
+    (select case when jsonb_typeof(item->'active') = 'boolean'
+                 then (item->>'active')::boolean
+                 else coalesce(p_status, '') not in ('Vendido','Fallecido','Baja','Otro','Otros','Desaparecido') end
+       from public.ranch_animal_configs c
+       cross join lateral jsonb_array_elements(
+         case when jsonb_typeof(c.config->'lists'->'status') = 'array'
+              then c.config->'lists'->'status' else '[]'::jsonb end
+       ) as options(item)
+       where c.owner_id = p_owner_id and item->>'value' = p_status
+       limit 1),
+    coalesce(p_status, '') not in ('Vendido','Fallecido','Baja','Otro','Otros','Desaparecido')
+  );
+$;
+revoke all on function public.ganaderov_animal_status_active(uuid,text) from public, anon, authenticated;
+
 create or replace function public.validate_worker_journey_sync_record()
 returns trigger
 language plpgsql
@@ -649,7 +688,7 @@ begin
         where a.owner_id = new.owner_id
           and a.animal_id = v_new_animal->>'id'
           and a.deleted_at is null
-          and coalesce(a.payload->'animal'->>'status', '') not in ('Vendido', 'Fallecido', 'Baja')
+          and public.ganaderov_animal_status_active(a.owner_id, a.payload->'animal'->>'status')
           and coalesce(v_new_animal->>'tag', '') = coalesce(a.payload->'animal'->>'tag', '')
           and coalesce(v_new_animal->>'name', '') = coalesce(a.payload->'animal'->>'name', '')
           and coalesce(v_new_animal->>'sex', '') = coalesce(a.payload->'animal'->>'sex', '')
@@ -764,7 +803,7 @@ begin
         where a.owner_id = new.owner_id
           and a.animal_id = v_new_animal->>'id'
           and a.deleted_at is null
-          and coalesce(a.payload->'animal'->>'status', '') not in ('Vendido', 'Fallecido', 'Baja')
+          and public.ganaderov_animal_status_active(a.owner_id, a.payload->'animal'->>'status')
           and coalesce(v_new_animal->>'tag', '') = coalesce(a.payload->'animal'->>'tag', '')
           and coalesce(v_new_animal->>'name', '') = coalesce(a.payload->'animal'->>'name', '')
           and coalesce(v_new_animal->>'sex', '') = coalesce(a.payload->'animal'->>'sex', '')
@@ -869,13 +908,7 @@ create policy "Ranch admins can delete animal photos"
 -- Test on a staging project before applying in production.
 -- Existing animal, event, journey, and photo records are not modified.
 
-create table if not exists public.ranch_animal_configs (
-  owner_id uuid primary key references public.ranches (owner_id) on delete cascade,
-  config jsonb not null default '{"schemaVersion":1,"modules":{},"fields":{},"layout":{}}'::jsonb,
-  revision integer not null default 0 check (revision >= 0),
-  updated_at timestamptz not null default now(),
-  constraint ranch_animal_configs_config_object check (jsonb_typeof(config) = 'object')
-);
+-- La tabla se crea antes de los validadores de jornadas.
 
 alter table public.ranch_animal_configs enable row level security;
 
@@ -907,12 +940,33 @@ begin
   end if;
   if p_expected_revision is null or p_expected_revision < 0
       or p_config is null or jsonb_typeof(p_config) is distinct from 'object'
-      or coalesce((p_config->>'schemaVersion')::integer, 0) <> 1
+      or p_config->'schemaVersion' is distinct from '1'::jsonb
+      or (p_config ? 'configVersion' and p_config->'configVersion' not in ('1'::jsonb,'2'::jsonb,'3'::jsonb,'4'::jsonb))
+      or (p_config ? 'lists' and jsonb_typeof(p_config->'lists') is distinct from 'object')
       or jsonb_typeof(p_config->'modules') is distinct from 'object'
       or jsonb_typeof(p_config->'fields') is distinct from 'object'
       or jsonb_typeof(p_config->'layout') is distinct from 'object' then
     raise exception 'La configuración de campos tiene un formato inválido.'
       using errcode = '22023';
+  end if;
+
+  -- v4 lists contain arrays of option objects; legacy payloads may omit lists.
+  if exists (
+    select 1 from jsonb_each(coalesce(p_config->'lists','{}'::jsonb)) as l(key, options)
+    where jsonb_typeof(options) is distinct from 'array'
+  ) then
+    raise exception 'Las listas de configuración deben ser arreglos.' using errcode = '22023';
+  end if;
+  if exists (
+    select 1 from jsonb_each(coalesce(p_config->'lists','{}'::jsonb)) as l(key, options)
+    cross join lateral jsonb_array_elements(options) as o(item)
+    where jsonb_typeof(item) is distinct from 'object'
+      or jsonb_typeof(item->'value') is distinct from 'string'
+      or jsonb_typeof(item->'label') is distinct from 'string'
+      or jsonb_typeof(item->'enabled') is distinct from 'boolean'
+      or (item ? 'active' and jsonb_typeof(item->'active') is distinct from 'boolean')
+  ) then
+    raise exception 'Una opción de lista tiene un formato inválido.' using errcode = '22023';
   end if;
 
   insert into public.ranch_animal_configs (owner_id)
@@ -948,4 +1002,17 @@ $$;
 revoke all on function public.save_ranch_animal_config(uuid, integer, jsonb) from public, anon;
 grant execute on function public.save_ranch_animal_config(uuid, integer, jsonb) to authenticated;
 
+-- Explicit API grants: do not depend on automatic exposure defaults.
+revoke all on public.animal_sync_records, public.journey_sync_records from public, anon, authenticated;
+grant select, insert, update, delete on public.animal_sync_records to authenticated;
+grant select, insert, update on public.journey_sync_records to authenticated;
+revoke all on public.ranches, public.ranch_members, public.ranch_access_requests from public, anon, authenticated;
+grant select on public.ranches, public.ranch_members, public.ranch_access_requests to authenticated;
+revoke all on function public.validate_worker_animal_sync_record() from public, anon, authenticated;
+revoke all on function public.validate_worker_journey_sync_record() from public, anon, authenticated;
+revoke all on function public.set_animal_sync_modified_at() from public, anon, authenticated;
+revoke all on function public.set_journey_sync_updated_at() from public, anon, authenticated;
+
 notify pgrst, 'reload schema';
+
+commit;
