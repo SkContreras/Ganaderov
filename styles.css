@@ -691,3 +691,13 @@ td { height: 54px; }
   .calculator-group-heading { flex-direction: column; }
   kbd { display: none; }
 }
+
+/* Google OAuth: native accessible button, no external assets. */
+.account-social-divider { display: flex; align-items: center; gap: 10px; margin: 16px 0 12px; color: #697365; font-size: 11px; }
+.account-social-divider::before, .account-social-divider::after { content: ""; flex: 1; height: 1px; background: #dfe5dc; }
+.account-google-button { display: flex; align-items: center; justify-content: center; gap: 12px; width: 100%; min-height: 44px; padding: 10px 14px; border: 1px solid #747775; border-radius: 8px; background: #fff; color: #1f1f1f; font: 600 13px Arial, sans-serif; cursor: pointer; }
+.account-google-button:hover { background: #f5f8fc; }
+.account-google-button:focus-visible { outline: 2px solid #4285f4; outline-offset: 3px; }
+.account-google-button:disabled { opacity: .6; cursor: wait; }
+.account-google-button svg { flex: 0 0 auto; }
+.account-modal { overflow-y: auto; }
