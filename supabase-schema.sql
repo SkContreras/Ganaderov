@@ -1,3 +1,4 @@
+-- Validado en PostgreSQL 17 / Supabase: instalación transaccional y migración ganaderov_current_schema (2026-11-25).
 -- Ganaderov: compatible con app.js actual (configVersion 4, schemaVersion de transporte 1).
 -- Plantillas compartidas: config.layout.preset. Preferencias personales y cotizaciones: localStorage.
 -- Proyecciones de peso: payload.forecasts; no requieren una tabla adicional.
