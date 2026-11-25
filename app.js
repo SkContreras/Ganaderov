@@ -1860,6 +1860,8 @@
   function renderCalculatorAnimalOptions() {
     const select = $("#calculator-animal");
     if (!select) return;
+    analysisLoadDefaults();
+    analysisRefreshLots();
     const selected = select.value;
     const availableAnimals = state.animals.filter(animal => !["Vendido", "Fallecido", "Baja"].includes(animal.status));
     select.innerHTML = `<option value="">Sin seleccionar · captura manual</option>${availableAnimals.map(animal => {
@@ -1887,6 +1889,7 @@
       $("#calculator-baseline-date").value = today();
       $("#calculator-gain").value = "";
       $("#calculator-weight-note").textContent = "Captura un peso, fecha base y GMD manual para evaluar un escenario. Una GMD manual es un supuesto, no una medición del crecimiento.";
+      analysisAutoAnimal(null,null,null);
       updateCalculator();
       return;
     }
@@ -1910,6 +1913,7 @@
     } else {
       $("#calculator-weight-note").textContent = `Última pesada: ${formatDate(latest.date)}. GMD calculada con ${basis.points.length} fechas en los últimos 30 días de pesajes, del ${formatDate(basis.first.date)} al ${formatDate(basis.latest.date)} (${basis.elapsedDays} días reales); puedes modificarla.${staleNotice}`;
     }
+    analysisAutoAnimal(animal,latest,basis);
     updateCalculator();
   }
 
@@ -2049,6 +2053,76 @@
   }
 
 
+
+  function analysisStorageKey(){return "ganadero:analysis:"+ (currentUser?.id||"local")+":"+ (state.ranchOwnerId||"local");}
+  function analysisSaved(){try{const x=JSON.parse(localStorage.getItem(analysisStorageKey())||"{}");return x&&typeof x==="object"?x:{};}catch{return {};}}
+  function analysisWrite(data){try{localStorage.setItem(analysisStorageKey(),JSON.stringify(data));return true;}catch(error){showToast("No se pudo guardar en este dispositivo: "+error.message);return false;}}
+  let analysisScope="";
+  const quoteFields=["current-category","price-date","current-min","current-average","current-max","next-category","next-threshold","next-min","next-average","next-max"];
+  function analysisQuotes(){const q=analysisSaved().quotes;return Array.isArray(q)?q.filter(x=>x&&typeof x.id==="string"&&x.fields):[];}
+  function analysisRefreshQuotes(){
+    const select=$("#analysis-quote-select"),prior=select.value;
+    select.replaceChildren(new Option("Seleccionar cotización",""));
+    analysisQuotes().forEach(q=>select.add(new Option(q.fields["current-category"]+" · "+q.fields["price-date"]+" · "+q.fields["current-average"]+" MXN/kg",q.id)));
+    if([...select.options].some(o=>o.value===prior))select.value=prior;
+  }
+  function analysisSaveQuote(){
+    const fields=Object.fromEntries(quoteFields.map(k=>[k,$("#calculator-"+k).value.trim()]));
+    const avg=calculatorNumber("#calculator-current-average"),min=calculatorNumber("#calculator-current-min"),max=calculatorNumber("#calculator-current-max");
+    const next=calculatorNumber("#calculator-next-average"),nmin=calculatorNumber("#calculator-next-min"),nmax=calculatorNumber("#calculator-next-max"),threshold=calculatorNumber("#calculator-next-threshold");
+    if(!fields["current-category"]||!fields["price-date"]||fields["price-date"]>today()||avg===null||avg<=0||min!==null&&(min<0||min>avg)||max!==null&&max<avg||next!==null&&next<0||threshold!==null&&threshold<0||nmin!==null&&(nmin<0||next!==null&&nmin>next)||nmax!==null&&(nmax<0||next!==null&&nmax<next)){showToast("Revisa categoría, fecha y precios antes de guardar.");return;}
+    const saved=analysisSaved(),quotes=analysisQuotes(),id=newId();
+    if(analysisWrite({...saved,quotes:[{id,fields},...quotes.filter(q=>!(q.fields["current-category"]===fields["current-category"]&&q.fields["price-date"]===fields["price-date"]))].slice(0,100)})){analysisRefreshQuotes();$("#analysis-quote-select").value=id;analysisText("#analysis-quote-note","Cotización guardada localmente. Verifica su vigencia antes de reutilizarla.");}
+  }
+  function analysisApplyQuote(){
+    const q=analysisQuotes().find(x=>x.id===$("#analysis-quote-select").value);
+    if(!q){showToast("Selecciona una cotización guardada.");return;}
+    quoteFields.forEach(k=>$("#calculator-"+k).value=q.fields[k]||"");
+    $("#calculator-future-price").value="";
+    analysisText("#analysis-quote-note","Cotización local del "+formatDate(q.fields["price-date"])+". Confirma que corresponde al animal y al mercado.");
+    updateCalculator();
+  }
+  function analysisRefreshLots(){
+    const el=$("#analysis-lot-select"),prior=el.value;
+    const lots=[...new Set(state.animals.filter(isActiveAnimal).map(a=>a.lot).filter(Boolean))];
+    el.replaceChildren(new Option("Captura manual",""));
+    lots.forEach(lot=>el.add(new Option((state.fieldConfig?.lists?.lot||[]).find(x=>x.value===lot)?.label||lot,lot)));
+    if(lots.includes(prior))el.value=prior;else if(prior){$("#analysis-lot-count").value="";analysisText("#analysis-lot-note","El lote anterior ya no está disponible.");}
+    if(el.value)analysisCountLot();
+  }
+  function analysisCountLot(){
+    const lot=$("#analysis-lot-select").value;
+    if(lot){const count=state.animals.filter(a=>isActiveAnimal(a)&&a.lot===lot).length;$("#analysis-lot-count").value=String(count);analysisText("#analysis-lot-note",count+" animales activos del inventario; se aplica un escenario homogéneo.");}
+    else analysisText("#analysis-lot-note","Cantidad manual.");
+    updateAnalysisTools();
+  }
+  function analysisLoadDefaults(){
+    const key=analysisStorageKey();
+    if(key===analysisScope)return;
+    analysisScope=key;
+    const prefs=analysisSaved().defaults||{};
+    $("#calculator-cost").value=prefs.cost??"0";
+    $("#analysis-feed-ration").value=prefs.ration??"";
+    $("#analysis-feed-price").value=prefs.price??"";
+    $("#analysis-target").value=prefs.target??"";
+    quoteFields.forEach(k=>$("#calculator-"+k).value=k==="price-date"?today():"");
+    $("#calculator-future-price").value="";
+    $("#analysis-quote-select").value="";
+    analysisText("#analysis-quote-note","Selecciona una cotización guardada o captura una nueva.");
+    analysisRefreshQuotes();
+    analysisRefreshLots();
+  }
+  function analysisAutoAnimal(animal,latest,basis){
+    $("#analysis-target-base").value=$("#calculator-weight").value;
+    $("#analysis-target-gain").value=$("#calculator-gain").value;
+    const target=animal?growthTargetValues(animal):null;
+    $("#analysis-target").value=target?.hasTarget?String(target.targetMin):(analysisSaved().defaults?.target??"");
+    analysisText("#analysis-target-source",target?.hasTarget?"Objetivo mínimo del expediente; rango "+target.targetMin+"–"+target.targetMax+" kg.": "Objetivo manual o preferencia personal.");
+    analysisText("#analysis-auto-note",animal?(latest?"Peso y fecha del historial. ":"Sin pesajes guardados. ")+(basis?"GMD calculada. ":"GMD manual necesaria. ")+(target?.hasTarget?"Objetivo del expediente recuperado.":""):"Captura manual; no hay animal seleccionado.");
+    if(animal?.lot){const el=$("#analysis-lot-select");if([...el.options].some(o=>o.value===animal.lot)){el.value=animal.lot;analysisCountLot();}}
+    updateAnalysisTools();
+  }
+
   let analysisSale = null;
   function analysisText(id,value){ $(id).textContent=value; }
   function resetAnalysis(weight,gain,days,baselineDate,animalId){
@@ -2109,6 +2183,13 @@
   }
   function registerAnalysis(){
     const root=$("#calculator-view");
+    $("#analysis-auto-restore").addEventListener("click",()=>{if($("#calculator-animal").value)loadCalculatorAnimal();else showToast("Selecciona un animal primero.");});
+    $("#analysis-quote-save").addEventListener("click",analysisSaveQuote);
+    $("#analysis-quote-apply").addEventListener("click",analysisApplyQuote);
+    $("#analysis-quote-delete").addEventListener("click",()=>{const id=$("#analysis-quote-select").value;if(!id)return;if(analysisWrite({...analysisSaved(),quotes:analysisQuotes().filter(q=>q.id!==id)})){analysisRefreshQuotes();analysisText("#analysis-quote-note","Cotización eliminada del dispositivo.");}});
+    $("#analysis-lot-select").addEventListener("change",analysisCountLot);
+    $("#analysis-lot-count").addEventListener("input",()=>{$("#analysis-lot-select").value="";analysisText("#analysis-lot-note","Cantidad manual.");});
+    $("#analysis-save-defaults").addEventListener("click",()=>{const ration=calculatorNumber("#analysis-feed-ration"),price=calculatorNumber("#analysis-feed-price"),cost=calculatorNumber("#calculator-cost"),target=calculatorNumber("#analysis-target");if([ration,price,cost,target].some(x=>x!==null&&x<0)){showToast("Revisa los valores.");return;}if(analysisWrite({...analysisSaved(),defaults:{ration,price,cost:ration!==null&&price!==null?Number((ration*price).toFixed(2)):cost,target}})){showToast("Preferencias guardadas en este dispositivo.");}});
     root.addEventListener("click",e=>{
       const tab=e.target.closest("[data-analysis-tab]"),day=e.target.closest("[data-analysis-days]");
       if(tab)showAnalysisTab(tab.dataset.analysisTab);
@@ -5041,8 +5122,8 @@
     $("#save-animal-settings").addEventListener("click", saveAnimalFieldSettings);
     $("#reset-animal-settings").addEventListener("click", resetAnimalFieldSettings);
     $("#calculator-form").addEventListener("submit", event => event.preventDefault());
-    $("#calculator-form").addEventListener("input", updateCalculator);
     $("#calculator-gain").addEventListener("input", () => { state.calculatorMeasuredGain = null; });
+    $("#calculator-form").addEventListener("input", updateCalculator);
     $("#calculator-animal").addEventListener("change", loadCalculatorAnimal);
     $("#calculator-save-forecast").addEventListener("click", saveCalculatorForecast);
     $("#new-journey-button").addEventListener("click", openJourneyCreateForm);
