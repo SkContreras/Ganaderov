@@ -79,6 +79,7 @@
           <span id="account-label" class="account-label">Sin sesión</span>
           <button id="sync-button" class="button button-outline button-small" type="button" aria-label="Sincronizar" disabled><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-sync"></use></svg> Sincronizar</button>
           <button id="account-button" class="button button-outline button-small" type="button" aria-label="Iniciar sesión"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-users"></use></svg> Iniciar sesión</button>
+          <button id="account-manage-button" class="button button-outline button-small" type="button" aria-label="Administrar cuenta" hidden><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-settings"></use></svg> Mi cuenta</button>
           <button id="sign-out-button" class="button button-outline button-small" type="button" hidden><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-export"></use></svg> Cerrar sesión</button>
           <button id="ranch-button" class="button button-outline button-small" type="button" hidden><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-users"></use></svg> Rancho y usuarios</button>
           <button id="restore-button" class="button button-outline button-small" type="button" aria-label="Importar copia"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-import"></use></svg> Importar copia</button>
@@ -451,6 +452,8 @@
           </div>
           <div class="account-links">
             <button class="account-link" type="button" data-account-view="register">Crear cuenta</button>
+            <button class="account-link" type="button" data-account-view="magic-link">Recibir enlace para iniciar sesión</button>
+            <button class="account-link" type="button" data-account-view="resend-confirmation">Reenviar confirmación</button>
             <button class="account-link" type="button" data-account-view="recovery">¿Olvidaste tu contraseña?</button>
           </div>
         </form>
@@ -462,6 +465,28 @@
           </div>
           <div class="modal-actions">
             <button class="button button-primary" type="submit">Crear cuenta</button>
+          </div>
+          <div class="account-links">
+            <button class="account-link" type="button" data-account-view="login">Volver a iniciar sesión</button>
+          </div>
+        </form>
+        <form id="magic-link-form" hidden>
+          <div class="form-grid">
+            <label class="full-width">Correo electrónico<input id="magic-link-email" type="email" autocomplete="email" placeholder="nombre@ejemplo.com" required></label>
+          </div>
+          <div class="modal-actions">
+            <button class="button button-primary" type="submit">Enviar enlace de acceso</button>
+          </div>
+          <div class="account-links">
+            <button class="account-link" type="button" data-account-view="login">Volver a iniciar sesión</button>
+          </div>
+        </form>
+        <form id="resend-confirmation-form" hidden>
+          <div class="form-grid">
+            <label class="full-width">Correo electrónico<input id="confirmation-email" type="email" autocomplete="email" placeholder="nombre@ejemplo.com" required></label>
+          </div>
+          <div class="modal-actions">
+            <button class="button button-primary" type="submit">Enviar confirmación</button>
           </div>
           <div class="account-links">
             <button class="account-link" type="button" data-account-view="login">Volver a iniciar sesión</button>
@@ -496,6 +521,43 @@
         <p class="account-panel-foot">Acceso seguro para la administración de tu rancho.</p>
       </section>
     </div>
+  </dialog>
+
+  <dialog id="account-management-dialog" class="modal compact-modal">
+    <div class="modal-heading">
+      <div><div class="eyebrow">SEGURIDAD DE LA CUENTA</div><h2>Mi cuenta</h2></div>
+      <button class="icon-button" type="button" data-close="account-management-dialog" aria-label="Cerrar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
+    </div>
+    <p class="account-help">Correo actual: <strong id="account-current-email"></strong></p>
+    <form id="change-email-form" class="ranch-form">
+      <h3>Cambiar correo electrónico</h3>
+      <label>Nuevo correo<input id="change-email" type="email" autocomplete="email" required></label>
+      <label id="change-email-nonce-label" hidden>Código de verificación<input id="change-email-nonce" inputmode="numeric" autocomplete="one-time-code" maxlength="64"></label>
+      <button id="change-email-submit" class="button button-primary" type="submit">Enviar código de verificación</button>
+    </form>
+    <form id="change-password-form" class="ranch-form">
+      <h3>Cambiar contraseña</h3>
+      <label>Nueva contraseña<input id="change-password" type="password" autocomplete="new-password" minlength="8" required></label>
+      <label>Confirmar nueva contraseña<input id="change-password-confirm" type="password" autocomplete="new-password" minlength="8" required></label>
+      <label id="change-password-nonce-label" hidden>Código de verificación<input id="change-password-nonce" inputmode="numeric" autocomplete="one-time-code" maxlength="64"></label>
+      <button id="change-password-submit" class="button button-primary" type="submit">Enviar código de verificación</button>
+    </form>
+    <section class="ranch-section">
+      <h3>Vincular método de acceso</h3>
+      <p>Requiere que el proveedor elegido esté habilitado en Supabase.</p>
+      <label>Proveedor
+        <select id="link-provider">
+          <option value="google">Google</option>
+          <option value="apple">Apple</option>
+          <option value="github">GitHub</option>
+        </select>
+      </label>
+      <button id="link-provider-button" class="button button-outline" type="button">Vincular proveedor</button>
+    </section>
+    <section class="ranch-section">
+      <h3>Métodos de acceso vinculados</h3>
+      <ul id="linked-identities" class="ranch-list"></ul>
+    </section>
   </dialog>
 
   <dialog id="ranch-dialog" class="modal compact-modal">

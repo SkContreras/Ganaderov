@@ -129,7 +129,7 @@
     return `<span class="journey-status ${journey.status}">${icon(iconName)}${escapeHtml(journeyStatus(journey))}</span>`;
   }
   const hasRanchAccess = () => !currentUser || state.legacyAccount || ["owner", "admin", "worker"].includes(state.ranchRole);
-  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), fieldConfig: null, fieldConfigRecord: null, fieldSettingsDirty: false, mainView: "inventory", sort: "tag", direction: 1, archiveView: false, currentAnimalId: null, detailView: "summary", detailShowEmpty: false, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyWeightWarning: null, journeyUpdating: new Set(), animalFormSnapshot: "", animalFormStep: 0, animalFormMode: "create", animalFormWeightWarning: null, recordFormWeightWarning: null, quickCaptureSeed: null, pendingUndo: null, undoTimer: null, toastAction: null, scannerStream: null, scannerFrame: null, calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
+  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), fieldConfig: null, fieldConfigRecord: null, fieldSettingsDirty: false, mainView: "inventory", sort: "tag", direction: 1, archiveView: false, currentAnimalId: null, detailView: "summary", detailShowEmpty: false, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyWeightWarning: null, journeyUpdating: new Set(), animalFormSnapshot: "", animalFormStep: 0, animalFormMode: "create", animalFormWeightWarning: null, recordFormWeightWarning: null, quickCaptureSeed: null, pendingUndo: null, undoTimer: null, toastAction: null, scannerStream: null, scannerFrame: null, calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, accountIdentities: [], toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
   let cloud;
   let currentUser;
@@ -467,10 +467,29 @@
     }
   }
 
+  async function renderAccountIdentities() {
+    const host = $("#linked-identities");
+    host.innerHTML = "<li><span>Consultando métodos vinculados…</span></li>";
+    const { data, error } = await cloud.auth.getUserIdentities();
+    if (error) {
+      state.accountIdentities = [];
+      host.innerHTML = "<li><span>No se pudieron consultar los métodos vinculados.</span></li>";
+      showToast(`No se pudieron consultar los métodos vinculados: ${authErrorMessage(error)}`);
+      return;
+    }
+    state.accountIdentities = data.identities || [];
+    const identities = state.accountIdentities.filter(identity => identity.provider !== "email");
+    host.innerHTML = identities.length
+      ? identities.map(identity => `<li><span><strong>${escapeHtml(identity.provider)}</strong></span><button class="button button-outline button-small" type="button" data-unlink-identity="${escapeHtml(identity.identity_id)}">Desvincular</button></li>`).join("")
+      : "<li><span>No hay proveedores externos vinculados.</span></li>";
+  }
+
   function showAccountView(view, message = "", success = false) {
     const views = {
       login: ["Iniciar sesión", "Usa tu correo y contraseña. Tus datos locales permanecen en este dispositivo aunque no haya conexión."],
       register: ["Crear cuenta", "Registra una cuenta de acceso. Esto no concede permisos sobre los datos de un rancho."],
+      "magic-link": ["Iniciar sesión con enlace", "Te enviaremos un enlace de acceso de un solo uso a tu correo."],
+      "resend-confirmation": ["Confirmar correo", "Solicita un nuevo enlace para confirmar tu dirección de correo."],
       recovery: ["Recuperar contraseña", "Te enviaremos un enlace para definir una contraseña nueva."],
       "reset-password": ["Crear nueva contraseña", "Elige una contraseña nueva de al menos 8 caracteres."],
       message: [success ? "Revisa tu correo" : "Información", ""]
@@ -481,6 +500,8 @@
     $("#account-help").hidden = !help;
     $("#sign-in-form").hidden = view !== "login";
     $("#sign-up-form").hidden = view !== "register";
+    $("#magic-link-form").hidden = view !== "magic-link";
+    $("#resend-confirmation-form").hidden = view !== "resend-confirmation";
     $("#recovery-form").hidden = view !== "recovery";
     $("#reset-password-form").hidden = view !== "reset-password";
     $("#account-message-view").hidden = view !== "message";
@@ -4807,6 +4828,25 @@
       if (!cloud) showAccountView("login", "La conexión con Supabase aún no está configurada. Consulta el README para activarla.");
       $("#account-dialog").showModal();
     });
+    $("#account-manage-button").addEventListener("click", () => {
+      if (!currentUser) return;
+      $("#account-current-email").textContent = currentUser.email || "Sin correo";
+      $("#change-email").value = "";
+      $("#change-password").value = "";
+      $("#change-password-confirm").value = "";
+      $("#change-email-nonce").value = "";
+      $("#change-password-nonce").value = "";
+      $("#change-email-nonce-label").hidden = true;
+      $("#change-password-nonce-label").hidden = true;
+      $("#change-email-nonce").required = false;
+      $("#change-password-nonce").required = false;
+      $("#change-email-submit").textContent = "Enviar código de verificación";
+      $("#change-password-submit").textContent = "Enviar código de verificación";
+      $("#change-email-form").dataset.reauthSent = "false";
+      $("#change-password-form").dataset.reauthSent = "false";
+      $("#account-management-dialog").showModal();
+      renderAccountIdentities().catch(error => showToast(`No se pudieron consultar los métodos vinculados: ${authErrorMessage(error)}`));
+    });
     $("#ranch-button").addEventListener("click", () => {
       renderRanchDialog();
       $("#ranch-dialog").showModal();
@@ -4830,6 +4870,47 @@
         $("#account-dialog").close();
       } catch (error) {
         showAccountView("login", authErrorMessage(error));
+      }
+    });
+    $("#magic-link-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      if (!cloud) {
+        showAccountView("magic-link", "La conexión con Supabase aún no está configurada. Consulta el README para activarla.");
+        return;
+      }
+      try {
+        const { error } = await cloud.auth.signInWithOtp({
+          email: $("#magic-link-email").value.trim(),
+          options: { shouldCreateUser: false, emailRedirectTo: authRedirectUrl() }
+        });
+        if (error) {
+          showAccountView("magic-link", authErrorMessage(error));
+        } else {
+          showAccountView("message", "Si existe una cuenta con ese correo, recibirás un enlace para iniciar sesión.", true);
+        }
+      } catch (error) {
+        showAccountView("magic-link", authErrorMessage(error));
+      }
+    });
+    $("#resend-confirmation-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      if (!cloud) {
+        showAccountView("resend-confirmation", "La conexión con Supabase aún no está configurada. Consulta el README para activarla.");
+        return;
+      }
+      try {
+        const { error } = await cloud.auth.resend({
+          type: "signup",
+          email: $("#confirmation-email").value.trim(),
+          options: { emailRedirectTo: signupConfirmationUrl() }
+        });
+        if (error) {
+          showAccountView("resend-confirmation", authErrorMessage(error));
+        } else {
+          showAccountView("message", "Si la cuenta necesita confirmación, recibirás un nuevo enlace por correo.", true);
+        }
+      } catch (error) {
+        showAccountView("resend-confirmation", authErrorMessage(error));
       }
     });
     $("#sign-up-form").addEventListener("submit", async event => {
@@ -4912,6 +4993,107 @@
         }
       } catch (error) {
         showAccountView("reset-password", authErrorMessage(error));
+      }
+    });
+    $("#change-email-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      if (!cloud || !currentUser) {
+        showToast("Inicia sesión para cambiar el correo de tu cuenta.");
+        return;
+      }
+      try {
+        const form = $("#change-email-form");
+        if (form.dataset.reauthSent !== "true") {
+          const { error } = await cloud.auth.reauthenticate();
+          if (error) {
+            showToast(`No se pudo enviar el código de verificación: ${authErrorMessage(error)}`);
+          } else {
+            form.dataset.reauthSent = "true";
+            $("#change-email-nonce-label").hidden = false;
+            $("#change-email-nonce").required = true;
+            $("#change-email-submit").textContent = "Confirmar y cambiar correo";
+            showToast("Código enviado al correo actual. Escríbelo para confirmar el cambio.");
+          }
+          return;
+        }
+        const { error } = await cloud.auth.updateUser(
+          { email: $("#change-email").value.trim(), nonce: $("#change-email-nonce").value.trim() },
+          { emailRedirectTo: authRedirectUrl() }
+        );
+        if (error) {
+          showToast(`No se pudo solicitar el cambio de correo: ${authErrorMessage(error)}`);
+        } else {
+          $("#change-email").value = "";
+          $("#change-email-nonce").value = "";
+          $("#change-email-nonce-label").hidden = true;
+          $("#change-email-nonce").required = false;
+          form.dataset.reauthSent = "false";
+          $("#change-email-submit").textContent = "Enviar código de verificación";
+          showToast("Cambio solicitado. Sigue el enlace de confirmación que Supabase envíe a tu correo.");
+        }
+      } catch (error) {
+        showToast(`No se pudo solicitar el cambio de correo: ${authErrorMessage(error)}`);
+      }
+    });
+    $("#change-password-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      const password = $("#change-password").value;
+      if (password !== $("#change-password-confirm").value) {
+        showToast("Las contraseñas no coinciden.");
+        return;
+      }
+      if (!cloud || !currentUser) {
+        showToast("Inicia sesión para cambiar la contraseña de tu cuenta.");
+        return;
+      }
+      try {
+        const form = $("#change-password-form");
+        if (form.dataset.reauthSent !== "true") {
+          const { error } = await cloud.auth.reauthenticate();
+          if (error) {
+            showToast(`No se pudo enviar el código de verificación: ${authErrorMessage(error)}`);
+          } else {
+            form.dataset.reauthSent = "true";
+            $("#change-password-nonce-label").hidden = false;
+            $("#change-password-nonce").required = true;
+            $("#change-password-submit").textContent = "Confirmar y cambiar contraseña";
+            showToast("Código enviado al correo de la cuenta. Escríbelo para confirmar el cambio.");
+          }
+          return;
+        }
+        const { error } = await cloud.auth.updateUser({
+          password,
+          nonce: $("#change-password-nonce").value.trim()
+        });
+        if (error) {
+          showToast(`No se pudo cambiar la contraseña: ${authErrorMessage(error)}`);
+        } else {
+          $("#change-password").value = "";
+          $("#change-password-confirm").value = "";
+          $("#change-password-nonce").value = "";
+          $("#change-password-nonce-label").hidden = true;
+          $("#change-password-nonce").required = false;
+          form.dataset.reauthSent = "false";
+          $("#change-password-submit").textContent = "Enviar código de verificación";
+          showToast("La contraseña se cambió correctamente.");
+        }
+      } catch (error) {
+        showToast(`No se pudo cambiar la contraseña: ${authErrorMessage(error)}`);
+      }
+    });
+    $("#link-provider-button").addEventListener("click", async () => {
+      if (!cloud || !currentUser) {
+        showToast("Inicia sesión para vincular un método de acceso.");
+        return;
+      }
+      try {
+        const { error } = await cloud.auth.linkIdentity({
+          provider: $("#link-provider").value,
+          options: { redirectTo: authRedirectUrl() }
+        });
+        if (error) showToast(`No se pudo iniciar la vinculación: ${authErrorMessage(error)}`);
+      } catch (error) {
+        showToast(`No se pudo iniciar la vinculación: ${authErrorMessage(error)}`);
       }
     });
     $("#sign-out-button").addEventListener("click", async () => {
@@ -4999,7 +5181,35 @@
         focusAnimalFormStep();
         return;
       }
-      if (target.dataset.accountView) { showAccountView(target.dataset.accountView); return; }
+      if (target.dataset.accountView) {
+        const view = target.dataset.accountView;
+        if (view === "magic-link") $("#magic-link-email").value = $("#account-email").value.trim();
+        if (view === "resend-confirmation") $("#confirmation-email").value = $("#account-email").value.trim();
+        if (view === "recovery") $("#recovery-email").value = $("#account-email").value.trim();
+        showAccountView(view);
+        return;
+      }
+      if (target.dataset.unlinkIdentity) {
+        const identity = state.accountIdentities.find(item => item.identity_id === target.dataset.unlinkIdentity);
+        if (!identity) {
+          showToast("No se encontró el método de acceso que intentas desvincular. Actualiza la lista e inténtalo de nuevo.");
+          return;
+        }
+        (async () => {
+          try {
+            const { error } = await cloud.auth.unlinkIdentity(identity);
+            if (error) {
+              showToast(`No se pudo desvincular el método de acceso: ${authErrorMessage(error)}`);
+            } else {
+              await renderAccountIdentities();
+              showToast("Método de acceso desvinculado.");
+            }
+          } catch (error) {
+            showToast(`No se pudo desvincular el método de acceso: ${authErrorMessage(error)}`);
+          }
+        })();
+        return;
+      }
       if (target.dataset.reviewRequest) {
         reviewRanchRequest(target.dataset.reviewRequest, target.dataset.approve === "true");
         return;
@@ -5173,8 +5383,10 @@
           if (event === "INITIAL_SESSION") return;
           currentUser = session?.user || null;
           $("#account-button").hidden = Boolean(currentUser);
+          $("#account-manage-button").hidden = !currentUser;
           $("#sign-out-button").hidden = !currentUser;
           if (!currentUser) {
+            state.accountIdentities = [];
             state.ranchContext = null;
             state.ranchOwnerId = null;
             state.ranchRole = null;
@@ -5212,6 +5424,7 @@
         if (error) throw error;
         currentUser = data.session?.user || null;
         $("#account-button").hidden = Boolean(currentUser);
+        $("#account-manage-button").hidden = !currentUser;
         $("#sign-out-button").hidden = !currentUser;
         if (currentUser) {
           await refreshRanchContext();

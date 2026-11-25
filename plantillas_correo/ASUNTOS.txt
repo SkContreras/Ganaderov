@@ -1,0 +1,39 @@
+1. Confirm sign up
+Subject: ¡Bienvenido a Ganaderov! Confirma tu cuenta
+Body: 01-confirm-sign-up.html
+
+2. Magic link or OTP
+Subject: Ganaderov | Tu acceso seguro
+Body: 02-magic-link.html
+
+3. Change email address
+Subject: Ganaderov | Confirma tu nuevo correo electrónico
+Body: 03-change-email.html
+
+4. Reset password
+Subject: Ganaderov | Restablece tu contraseña
+Body: 04-reset-password.html
+
+5. Reauthentication
+Subject: Ganaderov | Código de verificación de identidad
+Body: 05-reauthentication.html
+
+6. Password changed
+Subject: Ganaderov | Tu contraseña ha sido actualizada
+Body: 06-password-changed.html
+
+7. Email address changed
+Subject: Ganaderov | Tu correo electrónico ha cambiado
+Body: 07-email-changed.html
+
+8. Phone number changed
+Subject: Ganaderov | Tu número telefónico ha cambiado
+Body: 08-phone-changed.html
+
+9. Sign-in method linked
+Subject: Ganaderov | Nuevo método de acceso vinculado
+Body: 09-sign-in-linked.html
+
+10. Sign-in method removed
+Subject: Ganaderov | Alerta: método de acceso eliminado
+Body: 10-sign-in-removed.html
