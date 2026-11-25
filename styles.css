@@ -177,6 +177,11 @@ td { height: 61px; border-top: 1px solid #f0f1ed; padding: 8px 14px; color: #687
 .empty-state p { max-width: 350px; margin: 0 auto 18px; color: #858d83; font-size: 12px; line-height: 1.6; }
 .empty-state .button { min-height: 36px; font-size: 11px; }
 .page-footer { text-align: center; padding-top: 20px; color: #a2a89f; font-size: 10px; }
+.page-footer p { margin: 0; }
+.legal-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 16px; margin-top: 10px; }
+.legal-links a { color: #54745b; font-size: 10px; font-weight: 700; text-decoration: none; }
+.legal-links a:hover { text-decoration: underline; }
+.legal-links a:focus-visible { outline: 3px solid #9bbd99; outline-offset: 3px; }
 .journey-page-heading { margin-top: 40px; }
 .journey-section { margin-bottom: 23px; background: white; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 .journey-section-heading { padding: 19px 21px; border-bottom: 1px solid #f0f1ed; }

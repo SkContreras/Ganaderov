@@ -1,4 +1,4 @@
-const CACHE_NAME = "ganadero-v22";
+const CACHE_NAME = "ganadero-v23";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -8,7 +8,11 @@ const APP_FILES = [
   "./app.js",
   "./confirmar-correo.html",
   "./confirmar-correo.css",
-  "./confirmar-correo.js"
+  "./confirmar-correo.js",
+  "./privacidad.html",
+  "./terminos.html",
+  "./eliminar-datos.html",
+  "./legal.css"
 ];
 const SUPABASE_SCRIPT = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8/dist/umd/supabase.min.js";
 
