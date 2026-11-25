@@ -517,6 +517,11 @@
     return new URL(location.pathname, location.origin).href;
   }
 
+  function signupConfirmationUrl() {
+    if (location.protocol !== "http:" && location.protocol !== "https:") return undefined;
+    return new URL("./confirmar-correo.html", location.href).href;
+  }
+
   function scheduleSync() {
     setSyncStatus(navigator.onLine ? "Cambios guardados · pendientes de sincronizar" : "Sin conexión · cambios guardados aquí");
     if (state.syncing) {
@@ -4842,7 +4847,7 @@
         const { data, error } = await cloud.auth.signUp({
           email: $("#signup-email").value.trim(),
           password,
-          options: { emailRedirectTo: authRedirectUrl() }
+          options: { emailRedirectTo: signupConfirmationUrl() }
         });
         if (error) {
           showAccountView("register", authErrorMessage(error));

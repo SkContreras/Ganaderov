@@ -1,11 +1,14 @@
-const CACHE_NAME = "ganadero-v18";
+const CACHE_NAME = "ganadero-v19";
 const APP_FILES = [
   "./",
   "./index.html",
   "./styles.css",
   "./ganaderov-icon.svg",
   "./config.js",
-  "./app.js"
+  "./app.js",
+  "./confirmar-correo.html",
+  "./confirmar-correo.css",
+  "./confirmar-correo.js"
 ];
 const SUPABASE_SCRIPT = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8/dist/umd/supabase.min.js";
 

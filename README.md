@@ -14,7 +14,7 @@ Los iconos de la interfaz usan símbolos SVG sólidos en una biblioteca común, 
 2. En un proyecto nuevo, ejecuta [`supabase-schema.sql`](./supabase-schema.sql) en **SQL Editor**. Es el esquema completo actual: sincronización de animales y jornadas, perfiles y permisos de rancho, fotos y configuración sincronizada de campos. Para una base existente, respáldala y prueba primero el esquema en staging restaurado; aunque no borra los datos, reemplaza políticas RLS y triggers y cambia permisos. No lo ejecutes directamente en producción sin validar las cuentas, políticas y comportamiento de trabajadores.
 3. En **Project Settings → API**, copia la **Project URL** y la clave **anon/public**. En [`config.js`](./config.js), colócalas en `supabaseUrl` y `supabaseAnonKey`.
 4. Publica de nuevo estos archivos en Vercel. La clave `anon/public` está diseñada para el navegador y las políticas RLS limitan los datos a la cuenta autenticada. **Nunca pongas una clave `service_role` en `config.js`.**
-5. En **Authentication → URL Configuration**, agrega la URL de la app desplegada como sitio/redirección permitida.
+5. En **Authentication → URL Configuration**, configura la URL de la app como sitio y agrega `https://tu-dominio/confirmar-correo.html` a las URLs de redirección permitidas. El enlace de registro regresa a esa página para confirmar el correo y continuar a Ganaderov. Sustituye `tu-dominio` por el dominio real del despliegue.
 6. Abre la app con conexión, elige **Crear cuenta**, y confirma el correo si Supabase lo solicita. Inicia sesión con esa misma cuenta en los demás dispositivos.
 
 El archivo `config.js` contiene solo valores públicos del proyecto; no contiene contraseñas. Si se usa un repositorio público, no agregues claves privadas ni credenciales de administrador.
@@ -114,4 +114,4 @@ La calculadora enlaza a [México Ganadero](https://www.mexicoganadero.com/precio
 
 ## Uso local
 
-Abre `index.html` en una versión reciente de Chrome o Edge. Sin configurar Supabase, la app conserva el modo local de un solo dispositivo. Las fotos se almacenan en IndexedDB cuando está sin conexión y en el bucket privado de Supabase al sincronizar. El caché offline del service worker usa la versión `ganadero-v18`.
+Abre `index.html` en una versión reciente de Chrome o Edge. Sin configurar Supabase, la app conserva el modo local de un solo dispositivo. Las fotos se almacenan en IndexedDB cuando está sin conexión y en el bucket privado de Supabase al sincronizar. El caché offline del service worker usa la versión `ganadero-v19`.

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173f2a">
+  <meta name="description" content="Confirma tu correo para terminar de crear tu cuenta de Ganaderov.">
+  <title>Confirmar correo — Ganaderov</title>
+  <link rel="icon" type="image/svg+xml" href="./ganaderov-icon.svg">
+  <link rel="stylesheet" href="./confirmar-correo.css">
+</head>
+<body>
+  <main class="confirmation-page">
+    <section class="confirmation-card" aria-labelledby="confirmation-title">
+      <a class="confirmation-brand" href="./index.html" aria-label="Ganaderov, inicio">
+        <img src="./ganaderov-icon.svg" alt="" width="42" height="42">
+        <span><strong>Ganaderov</strong><small>GESTIÓN GANADERA</small></span>
+      </a>
+      <div id="confirmation-indicator" class="confirmation-indicator" aria-hidden="true">
+        <svg class="confirmation-icon-success" viewBox="0 0 24 24" focusable="false"><path d="m5 12.5 4.2 4.2L19 7"/></svg>
+        <svg class="confirmation-icon-error" viewBox="0 0 24 24" focusable="false"><path d="M12 8v5m0 4h.01M10.3 3.9 2.8 17a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3l-7.5-13a2 2 0 0 0-3.4-.1Z"/></svg>
+      </div>
+      <p class="confirmation-kicker">VERIFICACIÓN DE CUENTA</p>
+      <h1 id="confirmation-title">Confirmando tu correo</h1>
+      <p id="confirmation-message" class="confirmation-message" role="status" aria-live="polite">
+        Estamos validando el enlace. Esto puede tardar unos segundos.
+      </p>
+      <a id="confirmation-action" class="confirmation-action" href="./index.html" hidden>Continuar a Ganaderov</a>
+      <p class="confirmation-help">Si no solicitaste esta cuenta, puedes cerrar esta página.</p>
+    </section>
+    <footer>Gestión de ganado, clara y segura.</footer>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8/dist/umd/supabase.min.js"></script>
+  <script src="./config.js"></script>
+  <script src="./confirmar-correo.js"></script>
+</body>
+</html>
