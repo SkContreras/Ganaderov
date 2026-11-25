@@ -779,7 +779,7 @@
     const enabled = field.locked || !!settingsControl(field.id,"enabled")?.checked;
     const module = !!$(`[data-module-setting="${field.module}"]`)?.checked;
     const required = !!settingsControl(field.id,"required")?.checked;
-    return { enabled: enabled && (module || field.locked), required, form: !!settingsControl(field.id,"form")?.checked || required, basic: settingsControl(field.id,"formLevel")?.value === "basic", label: $(`[data-field-label="${field.id}"]`)?.value || field.label };
+    return { enabled: enabled && module, required, form: !!settingsControl(field.id,"form")?.checked || required, basic: settingsControl(field.id,"formLevel")?.value === "basic", label: $(`[data-field-label="${field.id}"]`)?.value || field.label };
   }
   function updateSettingsWorkspace() {
     const query = $("#settings-field-search").value.trim().toLocaleLowerCase("es-MX").normalize("NFD").replace(/[\u0300-\u036f]/g,"");
@@ -866,7 +866,7 @@
       if(event.target.matches("[data-capture-pref],[data-capture-default]") && canManageRanch()) markSettingsWorkspaceDirty();
       else if(event.target.matches("[data-field-setting],[data-field-label],[data-module-setting],[data-list-label],[data-list-enabled],[data-list-active]")) queueMicrotask(updateSettingsWorkspace);
     });
-    $("#settings-view").addEventListener("input",event=>{if(event.target.matches("[data-field-label]")) updateSettingsWorkspace();});
+    $("#settings-view").addEventListener("input",event=>{if(event.target.matches("[data-field-label]") && canManageRanch()) markSettingsWorkspaceDirty();});
   }
 
   function renderAnimalSettings() {
@@ -3610,7 +3610,15 @@
     if (!isEdit) {
       const defaults = {...capture.defaults};
       if(capture.today) defaults.entryDate = today();
-      if(defaults.prefix && !prefill?.tag) defaults.tag = defaults.prefix;
+      if(defaults.prefix && !prefill?.tag) {
+        const tagControl = $('[data-animal-field="tag"]',form);
+        if (tagControl) tagControl.placeholder = defaults.prefix + "001";
+        if (capture.nextTag) {
+          const prefix = String(defaults.prefix);
+          const used = new Set(state.animals.map(a=>String(a.tag).toLowerCase()));
+          for (let n=1;n<=10000;n++) { const candidate=prefix+String(n).padStart(3,"0"); if(!used.has(candidate.toLowerCase())) { defaults.tag=candidate; break; } }
+        }
+      }
       delete defaults.prefix;
       Object.entries(defaults).forEach(([id,value])=>{const control=$(`[data-animal-field="${id}"]`,form); if(control && value && (control.tagName!=="SELECT" || [...control.options].some(o=>o.value===value && !o.disabled))) control.value=value;});
     }
