@@ -2061,7 +2061,7 @@
     analysisText("#analysis-base-date",baselineDate?formatDate(baselineDate):"—");
     $("#analysis-days-slider").max=String(Math.max(180,Math.min(3650,days??0)));
     $("#analysis-days-slider").value=String(Math.max(0,Math.min(3650,days??0)));
-    $("[data-analysis-days]").forEach(b=>b.setAttribute("aria-pressed",String(Number(b.dataset.analysisDays)===days)));
+    $$("[data-analysis-days]").forEach(b=>b.setAttribute("aria-pressed",String(Number(b.dataset.analysisDays)===days)));
     $("#analysis-decision").dataset.tone="neutral";
     analysisText("#analysis-decision-title","Completa los datos");
     analysisText("#analysis-decision-detail","Introduce peso, crecimiento, precio y costos.");
@@ -2103,8 +2103,8 @@
     analysisText("#analysis-lot-result",analysisSale&&Number.isInteger(lot)&&lot>0&&Number.isFinite(lot*analysisSale.netDifference)?"Venta base "+formatCurrency(lot*analysisSale.currentValue)+" · venta futura menos costos "+formatCurrency(lot*(analysisSale.futureValue-analysisSale.expenses))+" · diferencia "+formatCurrency(lot*analysisSale.netDifference):"Completa la simulación y el número de animales.");
   }
   function showAnalysisTab(id){
-    $("[data-analysis-tab]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.analysisTab===id)));
-    $("[data-analysis-panel]").forEach(p=>p.hidden=p.dataset.analysisPanel!==id);
+    $$("[data-analysis-tab]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.analysisTab===id)));
+    $$("[data-analysis-panel]").forEach(p=>p.hidden=p.dataset.analysisPanel!==id);
     updateAnalysisTools();
   }
   function registerAnalysis(){
