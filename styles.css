@@ -854,3 +854,170 @@ td { height: 54px; }
 #calculator-view[hidden] .calc-ranch-art *{animation-play-state:paused}
 @media(max-width:700px){#calculator-view .calculator-page-heading{display:block;min-height:0;padding:20px 18px 142px}#calculator-view .calculator-page-heading>div{width:100%}.calc-ranch-art{top:auto;bottom:0;width:100%;height:140px;mask-image:linear-gradient(180deg,transparent,#000 18%)}}
 @media(prefers-reduced-motion:reduce){.calc-ranch-art *{animation:none!important}.calc-art-trend{stroke-dashoffset:0}}
+
+
+/* Productivity workspace */
+#settings-view .settings-page-heading{position:relative;isolation:isolate;overflow:hidden;display:flex;align-items:center;gap:16px;min-height:205px;margin:24px 0;padding:28px clamp(18px,3vw,36px);border:1px solid #e5e6d8;border-radius:18px;background:#f8f4e9}
+#settings-view .settings-page-heading>div{position:relative;z-index:1;max-width:51%;margin-right:auto}
+#settings-view .settings-page-heading h1{color:#0f3d2c;font-size:clamp(25px,3vw,39px);margin:9px 0}
+#settings-view .settings-page-heading .subtitle{color:#56664e;line-height:1.6}
+#settings-view .settings-page-heading .eyebrow{color:#607641}
+#settings-view .settings-page-heading>.button{position:relative;z-index:1;align-self:flex-end}
+.settings-ranch-art{position:absolute;z-index:-1;right:0;top:0;width:52%;height:100%;mask-image:linear-gradient(90deg,transparent,#000 18%);pointer-events:none}
+.settings-presets,.settings-worker-grid,.settings-defaults,.settings-preview-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;padding:16px 20px}
+.settings-presets button{background:#f7f8f1;border:1px solid #dfe7d5;border-radius:12px;text-align:left;padding:16px;color:#31553b;min-height:76px}
+.settings-presets button:hover:not(:disabled){background:#edf3e5;border-color:#8aa462}
+.settings-presets button strong,.settings-presets button small{display:block}
+.settings-presets button small{margin-top:5px;color:#63745c}
+.settings-worker-grid label{display:flex;align-items:center;gap:8px;padding:12px;border:1px solid #e0e6d9;border-radius:10px;line-height:1.4}
+.settings-worker-grid input{accent-color:#31553b;width:19px;height:19px;flex-shrink:0}
+.settings-defaults label,.settings-field-tools label{display:grid;gap:6px;font-weight:600;color:#465746;font-size:12px;min-width:0}
+.settings-defaults input,.settings-defaults select,.settings-field-tools input,.settings-field-tools select{width:100%;min-width:0;border:1px solid #dfe5dc;border-radius:8px;background:white;padding:10px;color:#29382b;font:inherit}
+.settings-mini-note{padding:0 20px 13px;color:#62735d;font-size:11px;line-height:1.5;margin:0}
+.settings-preview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.settings-preview-grid section{border:1px solid #e0e6d9;border-radius:12px;padding:12px;background:#f8faf5;min-width:0}
+.settings-preview-grid h3{font-size:13px;color:#31553b;margin:0 0 10px}
+.settings-preview-field{padding:9px;border:1px solid #e0e6d9;border-radius:7px;background:white;margin-top:6px;font-size:12px;overflow-wrap:anywhere}
+#settings-preview-count{color:#617453;font-size:12px}
+.settings-field-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;padding:16px 20px}
+.settings-field-tools label{flex:1 1 160px}
+.settings-field-tools .button{font-size:11px;min-height:36px}
+.settings-save-bar{position:sticky;bottom:10px;z-index:3;display:flex;justify-content:space-between;align-items:center;gap:12px;background:#f8faf5;border:1px solid #dce6d5;padding:12px 16px;border-radius:12px;box-shadow:0 5px 24px #173f2a19;margin:16px 0;color:#31553b}
+#settings-view .settings-card-heading{background:linear-gradient(110deg,#f4f7ed,#fff 75%)}
+#settings-view .settings-module{border-radius:12px}
+#animal-form.capture-large input:not([type=checkbox]),#animal-form.capture-large select,#animal-form.capture-large .button,#animal-form.capture-large .chip-option{min-height:46px;font-size:15px}
+.settings-art-gear{animation:settings-gear 22s linear infinite}
+.settings-art-tag{transform-origin:0 -28px;animation:settings-tag 3s ease-in-out infinite alternate}
+.settings-art-check{animation:settings-check 5s ease-in-out infinite;animation-delay:var(--delay)}
+.settings-art-grass{transform-box:fill-box;transform-origin:bottom;animation:settings-grass 3s ease-in-out infinite alternate;animation-delay:var(--delay)}
+@keyframes settings-gear{to{transform:rotate(360deg)}}@keyframes settings-tag{from{transform:rotate(-6deg)}to{transform:rotate(6deg)}}@keyframes settings-check{0%,15%,100%{stroke-dashoffset:18}35%,85%{stroke-dashoffset:0}}@keyframes settings-grass{to{transform:rotate(7deg)}}
+#settings-view[hidden] .settings-ranch-art *{animation-play-state:paused}
+@media(max-width:700px){#settings-view .settings-page-heading{min-height:0;flex-wrap:wrap;padding:20px 18px 135px}#settings-view .settings-page-heading>div{max-width:100%;width:100%}.settings-ranch-art{top:auto;bottom:0;width:100%;height:130px;mask-image:linear-gradient(180deg,transparent,#000 18%)}.settings-presets,.settings-worker-grid,.settings-defaults,.settings-preview-grid{grid-template-columns:1fr;padding:12px}.settings-save-bar{bottom:65px}}
+@media(prefers-reduced-motion:reduce){.settings-ranch-art *{animation:none!important}}
+
+
+/* Settings: category navigation and tactile controls */
+#settings-view [hidden]{display:none!important}
+.settings-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;margin:0 0 18px}
+.settings-tabs button{display:flex;align-items:center;gap:10px;text-align:left;min-width:0;padding:13px 10px;background:white;border:1px solid #e0e6d9;border-radius:12px;color:#435846;cursor:pointer;transition:transform .18s,box-shadow .18s,background .18s,border-color .18s}
+.settings-tabs button span:last-child{min-width:0}.settings-tabs strong,.settings-tabs small{display:block}.settings-tabs small{font-size:10px;color:#687b62;margin-top:3px;line-height:1.4}.settings-tab-icon,.preset-symbol{display:grid;place-items:center;width:36px;height:36px;flex:0 0 36px;background:#e8efdd;border-radius:10px;color:#517440;font-size:23px;font-weight:700}
+.settings-tabs button[aria-pressed=true]{background:#eaf1e2;border-color:#789761;box-shadow:inset 0 -3px #789761}.settings-tabs button:hover,.settings-presets button:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 6px 18px #31553b18}
+#settings-view .settings-card[data-settings-panel]:not([hidden]){animation:settings-panel-enter .24s ease-out}
+@keyframes settings-panel-enter{from{opacity:.5;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+#settings-view .settings-presets{grid-template-columns:repeat(auto-fit,minmax(145px,1fr))}
+#settings-view .settings-presets button{position:relative;cursor:pointer;min-height:112px;transition:transform .18s,box-shadow .18s,background .18s,border-color .18s;padding:14px}
+#settings-view .settings-presets button .preset-symbol{margin-bottom:9px}
+.preset-indicator{position:absolute;right:12px;top:12px;display:grid;place-items:center;width:21px;height:21px;border-radius:50%;background:#315b3e;color:white;opacity:0;transform:scale(.5);transition:opacity .2s,transform .25s}
+#settings-view .settings-presets button[aria-pressed=true]{background:#eaf2e0;border-color:#729658;box-shadow:inset 0 0 0 1px #729658}
+#settings-view .settings-presets button[aria-pressed=true] .preset-indicator{opacity:1;transform:scale(1)}
+#settings-view button:not(:disabled):active{transform:scale(.97)}
+#settings-view button:focus-visible,#settings-view input:focus-visible,#settings-view select:focus-visible{outline:2px solid #7c9b62;outline-offset:3px}
+#settings-view input:not([type=checkbox]),#settings-view select{transition:border-color .18s,box-shadow .18s,background .18s}
+#settings-view input:not([type=checkbox]):focus,#settings-view select:focus{border-color:#73995d;box-shadow:0 0 0 3px #73995d25;background:#fbfdf8}
+#settings-view input[type=checkbox]{accent-color:#3b6b46;transition:transform .15s;cursor:pointer}
+#settings-view input[type=checkbox]:active:not(:disabled){transform:scale(.8)}
+#settings-view .settings-worker-grid label:has(input:checked),#settings-view .settings-module:has(input:checked){border-color:#a9c39a;background:#f1f6ec}
+#settings-view .settings-worker-grid label,#settings-view .settings-module{transition:background .2s,border-color .2s}
+.settings-feedback{margin:0 20px 14px;padding:10px 12px;background:#eef4e7;border-radius:8px;color:#31553b;font-size:12px;line-height:1.5}
+.feedback-pop{animation:settings-feedback-pop .35s ease-out}@keyframes settings-feedback-pop{from{transform:translateY(3px);opacity:.5}to{transform:translateY(0);opacity:1}}
+#settings-view .settings-preview-grid details{border:1px solid #e0e6d9;border-radius:12px;padding:12px;background:#f8faf5;align-self:start}
+#settings-view .settings-preview-grid summary{font-size:13px;font-weight:700;color:#31553b;cursor:pointer}
+#settings-view .settings-table{table-layout:auto;min-width:760px;width:100%}
+#settings-view .settings-table td:first-child{display:table-cell;width:28%;padding:12px 16px;vertical-align:middle}
+#settings-view .settings-field-name>label,#settings-view .settings-field-name>small{display:block;margin-bottom:4px}
+#settings-view .settings-field-name>input{width:100%;max-width:230px;margin-top:4px}
+#settings-view .settings-table select{min-width:112px}
+#settings-view .settings-table td{padding:9px 10px;vertical-align:middle}
+#settings-view .settings-table tr:hover td{background:#f8faf5}
+@media(max-width:1000px){.settings-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){.settings-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}.settings-tabs button{padding:10px}.settings-tabs small{display:none}.settings-tab-icon{width:29px;height:29px;flex-basis:29px;font-size:18px}#settings-view .settings-presets{grid-template-columns:repeat(2,minmax(0,1fr))}#settings-view .settings-table{min-width:700px}}
+@media(prefers-reduced-motion:reduce){#settings-view *,#settings-view *::before,#settings-view *::after{animation:none!important;transition:none!important}}
+
+/* Compact mobile field cards and faithful, read-only form preview */
+#settings-view .settings-preview-field{display:grid;gap:7px;background:transparent;border:0;padding:4px 0;color:#465746;font-weight:600}#settings-view .settings-preview-field input,#settings-view .settings-preview-field select,#settings-view .settings-preview-field textarea{min-width:0;width:100%;background:#fff;border:1px solid #dce5d4;border-radius:8px;padding:9px;opacity:1;color:#52624e}#settings-view .settings-preview-field button{pointer-events:none}#settings-view .settings-preview-field .chip-options{display:flex;flex-wrap:wrap;gap:5px}#settings-view .settings-preview-field .chip-select-native{position:static;opacity:1;width:100%;height:auto}#settings-view[aria-busy=true] #save-animal-settings{cursor:wait;opacity:.65}
+@media(max-width:780px){#settings-view .settings-table-wrap{overflow:visible}#settings-view .settings-table{display:block;min-width:0;width:100%}#settings-view .settings-table thead{display:none}#settings-view .settings-table tbody{display:grid;gap:10px;padding:10px}#settings-view .settings-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid #dfe6d8;border-radius:12px;padding:10px;background:white}#settings-view .settings-table td:first-child{display:block;grid-column:1/-1;width:auto;padding:8px;text-align:left}#settings-view .settings-table td:not(:first-child){display:grid;justify-items:start;align-content:start;gap:7px;padding:8px;min-width:0;text-align:left;height:auto;white-space:normal}#settings-view .settings-table td[data-mobile-label]::before{content:attr(data-mobile-label);font-size:11px;font-weight:700;color:#60745a}#settings-view .settings-table select{min-width:0;width:100%}#settings-view .settings-field-form{justify-items:start;width:100%}#settings-view .settings-table td:first-child input{max-width:none}}
+
+
+/* Visual polish only — settings workspace */
+#settings-view{--settings-forest:#204b35;--settings-ink:#293f31;--settings-muted:#657366;--settings-line:#dfe6da;--settings-ease:cubic-bezier(.2,.75,.25,1)}
+#settings-view .settings-page-heading{margin-bottom:22px}
+#settings-view .settings-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;padding:6px;border:1px solid var(--settings-line);border-radius:16px;background:#f0f3ec;margin-bottom:24px}
+#settings-view .settings-tabs button{position:relative;min-height:66px;padding:10px 12px;border:1px solid transparent;border-radius:11px;background:transparent;color:var(--settings-muted);box-shadow:none;transition:background .22s,color .22s,box-shadow .22s,transform .22s var(--settings-ease)}
+#settings-view .settings-tabs button strong{font-size:13px;line-height:1.25;letter-spacing:-.01em}
+#settings-view .settings-tabs button small{font-size:10px;color:#69776a}
+#settings-view .settings-tab-icon{width:32px;height:32px;flex-basis:32px;border-radius:9px;background:transparent;color:#668059}
+#settings-view .settings-tab-icon svg{width:21px;height:21px;transition:transform .25s var(--settings-ease)}
+#settings-view .settings-tabs button[aria-pressed=true]{background:white;color:var(--settings-forest);border-color:#dce5d6;box-shadow:0 3px 10px #29463112}
+#settings-view .settings-tabs button[aria-pressed=true] .settings-tab-icon{background:#e9efdf;color:#315e40}
+#settings-view .settings-tabs button:hover:not(:disabled){background:#f9fbf7;transform:translateY(-1px)}
+#settings-view .settings-tabs button:hover svg{transform:translateY(-2px)}
+#settings-view .settings-card{border-radius:17px;border-color:var(--settings-line);box-shadow:0 4px 18px #243d2910;margin-bottom:16px}
+#settings-view .settings-card-heading{padding:22px 24px 18px;background:white;border-bottom:1px solid #edf0ea}
+#settings-view .settings-card-heading h2{font-size:19px;letter-spacing:-.025em;color:var(--settings-ink);margin-bottom:5px}
+#settings-view .settings-card-heading p{font-size:12px;color:var(--settings-muted);line-height:1.55}
+#settings-view .settings-presets{grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;padding:22px 24px 16px}
+#settings-view .settings-presets button{position:relative;isolation:isolate;overflow:hidden;min-height:138px;padding:16px 13px;border:1px solid #e2e8dc;border-radius:14px;background:#fbfcf8;color:var(--settings-ink);box-shadow:none;transition:background .25s,border-color .25s,box-shadow .25s,transform .25s var(--settings-ease)}
+#settings-view .settings-presets button::before{content:"";position:absolute;z-index:-1;inset:0;background:linear-gradient(140deg,#edf4e6,transparent 85%);opacity:0;transition:opacity .3s}
+#settings-view .settings-presets button strong{font-size:13px;line-height:1.35;letter-spacing:-.01em}
+#settings-view .settings-presets button small{font-size:11px;line-height:1.4;color:#647564}
+#settings-view .preset-symbol{width:42px;height:42px;border-radius:12px;background:#e9efdf;color:#547649;transition:transform .28s var(--settings-ease),background .25s,color .25s}
+#settings-view .preset-symbol svg{width:23px;height:23px}
+#settings-view .settings-presets button:hover:not(:disabled){border-color:#a4b99a;box-shadow:0 7px 18px #29463113;transform:translateY(-3px)}
+#settings-view .settings-presets button:hover:not(:disabled) .preset-symbol{transform:translateY(-2px) rotate(-4deg)}
+#settings-view .settings-presets button[aria-pressed=true]{background:#f2f7ed;border-color:#6d9460;box-shadow:inset 0 0 0 1px #6d9460,0 5px 15px #29463113}
+#settings-view .settings-presets button[aria-pressed=true]::before{opacity:1}
+#settings-view .settings-presets button[aria-pressed=true] .preset-symbol{background:#315b3e;color:white}
+#settings-view .preset-indicator{width:22px;height:22px;right:10px;top:10px;background:#315b3e;transition:opacity .22s,transform .3s cubic-bezier(.16,1.5,.5,1)}
+#settings-view .preset-indicator svg{width:14px;height:14px;stroke-width:2.6}
+#settings-view .settings-presets button:active:not(:disabled),#settings-view .settings-tabs button:active:not(:disabled){transform:scale(.97)}
+#settings-view .settings-feedback{margin:0 24px 13px;padding:12px 14px;border:1px solid #e0e9d7;border-radius:10px;background:#f5f8f0;font-size:12px;display:flex;gap:10px;align-items:center}
+#settings-view .settings-feedback::before{content:"";width:7px;height:7px;flex:0 0 7px;background:#7f9c64;border-radius:50%;box-shadow:0 0 0 4px #dfe9d6}
+#settings-view .settings-mini-note{padding:0 24px 17px;font-size:11px;color:var(--settings-muted)}
+#settings-view .settings-preview-grid{grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);padding:22px 24px;gap:16px;align-items:start}
+#settings-view .settings-preview-grid>section,#settings-view .settings-preview-grid>details{background:#f8faf6;border-color:#e1e8da;border-radius:13px;padding:17px}
+#settings-view .settings-preview-grid h3,#settings-view .settings-preview-grid summary{font-size:14px;font-weight:750;color:var(--settings-forest);line-height:1.5}
+#settings-view .settings-preview-grid summary{padding:2px 0}
+#settings-view .settings-preview-field{font-size:12px;gap:6px;margin:9px 0 0;padding:0}
+#settings-view .settings-preview-field input,#settings-view .settings-preview-field select,#settings-view .settings-preview-field textarea{min-height:40px;border-radius:9px;padding:10px;font-size:12px}
+#settings-view .settings-preview-field .chip-option{min-height:32px;border-radius:8px;font-size:11px}
+#settings-view #settings-preview-count{background:#edf2e6;color:#4f6a43;padding:6px 10px;border-radius:7px;font-size:11px;font-weight:700;white-space:nowrap}
+#settings-view .settings-worker-grid{grid-template-columns:repeat(2,minmax(0,1fr));padding:20px 24px;gap:10px}
+#settings-view .settings-worker-grid label{min-height:60px;display:flex;flex-direction:row-reverse;justify-content:space-between;gap:16px;background:#fbfcf9;border-radius:11px;padding:13px 16px;font-size:13px;color:var(--settings-ink);font-weight:600;cursor:pointer}
+#settings-view .settings-worker-grid label:has(input:disabled){cursor:default}
+#settings-view .settings-worker-grid label:has(input:checked),#settings-view .settings-module:has(input:checked){background:#f3f7ee;border-color:#bdd0b1}
+#settings-view .settings-worker-grid input[type=checkbox],#settings-view .settings-module>input[type=checkbox]{appearance:none;-webkit-appearance:none;position:relative;width:40px;height:23px;flex:0 0 40px;margin:0;border-radius:20px;border:1px solid #c9d4c4;background:#dce3d7;box-shadow:none;transition:background .22s,border-color .22s}
+#settings-view .settings-worker-grid input[type=checkbox]::after,#settings-view .settings-module>input[type=checkbox]::after{content:"";position:absolute;top:3px;left:3px;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 1px 4px #1b392d25;transition:transform .24s var(--settings-ease)}
+#settings-view .settings-worker-grid input:checked,#settings-view .settings-module>input:checked{background:#3f7049;border-color:#3f7049}
+#settings-view .settings-worker-grid input:checked::after,#settings-view .settings-module>input:checked::after{transform:translateX(17px)}
+#settings-view .settings-worker-grid input:disabled,#settings-view .settings-module>input:disabled{opacity:.5;cursor:not-allowed}
+#settings-view .settings-defaults{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;padding:20px 24px;border-top:1px solid #edf0ea}
+#settings-view .settings-defaults label,#settings-view .settings-field-tools label{font-size:12px;gap:8px;color:var(--settings-ink)}
+#settings-view .settings-defaults input,#settings-view .settings-defaults select,#settings-view .settings-field-tools input,#settings-view .settings-field-tools select{min-height:44px;border-radius:10px;font-size:13px;border-color:#dce4d8}
+#settings-view .settings-module-grid,#settings-view .settings-list-grid{gap:14px;padding:22px 24px}
+#settings-view .settings-module{flex-direction:row-reverse;justify-content:space-between;align-items:center;min-height:90px;padding:17px;border-color:var(--settings-line);background:#fbfcf9}
+#settings-view .settings-module strong{font-size:14px;color:var(--settings-ink)}
+#settings-view .settings-module small{font-size:12px;color:var(--settings-muted);line-height:1.5}
+#settings-view .settings-list{padding:16px;border:1px solid var(--settings-line);border-radius:12px;background:#fbfcf9;gap:12px}
+#settings-view .settings-list h3{font-size:15px;color:var(--settings-ink);padding-bottom:10px;border-bottom:1px solid #e7ece2}
+#settings-view .settings-list-option>input[type=text]{min-height:38px;font-size:12px;border-radius:8px}
+#settings-view .settings-list-option label{font-size:11px}
+#settings-view .settings-field-tools{padding:18px 24px;gap:12px;background:#fbfcf9}
+#settings-view .settings-field-tools .button,#settings-view #reset-animal-settings{min-height:38px;border-radius:9px;font-size:12px;transition:background .2s,border-color .2s,transform .2s}
+#settings-view .settings-field-tools .button:hover:not(:disabled),#settings-view #reset-animal-settings:hover:not(:disabled){background:#edf4e8;border-color:#a3ba98}
+#settings-view .settings-table{border-collapse:separate;border-spacing:0}
+#settings-view .settings-table th{font-size:11px;font-weight:700;color:#5d705b;background:#f1f5ee;padding:13px 10px}
+#settings-view .settings-table td{padding:12px 10px;border-bottom:1px solid #edf0ea}
+#settings-view .settings-field-name>label{font-size:13px;color:var(--settings-ink)}
+#settings-view .settings-field-name>small{font-size:11px;color:var(--settings-muted);line-height:1.5}
+#settings-view .settings-field-label,#settings-view .settings-table select{font-size:12px;min-height:36px;border-radius:8px}
+#settings-view .settings-table input[type=checkbox]{width:19px;height:19px}
+#settings-view .settings-save-bar{bottom:12px;margin:20px 0 12px;background:rgba(255,255,255,.96);border:1px solid #dce5d5;border-radius:15px;padding:13px 17px;box-shadow:0 8px 30px #173f2a18;backdrop-filter:blur(10px)}
+#settings-view #settings-dirty-status{font-size:13px;font-weight:600;display:flex;align-items:center;gap:9px}
+#settings-view #settings-dirty-status::before{content:"";width:8px;height:8px;border-radius:50%;background:#7c9965;box-shadow:0 0 0 4px #e8f0e1}
+#settings-view #save-animal-settings{min-height:44px;border-radius:10px;padding:0 22px;background:#214f38;box-shadow:0 3px 10px #214f3820;transition:transform .2s,background .2s,box-shadow .2s}
+#settings-view #save-animal-settings:hover:not(:disabled){background:#2c6447;box-shadow:0 5px 15px #214f3830;transform:translateY(-1px)}
+#settings-view[aria-busy=true] #save-animal-settings::before{content:"";display:inline-block;width:15px;height:15px;border:2px solid #ffffff66;border-top-color:white;border-radius:50%;animation:settings-save-spin .8s linear infinite;vertical-align:middle;margin-right:8px}
+@keyframes settings-save-spin{to{transform:rotate(360deg)}}
+@media(max-width:1150px){#settings-view .settings-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}#settings-view .settings-presets{grid-template-columns:repeat(3,minmax(0,1fr))}#settings-view .settings-list-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:780px){#settings-view .settings-tabs{grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}#settings-view .settings-tabs button{min-height:54px;padding:8px}#settings-view .settings-tabs button small{display:none}#settings-view .settings-tabs button strong{font-size:12px}#settings-view .settings-card-heading{padding:17px 16px 14px;flex-wrap:wrap}#settings-view .settings-card-heading h2{font-size:17px}#settings-view .settings-presets{grid-template-columns:repeat(2,minmax(0,1fr));padding:15px;gap:9px}#settings-view .settings-presets button{min-height:124px;padding:12px}#settings-view .settings-presets button strong{font-size:12px}#settings-view .settings-feedback{margin:0 15px 13px}#settings-view .settings-mini-note{padding:0 15px 15px}#settings-view .settings-preview-grid,#settings-view .settings-worker-grid,#settings-view .settings-defaults,#settings-view .settings-module-grid,#settings-view .settings-list-grid{grid-template-columns:1fr;padding:15px;gap:10px}#settings-view .settings-field-tools{padding:15px}#settings-view .settings-field-tools label{flex-basis:100%}#settings-view .settings-table td{padding:8px}#settings-view .settings-table tbody{gap:12px}#settings-view .settings-save-bar{bottom:65px;padding:10px;gap:8px}#settings-view #settings-dirty-status{font-size:11px}#settings-view #save-animal-settings{padding:0 12px;font-size:12px}}
+@media(prefers-reduced-motion:reduce){#settings-view *,#settings-view *::before,#settings-view *::after{animation:none!important;transition:none!important}}
