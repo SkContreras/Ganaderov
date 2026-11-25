@@ -2048,6 +2048,78 @@
       <div class="calculator-chart-summary"><span>${escapeHtml(actualSummary)}</span><span>${escapeHtml(baselineSummary)}</span><span>${escapeHtml(projectedSummary)}</span></div>`;
   }
 
+
+  let analysisSale = null;
+  function analysisText(id,value){ $(id).textContent=value; }
+  function resetAnalysis(weight,gain,days,baselineDate,animalId){
+    analysisSale=null;
+    const animal=state.animals.find(a=>a.id===animalId);
+    analysisText("#analysis-animal-name",animal ? [animal.tag,animal.name].filter(Boolean).join(" · ") || "Animal seleccionado" : "Captura manual");
+    analysisText("#analysis-animal-meta",animal ? [animal.sex,animal.breed ? (state.fieldConfig?.lists?.breed||[]).find(x=>x.value===animal.breed)?.label : "",animal.status].filter(Boolean).join(" · ") : "Introduce los datos base de tu escenario.");
+    analysisText("#analysis-base-weight",weight!==null?formatProjectedWeight(weight):"—");
+    analysisText("#analysis-base-gain",gain!==null?gain.toFixed(3)+" kg/día":"—");
+    analysisText("#analysis-base-date",baselineDate?formatDate(baselineDate):"—");
+    $("#analysis-days-slider").value=String(Math.max(0,Math.min(180,days??0)));
+    $("[data-analysis-days]").forEach(b=>b.setAttribute("aria-pressed",String(Number(b.dataset.analysisDays)===days)));
+    $("#analysis-decision").dataset.tone="neutral";
+    analysisText("#analysis-decision-title","Completa los datos");
+    analysisText("#analysis-decision-detail","Introduce peso, crecimiento, precio y costos.");
+    ["#analysis-expenses","#analysis-net-sale","#analysis-break-price","#analysis-break-cost"].forEach(id=>analysisText(id,"—"));
+    analysisText("#analysis-periods","Completa la simulación para comparar los plazos.");
+    analysisText("#analysis-lot-result","Completa primero la simulación de venta.");
+  }
+  function renderAnalysisSale({weight,gain,days,dailyCost,currentAverage,nextThreshold,nextAverage,futurePrice,projectedWeight,currentValue,futureValue,netDifference}){
+    const expenses=dailyCost*days;
+    analysisSale={currentValue,futureValue,expenses,netDifference};
+    const tone=netDifference>0.005?"positive":netDifference<-.005?"negative":"neutral";
+    $("#analysis-decision").dataset.tone=tone;
+    analysisText("#analysis-decision-title",tone==="positive"?"Esperar mejora el resultado":tone==="negative"?"Vender en la fecha base resulta mejor":"Sin diferencia económica");
+    analysisText("#analysis-decision-detail","Comparación estimada a "+days+" días bajo los supuestos capturados.");
+    analysisText("#analysis-expenses",formatCurrency(expenses));
+    analysisText("#analysis-net-sale",formatCurrency(futureValue-expenses));
+    analysisText("#analysis-break-price",projectedWeight>0?formatCurrency((currentValue+expenses)/projectedWeight)+"/kg":"—");
+    analysisText("#analysis-break-cost",days>0?formatCurrency((futureValue-currentValue)/days)+"/día":"—");
+    const periods=[...new Set([0,7,15,30,45,60,90,days])].sort((a,b)=>a-b).map(d=>{
+      const w=weight+gain*d;
+      const p=d===0?currentAverage:futurePrice??(nextThreshold!==null&&nextAverage!==null&&w>=nextThreshold?nextAverage:currentAverage);
+      const gross=w*p, cost=d*dailyCost, net=d===0?0:gross-cost-currentValue;
+      return {d,w,gross,cost,net,valid:w>=0&&[w,gross,cost,net].every(Number.isFinite)};
+    }).filter(x=>x.valid);
+    const best=periods.reduce((a,b)=>b.net>a.net?b:a,periods[0]);
+    const scale=Math.max(1,...periods.map(x=>Math.abs(x.net)));
+    $("#analysis-periods").innerHTML='<p class="analysis-best">Mejor resultado entre los plazos evaluados: <strong>'+ (best.d===0?"fecha base":best.d+" días")+'</strong> · '+formatCurrency(best.net)+'</p><div class="analysis-period-list">'+periods.map(x=>'<div class="analysis-period"><strong>'+(x.d===0?"Base":x.d+" días")+'</strong><span>'+formatProjectedWeight(x.w)+'</span><div class="analysis-bar"><i style="width:'+Math.abs(x.net)/scale*100+'%" data-tone="'+(x.net<0?"negative":"positive")+'"></i></div><b data-tone="'+(x.net<0?"negative":"positive")+'">'+formatCurrency(x.net)+'</b></div>').join("")+'</div><small>Importes: diferencia respecto a vender en la fecha base, después del costo diario indicado. No es una garantía de precio ni crecimiento.</small>';
+    updateAnalysisTools();
+  }
+  function updateAnalysisTools(){
+    const n=id=>calculatorNumber(id);
+    const base=n("#analysis-target-base"),g=n("#analysis-target-gain"),target=n("#analysis-target");
+    analysisText("#analysis-target-result",base===null||g===null||target===null||base<0||target<0?"Completa los tres datos válidos.":base>=target?"El peso base ya alcanza el objetivo.":g<=0?"Con esta GMD no se alcanza un objetivo superior.":Math.ceil((target-base)/g)+" días estimados desde el peso base.");
+    const count=n("#analysis-feed-count"),ration=n("#analysis-feed-ration"),price=n("#analysis-feed-price"),days=n("#analysis-feed-days");
+    const feedValid=Number.isInteger(count)&&count>0&&ration!==null&&ration>=0&&price!==null&&price>=0&&Number.isInteger(days)&&days>=0&&Number.isFinite(count*ration*price*days);
+    analysisText("#analysis-feed-result",feedValid?formatCurrency(ration*price)+" por animal/día · "+formatCurrency(count*ration*price*days)+" total · "+(count*ration*days).toFixed(1)+" kg de alimento":"Completa los datos válidos.");
+    $("#analysis-use-feed").disabled=!feedValid;
+    const lot=n("#analysis-lot-count");
+    analysisText("#analysis-lot-result",analysisSale&&Number.isInteger(lot)&&lot>0&&Number.isFinite(lot*analysisSale.netDifference)?"Venta base "+formatCurrency(lot*analysisSale.currentValue)+" · venta futura menos costos "+formatCurrency(lot*(analysisSale.futureValue-analysisSale.expenses))+" · diferencia "+formatCurrency(lot*analysisSale.netDifference):"Completa la simulación y el número de animales.");
+  }
+  function showAnalysisTab(id){
+    $("[data-analysis-tab]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.analysisTab===id)));
+    $("[data-analysis-panel]").forEach(p=>p.hidden=p.dataset.analysisPanel!==id);
+    updateAnalysisTools();
+  }
+  function registerAnalysis(){
+    const root=$("#calculator-view");
+    root.addEventListener("click",e=>{
+      const tab=e.target.closest("[data-analysis-tab]"),day=e.target.closest("[data-analysis-days]");
+      if(tab)showAnalysisTab(tab.dataset.analysisTab);
+      if(day){$("#calculator-days").value=day.dataset.analysisDays;updateCalculator();}
+    });
+    $("#analysis-days-slider").addEventListener("input",()=>{$("#calculator-days").value=$("#analysis-days-slider").value;updateCalculator();});
+    root.addEventListener("input",e=>{if(e.target.closest(".analysis-tool"))updateAnalysisTools();});
+    $("#analysis-copy-weight").addEventListener("click",()=>{$("#analysis-target-base").value=$("#calculator-weight").value;$("#analysis-target-gain").value=$("#calculator-gain").value;updateAnalysisTools();});
+    $("#analysis-use-feed").addEventListener("click",()=>{if($("#analysis-use-feed").disabled)return;$("#calculator-cost").value=(calculatorNumber("#analysis-feed-ration")*calculatorNumber("#analysis-feed-price")).toFixed(2);showAnalysisTab("sale");updateCalculator();});
+    updateAnalysisTools();
+  }
+
   function updateCalculator() {
     const weight = calculatorNumber("#calculator-weight");
     const gain = calculatorNumber("#calculator-gain");
@@ -2056,6 +2128,7 @@
     const baselineDate = $("#calculator-baseline-date").value;
     const selectedAnimalId = $("#calculator-animal").value;
     state.calculatorProjection = null;
+    resetAnalysis(weight,gain,days,baselineDate,selectedAnimalId);
     renderCalculatorChart(weight, gain, days, baselineDate);
     $("#calculator-save-forecast").disabled = true;
     $("#calculator-save-forecast").hidden = !canManageRanch();
@@ -2177,6 +2250,7 @@
     $("#calculator-net-difference").textContent = `${netDifference > 0 ? "+" : ""}${formatCurrency(netDifference)}`;
     $("#calculator-net-difference").classList.toggle("is-negative", netDifference < 0);
     $("#calculator-net-difference").classList.toggle("is-positive", netDifference >= 0);
+    renderAnalysisSale({weight,gain,days,dailyCost,currentAverage,nextThreshold,nextAverage,futurePrice,projectedWeight,currentValue,futureValue,netDifference});
     const quoteDate = $("#calculator-price-date").value;
     let categoryNote = quoteDate ? `Cotización con fecha ${formatDate(quoteDate)}.` : "Sin fecha de cotización; ingrésala para identificar la vigencia del dato.";
     if (quoteDate) {
@@ -4877,6 +4951,7 @@
   }
 
   function registerEvents() {
+    registerAnalysis();
     registerSettingsWorkspace();
     $("#add-animal-button").addEventListener("click", () => openAnimalForm());
     $("#empty-add-button").addEventListener("click", () => openAnimalForm());
