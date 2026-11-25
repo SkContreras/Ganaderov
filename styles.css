@@ -1048,3 +1048,51 @@ td { height: 54px; }
 @media(prefers-reduced-motion:reduce){#calculator-view *,#calculator-view *::before,#calculator-view *::after{animation:none!important;transition:none!important}}
 
 #calculator-view .analysis-auto{display:grid;gap:9px;background:#f5f8f0;border:1px solid #dfe8d7;border-radius:12px;padding:14px}#calculator-view .analysis-auto strong{color:#315d42;font-size:13px}#calculator-view .analysis-auto p{margin:0;color:#657464;font-size:12px;line-height:1.5}#calculator-view .analysis-auto button{justify-self:start}#analysis-lot-select{width:100%;border:1px solid #dce6d6;padding:10px;background:white;color:#315d42}
+
+/* Final visual pass: presentation only. Existing state, controls and artwork remain intact. */
+:root{--final-forest:#1f4d37;--final-sage:#e9efdf;--final-cream:#f8f4e9;--final-line:#e0e7db;--final-ease:cubic-bezier(.2,.75,.25,1)}
+body{background-color:var(--canvas);background-image:radial-gradient(ellipse at 95% 0%,#e9efe0aa,transparent 42%);background-attachment:fixed}
+.sidebar{background-image:radial-gradient(ellipse at 5% 100%,#46734755,transparent 42%),linear-gradient(165deg,#173f2a,#123522);box-shadow:4px 0 24px #173f2a0d}
+.brand-mark{transition:transform .35s var(--final-ease),filter .3s}.brand:hover .brand-mark{transform:rotate(-6deg) scale(1.06);filter:drop-shadow(0 3px 8px #a8c69e55)}
+.nav-item{transition:background .2s,color .2s,box-shadow .2s}.nav-item .nav-icon{transition:transform .25s var(--final-ease)}.nav-item:hover .nav-icon{transform:translateY(-2px)}.nav-item.active{background:linear-gradient(110deg,#31634a,#285941);box-shadow:inset 3px 0 #9bcca1,0 4px 12px #102b1c22}
+.sidebar-note{position:relative;background:linear-gradient(145deg,#ffffff0e,#ffffff05);border-radius:14px}
+.sidebar-note .note-icon{box-shadow:0 0 0 4px #a7d1b00d}
+.topbar{background:transparent}.page-heading h1{letter-spacing:-.035em}
+.ranch-cover,.journey-page-heading,.calculator-page-heading,.settings-page-heading{box-shadow:0 6px 24px #2d4c3010}
+.stat-card{position:relative;border-color:var(--final-line);border-radius:15px;background:linear-gradient(145deg,#fff 65%,#f7faf4);transition:box-shadow .25s,border-color .25s,transform .25s var(--final-ease)}
+.stat-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px #31553b12;border-color:#c3d4ba}
+.stat-card .stat-icon{transition:transform .3s var(--final-ease)}.stat-card:hover .stat-icon{transform:scale(1.1) rotate(-5deg)}
+.stat-value{font-variant-numeric:tabular-nums;letter-spacing:-.04em}
+.inventory-card,.journey-section{border-radius:17px;border-color:var(--final-line);box-shadow:0 4px 20px #31553b0b}
+.inventory-heading,.journey-section-heading{background:linear-gradient(110deg,#fff,#f8faf5)}
+.inventory-card tbody tr td,.journey-table tbody tr td{transition:background .18s}.inventory-card tbody tr:hover td,.journey-table tbody tr:hover td{background:#f5f8f1}
+.animal-avatar{border:1px solid #e1e9db;border-radius:11px;transition:transform .25s var(--final-ease)}.animal-cell:hover .animal-avatar{transform:scale(1.06)}
+.status-pill,.journey-status{font-weight:700}
+#empty-state .empty-illustration{width:190px;max-width:100%;height:auto;display:block;background:transparent;margin-bottom:18px}#empty-state .empty-illustration>.ui-icon{display:none}
+.final-ranch-mini{display:block;max-width:100%;height:auto}.final-art-object{transform-box:fill-box;transform-origin:bottom center;animation:final-art-breathe 5s ease-in-out infinite}@keyframes final-art-breathe{50%{transform:translateY(-2px) scaleY(1.015)}}
+.analysis-tool>.final-ranch-mini{float:right;margin:0 0 12px 18px;width:min(190px,35%)}.analysis-tool .analysis-inputs,.analysis-tool output{clear:both}.analysis-tool{display:flow-root}
+.final-tab-icon{flex:0 0 auto;transition:transform .25s var(--final-ease)}.analysis-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:8px}.analysis-tabs button:hover .final-tab-icon{transform:translateY(-2px)}
+.analysis-animal,.analysis-card,.calculator-card,.calculator-results{border-color:var(--final-line);box-shadow:0 5px 22px #31553b0a}
+.analysis-extra>div,.calculator-result-card{transition:border-color .2s,background .2s}.analysis-extra>div:hover,.calculator-result-card:hover{border-color:#c3d4ba}
+.analysis-decision{transition:background .3s,border-color .3s,color .3s}.analysis-decision strong{letter-spacing:-.025em}
+.analysis-tool output{border:1px solid #dbe7d4;background:linear-gradient(120deg,#eef4e8,#f8faf5);font-variant-numeric:tabular-nums}
+.button,.icon-button,.account-google-button,.chip-option,.journey-filter button,.journey-progress-card,.journey-animal,.journey-weight-edit,.sort-button{transition:background .2s,border-color .2s,color .2s,box-shadow .2s,transform .2s var(--final-ease)}
+.button-primary:not(:disabled){box-shadow:0 3px 9px #1f4d371c}.button-primary:hover:not(:disabled){box-shadow:0 6px 14px #1f4d372a}
+.button:active:not(:disabled),.icon-button:active:not(:disabled),.chip-option:active:not(:disabled),.journey-animal:active:not(:disabled),.account-google-button:active:not(:disabled){transform:scale(.97)}
+.button:disabled,.icon-button:disabled{transform:none;box-shadow:none}
+.form-grid label,.ranch-form label,.ranch-section label{font-size:12px;color:#465846;line-height:1.4}
+.form-grid input:not([type=checkbox]):not([type=radio]):not([type=range]):not(.chip-select-native),.form-grid select:not(.chip-select-native),.form-grid textarea,.ranch-form input,.ranch-form select,.ranch-section select{border-radius:9px;font-size:13px;min-height:42px;transition:background .2s,border-color .2s,box-shadow .2s}
+.form-grid input:not([type=checkbox]):not([type=radio]):not([type=range]):focus,.form-grid select:focus,.form-grid textarea:focus,.ranch-form input:focus,.ranch-form select:focus{border-color:#83a377;box-shadow:0 0 0 3px #83a37724;background:#fcfefb}
+.form-grid label.is-invalid input,.form-grid label.is-invalid select,.form-grid label.is-invalid textarea{border-color:#d56f6f}
+.chip-option.selected{box-shadow:inset 0 0 0 1px #6f9a6933}.chip-option:hover:not(:disabled){border-color:#8aa87c}
+.modal{border-radius:19px;box-shadow:0 25px 90px #193b2850}.modal[open]:not(.photo-modal){animation:final-modal-in .25s var(--final-ease) both}@keyframes final-modal-in{from{opacity:0;transform:translateY(9px) scale(.985)}to{opacity:1;transform:none}}
+.modal::backdrop{background:#183c2a66;backdrop-filter:blur(3px)}
+.modal-heading{border-bottom-color:#e6ece1}.modal-heading h2{color:#294c35;letter-spacing:-.03em}.modal-heading .eyebrow{color:#71875e}
+.detail-section,.detail-fact,.ranch-summary,.ranch-list li{border-radius:12px}.detail-section-head h3{color:#315b3e}.detail-hero-placeholder{background:radial-gradient(circle at 50% 35%,#f8f4e9,#e3ecd8);color:#78946b}.detail-hero-placeholder .ui-icon{filter:drop-shadow(0 4px 8px #31553b15)}
+.photo-tile{border-radius:12px;overflow:hidden}.photo-tile img{transition:filter .25s}.photo-tile:hover img{filter:saturate(1.08)}
+.journey-progress-card{border-radius:13px;background:linear-gradient(135deg,#fff,#f4f8ef)}.journey-progress-card:hover{box-shadow:0 5px 14px #31553b12;transform:translateY(-1px)}.journey-progress-track>span{background:linear-gradient(90deg,#739b65,#a2c58a);transition:width .3s var(--final-ease)}
+.journey-animal{border-radius:12px}.journey-animal.attended{background:linear-gradient(115deg,#edf6e8,#f8fbf6)}.journey-animal.attended .journey-check .ui-icon{animation:final-check-in .28s var(--final-ease)}@keyframes final-check-in{from{transform:scale(.5);opacity:.4}to{transform:scale(1);opacity:1}}
+.account-google-button{border-radius:11px}.account-google-button:hover:not(:disabled){box-shadow:0 4px 13px #31553b12;background:#f8faf6}
+.page-footer{color:#687a68}.page-footer a{transition:color .2s}.page-footer a:hover{color:var(--final-forest)}
+@media(max-width:700px){.analysis-tool>.final-ranch-mini{float:none;width:150px;margin:0 0 14px auto}.stat-card:hover,.journey-progress-card:hover{transform:none}.modal{border-radius:16px}.form-grid input:not([type=checkbox]):not([type=radio]):not([type=range]):not(.chip-select-native),.form-grid select:not(.chip-select-native),.form-grid textarea{font-size:16px}.analysis-tabs button{gap:6px}.final-tab-icon{width:17px;height:17px}}
+@media(prefers-reduced-motion:reduce){.final-art-object,.modal[open]:not(.photo-modal),.journey-animal.attended .journey-check .ui-icon{animation:none!important}.button,.icon-button,.nav-item,.nav-icon,.stat-card,.stat-icon,.brand-mark,.animal-avatar,.journey-progress-card,.journey-animal,.journey-progress-track>span,.chip-option,.account-google-button,.final-tab-icon{transition:none!important}}
