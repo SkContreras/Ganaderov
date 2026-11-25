@@ -826,3 +826,31 @@ td { height: 54px; }
 #journeys-view[hidden] .journey-art *{animation-play-state:paused}
 @media(max-width:700px){#journeys-view .journey-page-heading{min-height:0;display:flex;flex-wrap:wrap;padding:20px 18px 130px;gap:12px}#journeys-view .journey-page-heading>div{max-width:100%;width:100%}#journeys-view .journey-page-heading>.button{align-self:auto} .journey-art{top:auto;bottom:0;width:100%;height:125px;mask-image:linear-gradient(180deg,transparent,#000 17%)}}
 @media(prefers-reduced-motion:reduce){.journey-art *{animation:none!important}.journey-check{stroke-dashoffset:0}}
+
+
+/* Calculadora: illustrated weight and value planning, isolated from live data. */
+#calculator-view .calculator-page-heading{position:relative;isolation:isolate;overflow:hidden;display:flex;align-items:center;min-height:205px;margin:24px 0;padding:28px clamp(18px,3vw,36px);border:1px solid #e5e6d8;border-radius:18px;background:#f8f4e9}
+#calculator-view .calculator-page-heading>div{position:relative;z-index:1;width:49%}
+#calculator-view .calculator-page-heading h1{color:#0f3d2c;font-size:clamp(25px,3vw,39px);margin:9px 0}
+#calculator-view .calculator-page-heading .subtitle{color:#56664e;line-height:1.6;max-width:390px}
+#calculator-view .calculator-page-heading .eyebrow{color:#607641}
+.calc-ranch-art{position:absolute;z-index:-1;right:0;top:0;width:54%;height:100%;overflow:hidden;mask-image:linear-gradient(90deg,transparent,#000 18%);pointer-events:none}
+#calculator-view .calculator-group h2,#calculator-view .calculator-result-heading h2{color:#31553b}
+#calculator-view .calculator-group h2::before{content:"";display:inline-block;vertical-align:middle;width:28px;height:28px;margin-right:9px;border-radius:8px;background:#e9efdf url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235b7943' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 19h16M5 15l5-5 4 3 5-8m-5 0h5v5'/%3E%3C/svg%3E") center/18px no-repeat}
+#calculator-view .calculator-group:nth-child(2) h2::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235b7943' stroke-width='1.7' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 6v12m3-10H11a2 2 0 0 0 0 4h2a2 2 0 0 1 0 4H9'/%3E%3C/svg%3E")}
+#calculator-view .calculator-result-heading{border-left:3px solid #8aa462;padding-left:12px}
+#calculator-view .calculator-result-card{border-radius:11px}
+#calculator-view .calculator-result-highlight{background:linear-gradient(120deg,#edf4e8,#f9fbf6);border-color:#dce8d8}
+.calc-art-cloud{animation:calc-drift 14s ease-in-out infinite alternate}
+.calc-art-cow{transform-box:fill-box;transform-origin:bottom;animation:calc-breathe 4s ease-in-out infinite}
+.calc-art-tail{transform-origin:-57px -83px;animation:calc-tail 3.8s ease-in-out infinite}
+.calc-art-head{transform-origin:50px -85px;animation:calc-nod 8s ease-in-out infinite}
+.calc-art-eyes{transform-origin:51px -80px;animation:calc-blink 6s infinite}
+.calc-art-bar{transform-box:fill-box;transform-origin:bottom;animation:calc-bar 7s ease-in-out infinite;animation-delay:var(--delay)}
+.calc-art-trend{animation:calc-trend 7s ease-in-out infinite}
+.calc-art-coin{animation:calc-coin 4s ease-in-out infinite}
+.calc-art-grass{transform-box:fill-box;transform-origin:bottom;animation:calc-wind 3s ease-in-out infinite alternate;animation-delay:var(--delay)}
+@keyframes calc-drift{to{transform:translateX(60px)}}@keyframes calc-breathe{50%{transform:scaleY(1.02)}}@keyframes calc-tail{50%{transform:rotate(17deg)}}@keyframes calc-nod{50%{transform:rotate(6deg)}}@keyframes calc-blink{0%,46%,50%,100%{transform:scaleY(1)}48%{transform:scaleY(.06)}}@keyframes calc-bar{0%,100%{transform:scaleY(.25)}30%,85%{transform:scaleY(1)}}@keyframes calc-trend{0%,10%,100%{stroke-dashoffset:170}40%,85%{stroke-dashoffset:0}}@keyframes calc-coin{50%{translate:0 -6px}}@keyframes calc-wind{to{transform:rotate(8deg)}}
+#calculator-view[hidden] .calc-ranch-art *{animation-play-state:paused}
+@media(max-width:700px){#calculator-view .calculator-page-heading{display:block;min-height:0;padding:20px 18px 142px}#calculator-view .calculator-page-heading>div{width:100%}.calc-ranch-art{top:auto;bottom:0;width:100%;height:140px;mask-image:linear-gradient(180deg,transparent,#000 18%)}}
+@media(prefers-reduced-motion:reduce){.calc-ranch-art *{animation:none!important}.calc-art-trend{stroke-dashoffset:0}}
