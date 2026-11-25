@@ -4851,14 +4851,14 @@
       renderRanchDialog();
       $("#ranch-dialog").showModal();
     });
-    $("[data-google-login]").forEach(button => button.addEventListener("click", async () => {
+    $$("[data-google-login]").forEach(button => button.addEventListener("click", async () => {
       const view = button.closest("form")?.id === "sign-up-form" ? "register" : "login";
       const redirectTo = authRedirectUrl();
       if (!cloud || !redirectTo || !navigator.onLine) {
         showAccountView(view, "Necesitas una conexión a Internet y una configuración válida de Supabase para continuar con Google.");
         return;
       }
-      const buttons = $("[data-google-login]");
+      const buttons = $$("[data-google-login]");
       buttons.forEach(item => { item.disabled = true; });
       try {
         const { error } = await cloud.auth.signInWithOAuth({
