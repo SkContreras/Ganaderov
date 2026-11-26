@@ -34,7 +34,10 @@ begin
   end if;
   if j.payload->>'id' is distinct from p_journey_id or coalesce(j.payload->>'type','') not in ('weight','bath','vaccine','deworm','injection','medication','review','other') or jsonb_typeof(j.payload->'roster') is distinct from 'array' then raise exception 'Jornada inválida'; end if;
   if (select count(*) from jsonb_array_elements(j.payload->'roster')) <> (select count(distinct value->>'id') from jsonb_array_elements(j.payload->'roster')) then raise exception 'Animales duplicados'; end if;
-  if coalesce(j.payload->>'date','') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}
+  if coalesce(j.payload->>'date','') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' then
+    raise exception 'Fecha inválida' using errcode='22023';
+  end if;
+  perform (j.payload->>'date')::date;
   select count(*) into pending from jsonb_array_elements(j.payload->'roster') where value->'attended' is distinct from 'true'::jsonb;
   if pending>0 and p_allow_incomplete is distinct from true then raise exception 'Confirma el cierre incompleto' using errcode='22023'; end if;
   for item in select value from jsonb_array_elements(j.payload->'roster') where value->'attended'='true'::jsonb order by value->>'id'
@@ -55,7 +58,18 @@ begin
     end if;
     select value into old_event from jsonb_array_elements(a.payload->'events') where value->>'id'=event_id;
     if found then
-      if old_event is distinct from ev then raise exception 'Conflicto con evento existente: %',event_id; end if;
+      if old_event is distinct from ev then
+        if j.payload->>'type' <> 'weight'
+          or (old_event - array['weight','weightUpdatedAt','weightUpdatedBy'])
+             is distinct from (ev - array['weight','weightUpdatedAt','weightUpdatedBy'])
+          or item->'weightUpdatedBy' is null or item->'weightUpdatedAt' is null then
+          raise exception 'Conflicto con evento existente: %',event_id using errcode='40001';
+        end if;
+        update public.animal_sync_records set payload=jsonb_set(payload,'{events}',(
+          select jsonb_agg(case when e->>'id'=event_id then ev else e end order by pos)
+          from jsonb_array_elements(payload->'events') with ordinality entries(e,pos)
+        )) where owner_id=p_owner_id and animal_id=a.animal_id;
+      end if;
     else
       update public.animal_sync_records set payload=jsonb_set(payload,'{events}',(payload->'events')||jsonb_build_array(ev)) where owner_id=p_owner_id and animal_id=a.animal_id;
       if not found then raise exception 'No se pudo guardar historial'; end if;
@@ -88,42 +102,4 @@ end;
 $fn$;
 revoke all on function public.resume_ranch_journey_v1(uuid,text,timestamptz) from public,anon;
 grant execute on function public.resume_ranch_journey_v1(uuid,text,timestamptz) to authenticated;
-commit;
- then raise exception 'Fecha inválida'; end if;
-  perform (j.payload->>'date')::date;
-  select count(*) into pending from jsonb_array_elements(j.payload->'roster') where value->'attended' is distinct from 'true'::jsonb;
-  if pending>0 and p_allow_incomplete is distinct from true then raise exception 'Confirma el cierre incompleto' using errcode='22023'; end if;
-  for item in select value from jsonb_array_elements(j.payload->'roster') where value->'attended'='true'::jsonb order by value->>'id'
-  loop
-    select * into a from public.animal_sync_records where owner_id=p_owner_id and animal_id=item->>'id' and deleted_at is null for update;
-    if not found or a.payload->'animal'->>'id' is distinct from a.animal_id or jsonb_typeof(a.payload->'events') is distinct from 'array' then raise exception 'Ficha no disponible: %',item->>'id'; end if;
-    if jsonb_typeof(item->'attendedBy') is distinct from 'object' or coalesce(item->>'attendedAt','') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' then raise exception 'Atención sin auditoría'; end if;
-    if j.payload->>'type'='weight' then
-      if jsonb_typeof(item->'weight') is distinct from 'number' then raise exception 'Peso inválido'; end if;
-      if (item->>'weight')::numeric not between 0 and 100000 then raise exception 'Peso inválido'; end if;
-    end if;
-    event_id := 'journey:'||p_journey_id||':'||a.animal_id;
-    ev := jsonb_build_object('id',event_id,'animalId',a.animal_id,'journeyId',p_journey_id,'type',j.payload->>'type','date',j.payload->>'date','label',case when j.payload->>'type'='other' then coalesce(j.payload->>'name','') else coalesce(j.payload->>'product','') end,'product',case when j.payload->>'type'='other' then coalesce(j.payload->>'product','') else '' end,'dose',coalesce(j.payload->>'dose',''),'notes',coalesce(j.payload->>'notes',''),'createdAt',item->>'attendedAt','performedAt',item->>'attendedAt','performedBy',item->'attendedBy');
-    if j.payload->>'type'='weight' then
-      ev:=ev||jsonb_build_object('weight',item->'weight');
-      if item ? 'weightUpdatedAt' then ev:=ev||jsonb_build_object('weightUpdatedAt',item->'weightUpdatedAt'); end if;
-      if item ? 'weightUpdatedBy' then ev:=ev||jsonb_build_object('weightUpdatedBy',item->'weightUpdatedBy'); end if;
-    end if;
-    select value into old_event from jsonb_array_elements(a.payload->'events') where value->>'id'=event_id;
-    if found then
-      if old_event is distinct from ev then raise exception 'Conflicto con evento existente: %',event_id; end if;
-    else
-      update public.animal_sync_records set payload=jsonb_set(payload,'{events}',(payload->'events')||jsonb_build_array(ev)) where owner_id=p_owner_id and animal_id=a.animal_id;
-      if not found then raise exception 'No se pudo guardar historial'; end if;
-    end if;
-    attended:=attended+1;
-  end loop;
-  result:=j.payload||jsonb_build_object('status',case when pending=0 then 'completed' else 'incomplete' end,'completedAt',stamp,'completedBy',actor,'updatedAt',stamp);
-  update public.journey_sync_records set payload=result where owner_id=p_owner_id and journey_id=p_journey_id;
-  if not found then raise exception 'No se pudo cerrar jornada'; end if;
-  return result;
-end;
-$fn$;
-revoke all on function public.finish_ranch_journey_v1(uuid,text,timestamptz,boolean) from public,anon;
-grant execute on function public.finish_ranch_journey_v1(uuid,text,timestamptz,boolean) to authenticated;
 commit;

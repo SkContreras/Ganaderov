@@ -15,3 +15,34 @@ jobs:
       - run: node --check app.js && node --check service-worker.js
       - run: node --test tests/*.test.cjs tests/*.test.mjs
       - run: python3 -m py_compile tests/concurrency_staging.py
+
+  protocol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.75.0
+      - name: Start disposable Supabase
+        run: |
+          supabase init
+          supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor,realtime,inbucket
+      - name: Install schema and exercise all operations
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '54322'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+        run: |
+          for sql in supabase-schema.sql backend/{sync_event_create_v1,entity_projection_v1,incremental_sync_v1,journey_transitions_v1,universal_operations_v1}.sql tests/sql/{event_rpc_audit,universal_operations}.sql; do
+            psql -X -v ON_ERROR_STOP=1 -f "$sql"
+          done
+      - name: Concurrent authenticated writers
+        env:
+          GANADEROV_DISPOSABLE_DB: 'YES'
+          GANADEROV_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          python -m pip install 'psycopg[binary]>=3.2,<4'
+          python tests/concurrency_staging.py
