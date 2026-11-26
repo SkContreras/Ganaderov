@@ -3172,9 +3172,36 @@
     }
   }
 
+  let journeyTransitionBusy=false;
+  function journeyRpcEnabled(){return window.GANADERO_CONFIG?.syncJourneyRpcV1===true;}
+  async function remoteJourneyTransition(journey,finish,allowIncomplete=false){
+    if(journeyTransitionBusy)return;
+    if(!canManageRanch()||!navigator.onLine){showToast("Se requiere conexión y un administrador para esta operación.");return;}
+    journeyTransitionBusy=true;
+    try{
+      const scope=outboxScope();
+      // Do not close a stale or unsent roster. Compare exact local and cloud versions.
+      const local=await getOne("journeys",journey.id);
+      const meta=await getOne("syncMeta",`journey:${journey.id}`);
+      assertSyncScope(scope);
+      const fingerprint=JSON.stringify(stableValue(journey));
+      if(!local||JSON.stringify(stableValue(local))!==fingerprint||meta?.fingerprint!==fingerprint||!meta.remoteVersion)throw Error("Sincroniza y revisa los cambios de la jornada antes de continuar.");
+      const params={p_owner_id:scope.ownerId,p_journey_id:journey.id,p_expected_version:meta.remoteVersion};
+      if(finish)params.p_allow_incomplete=allowIncomplete;
+      const {error}=await cloud.rpc(finish?"finish_ranch_journey_v1":"resume_ranch_journey_v1",params);
+      assertSyncScope(scope);
+      if(error)throw error;
+      // Do not write stale local bundles or synthesize events after RPC.
+      await syncData();
+      showToast("Cambio confirmado por el servidor. Revisa el historial sincronizado.");
+    }catch(error){showToast(`No se confirmó la transición: ${error.message}. Actualiza antes de repetir.`);}
+    finally{journeyTransitionBusy=false;}
+  }
+
   async function reopenJourney(journeyId) {
     const journey = state.journeys.find(item => item.id === journeyId);
     if (!hasRanchAccess() || !journey || journey.status !== "incomplete" || !journeyCounts(journey).pending) return;
+    if (journeyRpcEnabled()) { await remoteJourneyTransition(journey,false); return; }
     if (isRanchWorker() && journey.type === "other") {
       showToast("El perfil de trabajador no puede reabrir actividades personalizadas.");
       return;
@@ -3282,6 +3309,7 @@
     }
     const counts = journeyCounts(journey);
     if (counts.pending && !confirm(`Todavía hay ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}.\n\n¿Está seguro de que desea finalizar la jornada? Solo se registrarán los animales atendidos.`)) return;
+    if(journeyRpcEnabled()){await remoteJourneyTransition(journey,true,counts.pending>0);return;}
     const completedAt = new Date().toISOString();
     const finishedJourney = {
       ...journey,
