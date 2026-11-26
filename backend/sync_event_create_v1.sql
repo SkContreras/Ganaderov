@@ -3,12 +3,16 @@
 begin;
 create schema if not exists ganaderov_private;
 revoke all on schema ganaderov_private from public, anon, authenticated;
+-- This candidate supersedes the previous uninstalled candidate.
 create table ganaderov_private.event_operation_receipts (
   owner_id uuid not null,
   operation_id uuid not null,
   actor_id uuid not null,
   entity_id text not null,
   request jsonb not null,
+  applied_event jsonb not null,
+  actor_role text not null check (actor_role in ('owner','admin','worker')),
+  animal_id text not null,
   received_at timestamptz not null default clock_timestamp(),
   revision bigint not null check (revision between 1 and 9007199254740991),
   primary key(owner_id,operation_id),
@@ -38,10 +42,9 @@ declare
   captured timestamptz;
   received timestamptz := clock_timestamp();
   ev jsonb;
-  existing jsonb;
   canonical jsonb;
   revision bigint := 1;
-  animal_id text;
+  v_animal_id text;
   status text := 'rejected';
   code text := 'INVALID_REQUEST';
 begin
@@ -89,8 +92,8 @@ begin
       or exists(select 1 from unnest(array['animalId','type','date']) k where jsonb_typeof(changes->k) is distinct from 'string')
       or (changes ? 'product' and jsonb_typeof(changes->'product') is distinct from 'string')
       or (changes ? 'notes' and jsonb_typeof(changes->'notes') is distinct from 'string') then exit validate_and_apply; end if;
-    animal_id:=changes->>'animalId'; typ:=changes->>'type';
-    if length(animal_id) not between 1 and 200 or typ not in ('weight','bath','vaccine','deworm','injection','medication','review')
+    v_animal_id:=changes->>'animalId'; typ:=changes->>'type';
+    if length(v_animal_id) not between 1 and 200 or typ not in ('weight','bath','vaccine','deworm','injection','medication','review')
       or length(coalesce(changes->>'product',''))>120 or length(coalesce(changes->>'notes',''))>2000 then exit validate_and_apply; end if;
     if typ='weight' then
       if jsonb_typeof(changes->'weight') is distinct from 'number' then exit validate_and_apply; end if;
@@ -111,9 +114,9 @@ begin
     if exists(select 1 from ganaderov_private.event_operation_receipts x where x.owner_id=owner and x.entity_id=entity::text) then
       status:='conflict'; code:='ENTITY_ID_REUSED'; exit validate_and_apply;
     end if;
-    select * into a from public.animal_sync_records x where x.owner_id=owner and x.animal_id=animal_id for update;
+    select * into a from public.animal_sync_records x where x.owner_id=owner and x.animal_id=v_animal_id for update;
     if not found or a.deleted_at is not null then code:='ANIMAL_NOT_AVAILABLE'; exit validate_and_apply; end if;
-    if a.payload->'animal'->>'id' is distinct from animal_id or jsonb_typeof(a.payload->'events') is distinct from 'array' then
+    if a.payload->'animal'->>'id' is distinct from v_animal_id or jsonb_typeof(a.payload->'events') is distinct from 'array' then
       code:='INVALID_ANIMAL_RECORD'; exit validate_and_apply;
     end if;
     if not public.ganaderov_animal_status_active(owner,a.payload->'animal'->>'status') then code:='ANIMAL_INACTIVE'; exit validate_and_apply; end if;
@@ -122,7 +125,7 @@ begin
       status:='conflict'; code:='ENTITY_ID_REUSED'; exit validate_and_apply;
     end if;
     actor:=jsonb_build_object('authUserId',uid::text,'email',coalesce(auth.jwt()->>'email',''),'label',member.display_name);
-    ev:=jsonb_build_object('id',entity::text,'animalId',animal_id,'type',typ,'date',event_date::text,
+    ev:=jsonb_build_object('id',entity::text,'animalId',v_animal_id,'type',typ,'date',event_date::text,
       'createdAt',to_char(captured at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
       'performedAt',to_char(captured at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
       'performedBy',actor);
@@ -131,10 +134,10 @@ begin
     if length(trim(coalesce(changes->>'notes','')))>0 then ev:=ev||jsonb_build_object('notes',trim(changes->>'notes')); end if;
     -- Existing triggers still validate worker changes using auth.uid().
     update public.animal_sync_records x set payload=jsonb_set(x.payload,'{events}',(x.payload->'events')||jsonb_build_array(ev))
-      where x.owner_id=owner and x.animal_id=animal_id and x.deleted_at is null;
+      where x.owner_id=owner and x.animal_id=v_animal_id and x.deleted_at is null;
     if not found then raise exception 'Concurrent animal change' using errcode='40001'; end if;
-    insert into ganaderov_private.event_operation_receipts(owner_id,operation_id,actor_id,entity_id,request,received_at,revision)
-      values(owner,op,uid,entity::text,canonical,received,revision);
+    insert into ganaderov_private.event_operation_receipts(owner_id,operation_id,actor_id,entity_id,request,applied_event,actor_role,animal_id,received_at,revision)
+      values(owner,op,uid,entity::text,canonical,ev,member.role,v_animal_id,received,revision);
     status:='applied'; code:='OK';
   end validate_and_apply;
   return jsonb_build_object('protocolVersion',1,'operationId',op::text,'status',status,'serverReceivedAt',
@@ -151,4 +154,36 @@ returns jsonb language sql security invoker set search_path = ''
 as $$ select ganaderov_private.apply_event_create(p_operation); $$;
 revoke all on function public.sync_apply_operation(jsonb) from public, anon;
 grant execute on function public.sync_apply_operation(jsonb) to authenticated;
+-- Manager-only audit feed. No direct table grants, no access to other ranches.
+create function ganaderov_private.read_event_audit(p_owner uuid,p_limit integer default 50,p_before timestamptz default null,p_before_id uuid default null)
+returns jsonb language plpgsql security definer set search_path=''
+as $audit$
+declare
+  v_uid uuid:=auth.uid();
+  v_result jsonb;
+begin
+  if v_uid is null or not exists(select 1 from public.ranch_members m where m.owner_id=p_owner and m.user_id=v_uid and m.status='active' and m.role in ('owner','admin')) then
+    raise exception 'Audit access denied' using errcode='42501';
+  end if;
+  if p_limit is null or p_limit not between 1 and 100 or (p_before is null) <> (p_before_id is null) then
+    raise exception 'Invalid audit page' using errcode='22023';
+  end if;
+  select coalesce(jsonb_agg(to_jsonb(q) order by q.received_at desc,q.operation_id desc),'[]'::jsonb) into v_result
+  from (select r.operation_id,r.entity_id,r.actor_id,r.actor_role,r.animal_id,r.received_at,r.revision,
+        r.request->>'deviceId' as device_id,r.request->>'capturedAt' as captured_at,
+        r.applied_event
+        from ganaderov_private.event_operation_receipts r
+        where r.owner_id=p_owner and (p_before is null or (r.received_at,r.operation_id)<(p_before,p_before_id))
+        order by r.received_at desc,r.operation_id desc limit p_limit) q;
+  return v_result;
+end;
+$audit$;
+create index event_receipts_audit_page on ganaderov_private.event_operation_receipts(owner_id,received_at desc,operation_id desc);
+revoke all on function ganaderov_private.read_event_audit(uuid,integer,timestamptz,uuid) from public,anon,authenticated;
+grant execute on function ganaderov_private.read_event_audit(uuid,integer,timestamptz,uuid) to authenticated;
+create function public.sync_read_event_audit(p_owner uuid,p_limit integer default 50,p_before timestamptz default null,p_before_id uuid default null)
+returns jsonb language sql security invoker set search_path=''
+as $$ select ganaderov_private.read_event_audit(p_owner,p_limit,p_before,p_before_id); $$;
+revoke all on function public.sync_read_event_audit(uuid,integer,timestamptz,uuid) from public,anon;
+grant execute on function public.sync_read_event_audit(uuid,integer,timestamptz,uuid) to authenticated;
 commit;
