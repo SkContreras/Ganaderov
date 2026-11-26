@@ -1,0 +1,2 @@
+# Paso 13 — validación de análisis Web
+No convertir peso ausente, vacío o booleano en cero. Validar fechas de calendario y rechazar proyecciones negativas. Evaluaciones con cero no generan división por cero. No modificar pronósticos ya guardados ni datos remotos. Las nuevas pruebas Node deben ejecutarse antes de fusionar. Pendiente evaluación transaccional de pronósticos para eventos RPC, lotes heterogéneos y contrato común de precios.
