@@ -1,4 +1,4 @@
-const CACHE_NAME = "ganadero-v52";
+const CACHE_NAME = "ganadero-v53";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -76,12 +76,25 @@ self.addEventListener("fetch", event => {
 });
 
 
-// A wake signal only: never persist tokens or send ranch operations from a
-// worker without a verified authenticated session. Closed pages retain outbox.
+// Keep the worker alive until an authenticated page acknowledges the wake.
+ // Never transmit access tokens through messages or save them in IndexedDB.
+function wakeClient(client) {
+  return new Promise(resolve=>{
+    const channel=new MessageChannel();
+    const finish=status=>{clearTimeout(timer);channel.port1.close();resolve(status);};
+    const timer=setTimeout(()=>finish("deferred"),25000);
+    channel.port1.onmessage=event=>finish(["drained","disabled","deferred"].includes(event.data?.status)?event.data.status:"deferred");
+    try{client.postMessage({type:"GANADEROV_SYNC_WAKE_V1"},[channel.port2]);}
+    catch(_){channel.port2.close();finish("deferred");}
+  });
+}
 self.addEventListener("sync", event => {
   if (event.tag !== "ganaderov-event-outbox-v1") return;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({type:"window"});
-    for (const client of windows) client.postMessage({type:"GANADEROV_SYNC_WAKE_V1"});
+    if(!windows.length)throw new Error("No authenticated page available; queue retained");
+    // One wake at a time. A deferred result can be retried by the browser.
+    const statuses=await Promise.all(windows.map(wakeClient));
+    if(!statuses.includes("drained")&&!statuses.every(s=>s==="disabled"))throw new Error("Delivery deferred");
   })());
 });

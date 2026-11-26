@@ -5513,7 +5513,19 @@
     $("#sync-button").addEventListener("click", syncData);
     if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", event => {
       if (event.source !== navigator.serviceWorker.controller || event.data?.type !== "GANADEROV_SYNC_WAKE_V1") return;
-      if (window.GANADERO_CONFIG?.syncBackgroundV1 === true && eventOutboxEnabled() && currentUser && state.ranchReady && navigator.onLine) void syncData();
+      const port=event.ports?.[0];
+      const reply=status=>{try{port?.postMessage({status});}finally{port?.close();}};
+      if(window.GANADERO_CONFIG?.syncBackgroundV1!==true||!eventOutboxEnabled()){reply("disabled");return;}
+      if(!currentUser||!state.ranchReady||!state.ranchOwnerId||!navigator.onLine||state.syncing){reply("deferred");return;}
+      void (async()=>{
+        try{
+          const scope=outboxScope();
+          await syncData();
+          assertSyncScope(scope);
+          const pending=(await scopedOutbox(scope)).some(entry=>entry.state==="pending");
+          reply(pending?"deferred":"drained");
+        }catch(_){reply("deferred");}
+      })();
     });
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible" && eventOutboxEnabled() && currentUser && state.ranchReady && navigator.onLine) void syncData();
