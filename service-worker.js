@@ -1,4 +1,4 @@
-const CACHE_NAME = "ganadero-v46";
+const CACHE_NAME = "ganadero-v47";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -69,5 +69,16 @@ self.addEventListener("fetch", event => {
       await cache.put(request, response.clone());
     }
     return response;
+  })());
+});
+
+
+// A wake signal only: never persist tokens or send ranch operations from a
+// worker without a verified authenticated session. Closed pages retain outbox.
+self.addEventListener("sync", event => {
+  if (event.tag !== "ganaderov-event-outbox-v1") return;
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({type:"window"});
+    for (const client of windows) client.postMessage({type:"GANADEROV_SYNC_WAKE_V1"});
   })());
 });

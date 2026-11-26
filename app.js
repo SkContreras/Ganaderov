@@ -568,7 +568,17 @@
     return new URL("./confirmar-correo.html", location.href).href;
   }
 
+  const BACKGROUND_SYNC_TAG = "ganaderov-event-outbox-v1";
+  async function requestBackgroundWake() {
+    if (window.GANADERO_CONFIG?.syncBackgroundV1 !== true || !eventOutboxEnabled() || !navigator.serviceWorker) return;
+    try {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (registration?.active && registration.sync) await registration.sync.register(BACKGROUND_SYNC_TAG);
+    } catch (_) { /* Foreground retry remains available. */ }
+  }
+
   function scheduleSync() {
+    void requestBackgroundWake();
     setSyncStatus(navigator.onLine ? "Cambios guardados · pendientes de sincronizar" : "Sin conexión · cambios guardados aquí");
     if (state.syncing) {
       state.syncRequested = true;
@@ -1661,6 +1671,15 @@
   }
   async function flushEventOutbox(scope) {
     if (!eventOutboxEnabled()) return;
+    if (navigator.locks?.request) {
+      return navigator.locks.request(`ganaderov-outbox:${scope.ownerId}:${scope.userId}`, {ifAvailable:true}, async lock => {
+        if (lock) { assertSyncScope(scope); await flushEventOutboxUnlocked(scope); }
+      });
+    }
+    // Older browsers rely on durable IDs and server-side idempotency.
+    return flushEventOutboxUnlocked(scope);
+  }
+  async function flushEventOutboxUnlocked(scope) {
     const rows = (await scopedOutbox(scope)).sort((a,b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
     for (const entry of rows) {
       assertSyncScope(scope);
@@ -5334,6 +5353,13 @@
     }));
     $("#backup-button").addEventListener("click", backup);
     $("#sync-button").addEventListener("click", syncData);
+    if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", event => {
+      if (event.source !== navigator.serviceWorker.controller || event.data?.type !== "GANADEROV_SYNC_WAKE_V1") return;
+      if (window.GANADERO_CONFIG?.syncBackgroundV1 === true && eventOutboxEnabled() && currentUser && state.ranchReady && navigator.onLine) void syncData();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && eventOutboxEnabled() && currentUser && state.ranchReady && navigator.onLine) void syncData();
+    });
     const outboxButton = document.createElement("button");
     outboxButton.type = "button"; outboxButton.className = "button button-outline button-small";
     outboxButton.textContent = "Operaciones pendientes"; outboxButton.addEventListener("click", showEventOutbox);
