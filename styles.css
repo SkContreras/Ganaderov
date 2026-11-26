@@ -1216,3 +1216,9 @@ body{background-color:var(--canvas);background-image:radial-gradient(ellipse at 
 #toast .toast-action{color:#315b3e}
 @media(max-width:620px){.modal:not(.photo-modal):not(.account-modal){padding:13px;border-radius:16px;max-height:calc(100dvh - 24px)}#account-management-dialog[open]{grid-template-columns:minmax(0,1fr);gap:12px}#account-management-dialog .modal-heading::before{right:45px;width:65px;opacity:.4}.modal-heading h2{font-size:20px}.modal .form-section,#account-management-dialog .ranch-form,#account-management-dialog .ranch-section{padding:13px}.modal input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=hidden]):not([type=file]):not(.chip-select-native),.modal select:not(.chip-select-native),.modal textarea{font-size:16px}.modal .modal-actions .button{flex:1 1 auto}}
 @media(prefers-reduced-motion:reduce){.modal,.modal *,.modal *::before,.modal *::after,#toast{animation:none!important;transition:none!important}}
+
+/* Bounded inventory pages and keyboard/mobile accessibility. */
+.inventory-pager:not([hidden]){display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;padding:14px 8px;font-size:13px}
+.inventory-pager button{min-height:44px}
+.animal-avatar img{object-fit:cover}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
