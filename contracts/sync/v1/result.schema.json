@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ganaderov operation result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "protocolVersion": {
+      "const": 1
+    },
+    "operationId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "status": {
+      "enum": [
+        "applied",
+        "duplicate",
+        "conflict",
+        "rejected",
+        "retryable"
+      ]
+    },
+    "serverReceivedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "revision": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "code": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 2000
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "operationId",
+    "status",
+    "serverReceivedAt",
+    "revision",
+    "code"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "applied",
+              "duplicate"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        }
+      }
+    }
+  ]
+}

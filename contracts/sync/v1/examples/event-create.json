@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "operationId": "70e3fabe-2b81-47ef-8ed3-37ce018174cf",
+  "action": "event.create",
+  "entityId": "f1274ce1-78c9-4e13-9087-e947cc594a51",
+  "ownerId": "21e97b92-590a-4cdd-94d0-17769aa469d7",
+  "deviceId": "b91acfdc-34e4-4f4a-8a43-184ffcd77ed9",
+  "baseRevision": null,
+  "capturedAt": "2026-11-26T19:30:00Z",
+  "changes": {
+    "animalId": "animal-001",
+    "type": "weight",
+    "date": "2026-11-26",
+    "weight": 350
+  }
+}
