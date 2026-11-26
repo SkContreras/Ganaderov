@@ -2,7 +2,7 @@
   "use strict";
 
   const DB_NAME = "ganadero-local";
-  const DB_VERSION = 5;
+  const DB_VERSION = 6;
   const ANIMAL_MODULES = [
     { id: "identification", label: "Identificación básica", description: "Datos esenciales para reconocer al animal.", locked: true },
     { id: "dates", label: "Fechas y procedencia", description: "Nacimiento, ingreso, origen, progenitores y destete." },
@@ -141,6 +141,9 @@
       const request = indexedDB.open(name, DB_VERSION);
       request.onupgradeneeded = () => {
         const database = request.result;
+        if (!database.objectStoreNames.contains("operationOutbox")) {
+          database.createObjectStore("operationOutbox", { keyPath: "id" });
+        }
         if (!database.objectStoreNames.contains("animals")) database.createObjectStore("animals", { keyPath: "id" });
         if (!database.objectStoreNames.contains("events")) {
           const store = database.createObjectStore("events", { keyPath: "id" });
@@ -164,7 +167,7 @@
           store.createIndex("targetDate", "targetDate", { unique: false });
         }
       };
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => { request.result.onversionchange = () => request.result.close(); resolve(request.result); };
       request.onerror = () => reject(request.error || new Error("No fue posible abrir el almacenamiento local."));
       request.onblocked = () => reject(new Error("Cierra otras pestañas de Ganadero para actualizar el almacenamiento."));
     });
@@ -1544,6 +1547,123 @@
     return "";
   }
 
+  const RPC_EVENT_TYPES = new Set(["weight","bath","vaccine","deworm","injection","medication","review"]);
+  let recordSaving = false;
+  function eventOutboxEnabled() {
+    return window.GANADERO_CONFIG?.syncEventRpcV1 === true;
+  }
+  function outboxDeviceId() {
+    const key = "ganaderov-sync-device-v1";
+    let value = localStorage.getItem(key);
+    if (!value) { value = newId(); localStorage.setItem(key, value); }
+    return value;
+  }
+  function outboxScope() {
+    const scope = { userId: currentUser?.id, ownerId: state.ranchOwnerId, database: db };
+    assertSyncScope(scope);
+    if (!scope.ownerId || db.name !== `${DB_NAME}-ranch-${scope.ownerId}`) throw new Error("Rancho local no disponible.");
+    return scope;
+  }
+  async function queueEventRecord(record) {
+    const scope = outboxScope();
+    if (!RPC_EVENT_TYPES.has(record.type) || !state.animals.some(a => a.id === record.animalId && isActiveAnimal(a))) throw new Error("Animal o actividad no disponible.");
+    const changes = { animalId: record.animalId, type: record.type, date: record.date };
+    if (record.type === "weight") {
+      if (!Number.isFinite(record.weight) || record.weight < 0 || record.weight > 100000) throw new Error("Peso inválido.");
+      changes.weight = record.weight;
+    }
+    if (record.label) changes.product = record.label;
+    if (record.notes) changes.notes = record.notes;
+    const operation = { protocolVersion: 1, operationId: newId(), entityId: record.id, action: "event.create",
+      ownerId: scope.ownerId, deviceId: outboxDeviceId(), baseRevision: null, capturedAt: record.createdAt, changes };
+    assertSyncScope(scope);
+    // Pending events stay outside the legacy events store. No legacy bundle
+    // upload can accidentally transmit an unconfirmed operation.
+    await transaction(["operationOutbox"], "readwrite", tx => tx.objectStore("operationOutbox").add({
+      id: operation.operationId, userId: scope.userId, ownerId: scope.ownerId, operation,
+      state: "pending", attempts: 0, nextAt: 0, code: "", createdAt: record.createdAt
+    }));
+  }
+  async function scopedOutbox(scope) {
+    assertSyncScope(scope);
+    const rows = await readDatabaseStore(scope.database, "operationOutbox");
+    assertSyncScope(scope);
+    return rows.filter(p => p.userId === scope.userId && p.ownerId === scope.ownerId);
+  }
+  async function updateOutbox(scope, entry, patch) {
+    assertSyncScope(scope);
+    // Read/update atomically; never regress a terminal state due to a late
+    // response from another tab. RPC idempotency handles simultaneous sends.
+    await new Promise((resolve, reject) => {
+      const tx = scope.database.transaction("operationOutbox", "readwrite");
+      const store = tx.objectStore("operationOutbox");
+      const request = store.get(entry.id);
+      request.onsuccess = () => {
+        const current = request.result;
+        if (!current || current.userId !== scope.userId || current.ownerId !== scope.ownerId) return;
+        if (["confirmed","conflict","rejected"].includes(current.state)) return;
+        store.put({ ...current, ...patch });
+      };
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error("Operación local cancelada."));
+    });
+  }
+  async function flushEventOutbox(scope) {
+    if (!eventOutboxEnabled()) return;
+    const rows = (await scopedOutbox(scope)).sort((a,b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    for (const entry of rows) {
+      assertSyncScope(scope);
+      if (entry.state !== "pending" || entry.nextAt > Date.now()) continue;
+      const attempts = entry.attempts + 1;
+      let result;
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 20000);
+        try {
+          result = await cloud.rpc("sync_apply_operation", { p_operation: entry.operation }).abortSignal(controller.signal);
+        } finally { clearTimeout(timer); }
+        assertSyncScope(scope);
+      } catch (error) {
+        assertSyncScope(scope);
+        await updateOutbox(scope, entry, { attempts, nextAt: Date.now() + Math.min(900000, 30000 * 2 ** Math.min(attempts-1,5)), code: "TRANSPORT_UNKNOWN" });
+        continue;
+      }
+      const data = result.data;
+      if (!result.error && data?.protocolVersion === 1 && data.operationId === entry.id &&
+          ["applied","duplicate"].includes(data.status) && Number.isSafeInteger(data.revision) && data.revision >= 1 &&
+          typeof data.serverReceivedAt === "string" && Number.isFinite(Date.parse(data.serverReceivedAt))) {
+        await updateOutbox(scope, entry, { state: "confirmed", receipt: data, code: "OK", attempts });
+      } else if (!result.error && data?.protocolVersion === 1 && data.operationId === entry.id && ["conflict","rejected"].includes(data.status)) {
+        await updateOutbox(scope, entry, { state: data.status, code: String(data.code || "REVIEW_REQUIRED").slice(0,100), attempts });
+      } else {
+        await updateOutbox(scope, entry, { attempts, nextAt: Date.now() + Math.min(900000, 30000 * 2 ** Math.min(attempts-1,5)), code: result.error?.code === "PGRST202" ? "RPC_NOT_INSTALLED" : "RESULT_UNKNOWN" });
+      }
+    }
+  }
+  async function showEventOutbox() {
+    try {
+      const scope = outboxScope();
+      const rows = await scopedOutbox(scope);
+      const dialog = document.createElement("dialog");
+      const heading = document.createElement("h2"); heading.textContent = "Operaciones de sincronización";
+      dialog.append(heading);
+      const description = document.createElement("p");
+      description.textContent = "Los registros pendientes no forman parte del historial confirmado. No borres los datos del navegador.";
+      dialog.append(description);
+      for (const entry of rows.slice().reverse().slice(0,100)) {
+        const item = document.createElement("p");
+        const c = entry.operation.changes;
+        item.textContent = `${EVENT_TYPES[c.type] || c.type} · ${c.animalId} · ${c.date} · ${entry.state}${entry.code ? " · " + entry.code : ""}`;
+        dialog.append(item);
+      }
+      if (!rows.length) { const p = document.createElement("p"); p.textContent = "No hay operaciones guardadas."; dialog.append(p); }
+      const close = document.createElement("button"); close.type = "button"; close.textContent = "Cerrar"; close.onclick = () => dialog.close();
+      dialog.append(close); dialog.addEventListener("close", () => dialog.remove(), {once:true});
+      document.body.append(dialog); dialog.showModal();
+    } catch (error) { showToast(error.message); }
+  }
+
   async function syncData() {
     if (!cloud) {
       setSyncStatus("Solo en este dispositivo · configura Supabase");
@@ -1582,6 +1702,7 @@
     try {
       const scope = { userId: currentUser.id, ownerId: state.ranchOwnerId, database: db };
       assertSyncScope(scope);
+      // First send legacy changes and new animals; then process independent events.
       const fieldConfigStatus = await syncAnimalFieldConfig();
       assertSyncScope(scope);
       const [animals, events, photos, forecasts, deletions, journeys] = await Promise.all([
@@ -1630,14 +1751,21 @@
       }
       conflicts += await syncJourneys(journeys, scope);
       assertSyncScope(scope);
+      await flushEventOutbox(scope);
+      const outboxRows = await scopedOutbox(scope);
+      const pendingOperations = outboxRows.filter(p => p.state !== "confirmed").length;
+      // Download RPC-created events on a later pass, never inject them into a stale bundle.
+      if (outboxRows.some(p => p.state === "confirmed" && p.receipt && !events.some(e => e.id === p.operation.entityId))) {
+        pendingChanges++;
+      }
       await refresh();
       if ($("#detail-dialog").open && state.currentAnimalId) {
         if (state.animals.some(animal => animal.id === state.currentAnimalId)) openDetail(state.currentAnimalId, true);
         else $("#detail-dialog").close();
       }
       if ($("#journey-dialog").open && state.currentJourneyId) renderJourneyDetail();
-      setSyncStatus(conflicts || pendingChanges
-        ? `${conflicts} conflicto(s) · ${pendingChanges} cambio(s) pendiente(s) · datos locales conservados`
+      setSyncStatus(conflicts || pendingChanges || pendingOperations
+        ? `${conflicts} conflicto(s) · ${pendingChanges} cambio(s) pendiente(s) · ${pendingOperations} operación(es) en cola · datos locales conservados`
         : fieldConfigStatus || "Sincronizado");
       if (conflicts) showToast("Hay cambios simultáneos. No se reemplazó ninguna versión en conflicto; conserva los datos locales y solicita revisión.");
     } catch (error) {
@@ -4614,6 +4742,7 @@
 
   async function saveRecord(event) {
     event.preventDefault();
+    if (recordSaving) return;
     const invalidControl = [...event.currentTarget.elements].find(control =>
       control.willValidate && !control.checkValidity());
     if (invalidControl) {
@@ -4637,6 +4766,16 @@
     try {
       const animalId = $("#record-animal-id").value;
       const record = makeEvent(animalId, type, date, fields);
+      if (eventOutboxEnabled() && RPC_EVENT_TYPES.has(type)) {
+        recordSaving = true;
+        try {
+          await queueEventRecord(record);
+          $("#record-dialog").close();
+          scheduleSync();
+          showToast("Registro guardado en la cola local. Pendiente de confirmación.");
+        } finally { recordSaving = false; }
+        return;
+      }
       const forecastUpdates = type === "weight" && !isRanchWorker()
         ? pendingForecastUpdates(await getAllByIndex("growthForecasts", "animalId", animalId), animalId, state.events.concat(record))
         : [];
@@ -5123,6 +5262,11 @@
     }));
     $("#backup-button").addEventListener("click", backup);
     $("#sync-button").addEventListener("click", syncData);
+    const outboxButton = document.createElement("button");
+    outboxButton.type = "button"; outboxButton.className = "button button-outline button-small";
+    outboxButton.textContent = "Operaciones pendientes"; outboxButton.addEventListener("click", showEventOutbox);
+    $("#sync-button").insertAdjacentElement("afterend", outboxButton);
+    setInterval(() => { if (eventOutboxEnabled() && currentUser && state.ranchReady && state.ranchOwnerId && navigator.onLine && !state.syncing) syncData(); }, 30000);
     $("#account-button").addEventListener("click", () => {
       showAccountView("login");
       if (!cloud) showAccountView("login", "La conexión con Supabase aún no está configurada. Consulta el README para activarla.");
