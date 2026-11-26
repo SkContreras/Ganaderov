@@ -2778,6 +2778,39 @@
     </section>`;
   }
 
+  const INVENTORY_PAGE_SIZE = 80;
+  let inventoryPage = 0, inventoryViewKey = "";
+  function inventoryIndexes(events, photos) {
+    const weights = new Map(), primaryPhotos = new Map();
+    for (const e of events) {
+      if (e.type !== "weight") continue;
+      const prior = weights.get(e.animalId);
+      if (!prior || (String(e.date || "").localeCompare(String(prior.date || "")) || String(e.createdAt || "").localeCompare(String(prior.createdAt || ""))) > 0) weights.set(e.animalId,e);
+    }
+    for (const p of photos) {
+      const prior = primaryPhotos.get(p.animalId);
+      if (!prior || (!prior.primary && p.primary)) primaryPhotos.set(p.animalId,p);
+    }
+    return {weights,primaryPhotos};
+  }
+  function renderInventoryPager(total) {
+    let pager = $("#inventory-pager");
+    if (!pager) {
+      pager = document.createElement("nav"); pager.id="inventory-pager"; pager.className="inventory-pager"; pager.setAttribute("aria-label","Páginas del inventario");
+      $("#animal-rows").closest("table").insertAdjacentElement("afterend",pager);
+      for (const [label,delta] of [["Anterior",-1],["Siguiente",1]]) {
+        const button=document.createElement("button"); button.type="button"; button.className="button button-outline button-small"; button.textContent=label;
+        button.addEventListener("click",()=>{inventoryPage+=delta;renderDashboard();$("#inventory-heading-title").scrollIntoView({block:"nearest"});});
+        pager.append(button);
+      }
+      const info=document.createElement("span");info.setAttribute("aria-live","polite");pager.insertBefore(info,pager.lastChild);
+    }
+    const pages=Math.max(1,Math.ceil(total/INVENTORY_PAGE_SIZE));
+    inventoryPage=Math.max(0,Math.min(inventoryPage,pages-1));
+    pager.hidden=pages<=1;
+    pager.firstChild.disabled=inventoryPage===0;pager.lastChild.disabled=inventoryPage>=pages-1;
+    pager.children[1].textContent=`${inventoryPage+1} / ${pages} · ${total} animales`;
+  }
   function renderDashboard() {
     $("#add-animal-button").hidden = !canManageRanch();
     $("#empty-add-button").hidden = !canManageRanch();
@@ -2792,9 +2825,10 @@
     const query = $("#search-input").value.trim().toLocaleLowerCase("es-MX");
     const archivedAnimals = state.animals.filter(animal => !isActiveAnimal(animal));
     const displayedAnimals = state.archiveView ? archivedAnimals : activeAnimals;
+    const searchableFields = query ? ANIMAL_FIELD_CATALOG.filter(field => animalFieldActive(field.id)) : [];
     const filtered = displayedAnimals.filter(animal => {
-      const configuredValues = ANIMAL_FIELD_CATALOG
-        .filter(field => animalFieldActive(field.id))
+      if (!query) return true;
+      const configuredValues = searchableFields
         .map(field => animalFieldDisplayValue(field, animal));
       const searchable = configuredValues.filter(Boolean).join(" ").toLocaleLowerCase("es-MX");
       return !query || searchable.includes(query);
@@ -2820,11 +2854,15 @@
       : `${icon("archive")} Ver archivo (${archivedAnimals.length})`;
     $("#archive-toggle").setAttribute("aria-pressed", String(state.archiveView));
     const rows = $("#animal-rows");
-    rows.innerHTML = filtered.map(animal => {
-      const weight = eventFor(animal.id, "weight");
-      const primaryPhoto = state.photos.find(photo => photo.animalId === animal.id && photo.primary) || state.photos.find(photo => photo.animalId === animal.id);
+    const viewKey=JSON.stringify([currentUser?.id,state.ranchOwnerId,state.archiveView,query,state.sort,state.direction]);
+    if(viewKey!==inventoryViewKey){inventoryPage=0;inventoryViewKey=viewKey;}
+    renderInventoryPager(filtered.length);
+    const {weights,primaryPhotos}=inventoryIndexes(state.events,state.photos);
+    rows.innerHTML = filtered.slice(inventoryPage*INVENTORY_PAGE_SIZE,(inventoryPage+1)*INVENTORY_PAGE_SIZE).map(animal => {
+      const weight = weights.get(animal.id);
+      const primaryPhoto = primaryPhotos.get(animal.id);
       const avatar = primaryPhoto
-        ? `<img src="${photoUrl(primaryPhoto)}" alt="">`
+        ? `<img src="${photoUrl(primaryPhoto)}" alt="" loading="lazy" decoding="async">`
         : escapeHtml(initials(animal));
       const extraValues = extraTableFields.map(field => {
         const value = animalFieldDisplayValue(field, animal);
@@ -5463,7 +5501,8 @@
       $("#search-input").value = "";
       renderDashboard();
     });
-    $("#search-input").addEventListener("input", renderDashboard);
+    let searchFrame=0;
+    $("#search-input").addEventListener("input",()=>{cancelAnimationFrame(searchFrame);searchFrame=requestAnimationFrame(renderDashboard);});
     $$(".sort-button").forEach(button => button.addEventListener("click", () => {
       const key = button.dataset.sort;
       state.direction = state.sort === key ? -state.direction : 1;

@@ -1,0 +1,2 @@
+# Paso 15 — rendimiento Web
+Páginas de 80 filas, búsqueda agrupada por frame, índices lineales de último pesaje y foto principal, carga perezosa y decodificación asíncrona de avatares, preferencia de movimiento reducido. Los totales y búsqueda siguen cubriendo todo el inventario. No reduce la descarga ni el tamaño de IndexedDB; no se cambian operaciones, datos ni sincronización. Las URL de blobs siguen vivas hasta la limpieza existente. Pruebas Node y mediciones de navegador pendientes. Verificar inventario vacío, filtros, orden, paginación, cambio de cuenta y accesibilidad.
