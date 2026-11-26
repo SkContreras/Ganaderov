@@ -1,0 +1,2 @@
+# Paso 12 — estados de ganado Web
+Archivo/restauración seleccionan estados habilitados del catálogo del rancho en lugar de imponer Baja/Activo. Si motivo de baja obligatorio, se dirige al editor. La ruta de eliminación protegida por historial usa el mismo selector. Comprueba sesión y ficha después del diálogo. No elimina historial ni fotos al archivar. Conserva sincronización legada y sus límites; la lectura local y escritura no son una CAS IndexedDB atómica entre pestañas, y no existe todavía RPC universal para ficha. Pruebas de navegador pendientes. No cambios en Supabase.

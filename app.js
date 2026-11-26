@@ -5049,13 +5049,61 @@
     }
   }
 
+  async function chooseLifecycleStatus(animal, active) {
+    const owner = state.ranchOwnerId;
+    const user = currentUser?.id;
+    const database = db;
+    const options = (state.fieldConfig?.lists?.status || DEFAULT_STATUS_OPTIONS)
+      .filter(option => option.enabled && (option.active !== false) === active);
+    if (!options.length) { showToast("No hay estados habilitados para esta transición."); return null; }
+    if (!active && animalFieldActive("exitReason") && animalFieldConfig("exitReason").form && animalFieldConfig("exitReason").required) {
+      showToast("El rancho exige un motivo de baja. Utiliza Editar ficha y estado.");
+      return null;
+    }
+    const selection = await new Promise(resolve => {
+      const dialog = document.createElement("dialog");
+      const title = document.createElement("h2");
+      title.textContent = active ? "Restaurar animal" : "Archivar animal";
+      const description = document.createElement("p");
+      description.textContent = "Se conservarán la ficha, las fotografías y el historial.";
+      const select = document.createElement("select");
+      for (const item of options) {
+        const option = document.createElement("option");
+        option.value = item.value; option.textContent = item.label; select.append(option);
+      }
+      const confirmButton = document.createElement("button");
+      confirmButton.type = "button"; confirmButton.textContent = "Confirmar";
+      const cancel = document.createElement("button");
+      cancel.type = "button"; cancel.textContent = "Cancelar";
+      let selected = null;
+      confirmButton.onclick = () => { selected = select.value; dialog.close(); };
+      cancel.onclick = () => dialog.close();
+      dialog.addEventListener("close", () => { dialog.remove(); resolve(selected); }, {once:true});
+      dialog.append(title, description, select, confirmButton, cancel);
+      document.body.append(dialog); dialog.showModal();
+    });
+    if (!selection) return null;
+    if (owner !== state.ranchOwnerId || user !== currentUser?.id || database !== db || !canManageRanch()) {
+      showToast("La sesión cambió. Actualiza el inventario."); return null;
+    }
+    const current = await getOne("animals", animal.id);
+    if (!current || JSON.stringify(stableValue(current)) !== JSON.stringify(stableValue(animal))) {
+      showToast("La ficha cambió. Actualiza antes de continuar."); return null;
+    }
+    const configured = (state.fieldConfig?.lists?.status || DEFAULT_STATUS_OPTIONS).find(option => option.value === selection && option.enabled);
+    if (database !== db || owner !== state.ranchOwnerId || user !== currentUser?.id || !configured || (configured.active !== false) !== active || !canManageRanch()) return null;
+    return selection;
+  }
+
   async function deactivateAnimal(animalId) {
     if (!canManageRanch()) return;
     const animal = state.animals.find(item => item.id === animalId);
     if (!animal) return;
-    if (!confirm(`¿Deseas dar de baja a ${animal.name || animal.tag || "este animal"}? Su ficha y su historial se conservarán.`)) return;
+    if (!isActiveAnimal(animal)) return;
+    const status = await chooseLifecycleStatus(animal, false);
+    if (!status) return;
     try {
-      await put("animals", { ...animal, status: "Baja", updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label });
+      await put("animals", { ...animal, status, updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label });
       scheduleSync();
       $("#detail-dialog").close();
       await refresh();
@@ -5072,9 +5120,10 @@
     }
     const animal = state.animals.find(item => item.id === animalId);
     if (!animal || isActiveAnimal(animal)) return;
-    if (!confirm(`¿Reactivar a ${animal.name || animal.tag || "este animal"}? Volverá al inventario activo y podrá incluirse en jornadas nuevas.`)) return;
+    const status = await chooseLifecycleStatus(animal, true);
+    if (!status) return;
     try {
-      await put("animals", { ...animal, status: "Activo", updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label });
+      await put("animals", { ...animal, status, updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label });
       scheduleSync();
       $("#detail-dialog").close();
       state.archiveView = false;
@@ -5100,7 +5149,9 @@
       );
       if (!shouldDeactivate) return;
       try {
-        await put("animals", { ...animal, status: "Baja", updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label });
+        const status = await chooseLifecycleStatus(animal, false);
+        if (!status) return;
+        await put("animals", { ...animal, status, updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label });
         scheduleSync();
         $("#detail-dialog").close();
         await refresh();
