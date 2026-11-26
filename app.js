@@ -1967,13 +1967,18 @@
           : "Ajusta la posición de la foto en el marco.";
   }
 
+  function validAnalysisWeight(value) {
+    return (typeof value === "number" || (typeof value === "string" && value.trim() !== "")) &&
+      Number.isFinite(Number(value)) && Number(value) >= 0;
+  }
+
   function weightHistory(animalId) {
     const weightsByDate = new Map();
     state.events.filter(record => record.animalId === animalId && record.type === "weight")
       .forEach(record => {
         const weight = Number(record.weight);
         const day = Date.parse(`${record.date}T00:00:00Z`) / 86400000;
-        if (!Number.isFinite(weight) || weight < 0 || !Number.isFinite(day)) return;
+        if (!validAnalysisWeight(record.weight) || !isDateOnly(record.date) || !Number.isFinite(day)) return;
         const records = weightsByDate.get(record.date) || { weights: [], eventIds: [] };
         records.weights.push(weight);
         records.eventIds.push(record.id);
@@ -2016,8 +2021,8 @@
 
   function projectWeight(weight, gainKgPerDay, days, baselineDate) {
     const baselineDay = Date.parse(`${baselineDate}T00:00:00Z`) / 86400000;
-    if (!Number.isFinite(weight) || !Number.isFinite(gainKgPerDay) ||
-        !Number.isInteger(days) || days < 0 || days > 3650 || !Number.isFinite(baselineDay) || !Number.isFinite(weight + gainKgPerDay * days)) return null;
+    if (!Number.isFinite(weight) || weight < 0 || !Number.isFinite(gainKgPerDay) ||
+        !Number.isInteger(days) || days < 0 || days > 3650 || !isDateOnly(baselineDate) || !Number.isFinite(baselineDay) || !Number.isFinite(weight + gainKgPerDay * days) || weight + gainKgPerDay * days < 0) return null;
     const targetDay = baselineDay + days;
     return {
       baselineDate,
@@ -2029,7 +2034,7 @@
   }
 
   function evaluateForecast(forecast, actualDate, actualWeight) {
-    if (forecast.status !== "pending" || actualDate < forecast.targetDate) return null;
+    if (forecast.status !== "pending" || !isDateOnly(actualDate) || !isDateOnly(forecast.targetDate) || actualDate < forecast.targetDate || !validAnalysisWeight(actualWeight) || !validAnalysisWeight(forecast.predictedWeight)) return null;
     const errorKg = actualWeight - forecast.predictedWeight;
     return {
       ...forecast,
@@ -2038,7 +2043,7 @@
       actualWeight,
       errorKg,
       absoluteErrorKg: Math.abs(errorKg),
-      absoluteErrorPercent: forecast.predictedWeight === 0 ? null : Math.abs(errorKg) / Math.abs(forecast.predictedWeight) * 100,
+      absoluteErrorPercent: Number(forecast.predictedWeight) === 0 ? null : Math.abs(errorKg) / Math.abs(forecast.predictedWeight) * 100,
       evaluatedAt: new Date().toISOString()
     };
   }
@@ -2046,7 +2051,7 @@
   function pendingForecastUpdates(forecasts, animalId, weightEvents) {
     const actualWeights = weightEvents
       .filter(record => record.animalId === animalId && record.type === "weight" &&
-        Number.isFinite(Number(record.weight)) && Number(record.weight) >= 0)
+        validAnalysisWeight(record.weight) && isDateOnly(record.date) && Number.isFinite(Date.parse(record.createdAt)))
       .sort((a, b) => a.date.localeCompare(b.date) ||
         String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     return forecasts.filter(forecast => forecast.animalId === animalId && forecast.status === "pending")
