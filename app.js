@@ -1298,6 +1298,54 @@
     }
   }
 
+  // Pure three-way comparison. Missing values are distinct from null.
+  function compareConflict(base, local, remote) {
+    const same = (x,y) => JSON.stringify(stableValue(x)) === JSON.stringify(stableValue(y));
+    const plain = x => x !== null && typeof x === "object" && !Array.isArray(x);
+    const conflicts = [], changes = [];
+    function visit(b,l,r,path) {
+      if (same(l,r)) return l;
+      if (same(l,b)) { changes.push({path,source:"remote"}); return r; }
+      if (same(r,b)) { changes.push({path,source:"local"}); return l; }
+      if ([b,l,r].every(plain)) {
+        const result = Object.create(null);
+        for (const key of new Set([...Object.keys(b),...Object.keys(l),...Object.keys(r)])) {
+          const value = visit(b[key],l[key],r[key],path.concat(key));
+          if (value !== undefined) result[key]=value;
+        }
+        return result;
+      }
+      // Only named collections of objects with unique identities can be merged.
+      if (["events","roster","photos","forecasts"].includes(path.join(".")) && [b,l,r].every(Array.isArray)) {
+        const maps=[b,l,r].map(list=>new Map(list.map(x=>[x?.id,x])));
+        if (maps.every((m,i)=>m.size===[b,l,r][i].length && [...m.keys()].every(k=>typeof k==="string"&&k.length))) {
+          const result=[];
+          for (const id of new Set(maps.flatMap(m=>[...m.keys()]))) {
+            const value=visit(maps[0].get(id),maps[1].get(id),maps[2].get(id),path.concat(id));
+            if(value!==undefined)result.push(value);
+          }
+          return result;
+        }
+      }
+      conflicts.push({path,base:b,local:l,remote:r});
+      return l;
+    }
+    if (base===null || base===undefined) return {merged:null,conflicts:[{path:[],base,local,remote}],changes:[]};
+    const merged=visit(base,local,remote,[]);
+    return {merged:conflicts.length?null:merged,conflicts,changes};
+  }
+
+  async function rememberSyncConflict(scope, kind, id, base, local, remote, version) {
+    assertSyncScope(scope);
+    const key = `conflict:${kind}:${id}`;
+    // Snapshots are kept for review; never silently apply a comparison result.
+    await put("syncMeta",{id:key,ownerId:scope.ownerId,kind,entityId:id,base,local,remote,version});
+  }
+  async function clearSyncConflict(scope, kind, id) {
+    assertSyncScope(scope);
+    await remove("syncMeta",`conflict:${kind}:${id}`);
+  }
+
   async function syncJourneys(localJourneys, scope) {
     const remoteRows = await readSyncRows("journey_sync_records", "journey_id", "journey_id, updated_at, payload", scope);
     const remote = new Map(remoteRows.map(record => [record.journey_id, record]));
@@ -1311,6 +1359,7 @@
       const rf = r ? JSON.stringify(stableValue(r.payload)) : null;
       if (l && r && lf === rf) {
         await put("syncMeta", { id: `journey:${journeyId}`, fingerprint: lf, remoteVersion: r.updated_at });
+        await clearSyncConflict(scope,"journey",journeyId);
         continue;
       }
       const lc = Boolean(l && (!meta || lf !== meta.fingerprint));
@@ -1318,6 +1367,7 @@
       // Closing/reopening a journey has effects on animal histories. Do not
       // automatically merge a concurrent transition with attendance.
       if (l && r && lc && rc) {
+        await rememberSyncConflict(scope,"journey",journeyId,meta?.fingerprint ? JSON.parse(meta.fingerprint) : null,l,r.payload,r.updated_at);
         pending++;
         continue;
       }
@@ -1656,8 +1706,30 @@
         const c = entry.operation.changes;
         item.textContent = `${EVENT_TYPES[c.type] || c.type} · ${c.animalId} · ${c.date} · ${entry.state}${entry.code ? " · " + entry.code : ""}`;
         dialog.append(item);
+        if (["conflict","rejected"].includes(entry.state)) {
+          const details=document.createElement("details"), title=document.createElement("summary"), pre=document.createElement("pre");
+          title.textContent="Revisar operación"; pre.style.whiteSpace="pre-wrap"; pre.style.overflowWrap="anywhere";
+          pre.textContent=JSON.stringify(entry.operation,null,2); details.append(title,pre); dialog.append(details);
+        }
       }
       if (!rows.length) { const p = document.createElement("p"); p.textContent = "No hay operaciones guardadas."; dialog.append(p); }
+      // Legacy conflicts belong to the ranch; only managers may inspect full snapshots.
+      if (canManageRanch()) {
+        const snapshots = (await readDatabaseStore(scope.database,"syncMeta")).filter(x=>x.id.startsWith("conflict:")&&x.ownerId===scope.ownerId);
+        assertSyncScope(scope);
+        if (!canManageRanch()) throw new Error("Permisos cambiaron.");
+        const title=document.createElement("h3"); title.textContent="Conflictos de fichas y jornadas"; dialog.append(title);
+        for (const s of snapshots) {
+          const section=document.createElement("details");
+          const summary=document.createElement("summary"); summary.textContent=`${s.kind} · ${s.entityId}`; section.append(summary);
+          const comparison=compareConflict(s.base,s.local,s.remote);
+          const hint=document.createElement("p"); hint.textContent=comparison.conflicts.length?"Requiere revisión de valores incompatibles.":"Cambios compatibles en comparación estructural; aún requieren validación de negocio.";
+          section.append(hint);
+          const pre=document.createElement("pre"); pre.style.whiteSpace="pre-wrap"; pre.style.overflowWrap="anywhere";
+          pre.textContent=JSON.stringify({conflicts:comparison.conflicts,changes:comparison.changes,base:s.base,local:s.local,remote:s.remote,proposed:comparison.merged},null,2);
+          section.append(pre); dialog.append(section);
+        }
+      }
       const close = document.createElement("button"); close.type = "button"; close.textContent = "Cerrar"; close.onclick = () => dialog.close();
       dialog.append(close); dialog.addEventListener("close", () => dialog.remove(), {once:true});
       document.body.append(dialog); dialog.showModal();
@@ -1728,14 +1800,14 @@
         const matchingContent = localBundle && remoteRecord && localFingerprint === cloudFingerprint;
         if (matchingContent) {
           await saveSyncMeta(animalId, localVersion, remoteRecord.modified_at, localFingerprint);
+          await clearSyncConflict(scope,"animal",animalId);
           continue;
         }
         const localChanged = Boolean(localBundle && (!metadata || localFingerprint !== metadata.fingerprint));
         const remoteChanged = Boolean(remoteRecord && (!metadata || remoteRecord.modified_at !== metadata.remoteVersion));
 
         if (localBundle && remoteRecord && localChanged && remoteChanged) {
-          // Do not overwrite or discard either side. A later resolution UI can
-          // use a three-way merge; for now the safest result is a pending conflict.
+          await rememberSyncConflict(scope,"animal",animalId,metadata?.fingerprint ? JSON.parse(metadata.fingerprint) : null,JSON.parse(localFingerprint),JSON.parse(cloudFingerprint),remoteRecord.modified_at);
           conflicts++;
           continue;
         } else if (localBundle && (!remoteRecord || localChanged)) {
