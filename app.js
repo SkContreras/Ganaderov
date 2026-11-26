@@ -219,17 +219,18 @@
   async function switchRanchDatabase(ownerId) {
     const scopedName = `${DB_NAME}-ranch-${ownerId}`;
     if (db.name === scopedName) return false;
-    const previous = db;
+    const previous = db, generation=sessionGeneration, userId=currentUser?.id;
     const target = await openDatabase(scopedName);
+    const verify=()=>{if(generation!==sessionGeneration||currentUser?.id!==userId||state.ranchOwnerId!==ownerId||db!==previous){target.close();throw Error("El ámbito de almacenamiento cambió.");}};
+    verify();
     const stores = ["animals", "events", "photos", "syncMeta", "deletedAnimals", "journeys", "growthForecasts", "ranchSettings"];
     const targetRows = await Promise.all(stores.map(store => readDatabaseStore(target, store)));
+    verify();
     const targetEmpty = targetRows.every(rows => rows.length === 0);
     const scopeMarker = targetRows[stores.indexOf("syncMeta")].find(item => item.id === "local-ranch-scope");
     if (!scopeMarker && targetEmpty) {
       let sourceRows = null;
-      if (previous.name === DB_NAME) {
-        sourceRows = await Promise.all(stores.map(store => readDatabaseStore(previous, store)));
-      }
+      // Never adopt unscoped guest data into an authenticated ranch silently.
       const tx = target.transaction(stores, "readwrite");
       if (sourceRows) {
         stores.forEach((store, index) => sourceRows[index].forEach(item => tx.objectStore(store).put(item)));
@@ -258,6 +259,7 @@
         tx.onabort = () => reject(tx.error || new Error("Se canceló el registro del ámbito local."));
       });
     }
+    verify();
     db = target;
     if (previous !== target) previous.close();
     await refresh();
@@ -266,8 +268,10 @@
 
   async function switchGuestDatabase() {
     if (db.name === DB_NAME) return;
-    const previous = db;
-    db = await openDatabase(DB_NAME);
+    const previous = db, generation=sessionGeneration;
+    const target=await openDatabase(DB_NAME);
+    if(generation!==sessionGeneration||db!==previous){target.close();return;}
+    db=target;
     previous.close();
     await refresh();
   }
@@ -280,7 +284,21 @@
     $("#sync-button").disabled = !cloud || !currentUser || !navigator.onLine || state.syncing;
   }
 
-  function setRanchContext(context) {
+  const OFFLINE_CONTEXT_TTL = 24 * 60 * 60 * 1000;
+  let sessionGeneration = 0;
+  function clearPrivateView() {
+    for (const url of state.photoUrls.values()) URL.revokeObjectURL(url);
+    state.photoUrls.clear();
+    state.animals=[]; state.events=[]; state.photos=[]; state.journeys=[]; state.forecasts=[];
+    state.currentAnimalId=null; state.currentJourneyId=null;
+    state.calculatorProjection=null; state.calculatorMeasuredGain=null;
+    state.quickCaptureSeed=null; state.pendingUndo=null; state.toastAction=null;
+    state.fieldConfigRecord=null; state.fieldConfig=normalizeAnimalFieldConfig(null);
+    clearTimeout(state.undoTimer); clearTimeout(state.syncTimer);
+    for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+    renderDashboard(); renderJourneys(); renderCalculatorAnimalOptions();
+  }
+  function setRanchContext(context, verifiedOnline = true) {
     state.ranchContext = context;
     state.ranchOwnerId = context?.status === "active" ? context.owner_id : null;
     state.ranchRole = context?.status === "active" ? context.role : null;
@@ -291,14 +309,19 @@
       ? `${context?.display_name || currentUser.email} · ${context?.ranch_name || "Sin rancho"}`
       : "Sin sesión";
     if (currentUser && context?.status === "active") {
-      localStorage.setItem(`ganadero-ranch-context:${currentUser.id}`, JSON.stringify(context));
+      if (verifiedOnline) {
+        const {status,owner_id,role,display_name,ranch_name}=context;
+        try { localStorage.setItem(`ganadero-ranch-context:${currentUser.id}`, JSON.stringify({userId:currentUser.id,verifiedAt:Date.now(),context:{status,owner_id,role,display_name,ranch_name}})); } catch (_) {}
+      }
     } else if (currentUser) {
-      localStorage.removeItem(`ganadero-ranch-context:${currentUser.id}`);
+      try { localStorage.removeItem(`ganadero-ranch-context:${currentUser.id}`); } catch (_) {}
     }
   }
 
   async function loadRanchContext() {
     state.ranchReady = false;
+    const userId=currentUser?.id, generation=sessionGeneration;
+    const verify=()=>{if(currentUser?.id!==userId||sessionGeneration!==generation)throw Error("La sesión cambió.");};
     if (!currentUser) {
       state.legacyAccount = false;
       state.ranchOwnerId = null;
@@ -310,19 +333,25 @@
     if (!navigator.onLine) {
       const cached = localStorage.getItem(`ganadero-ranch-context:${currentUser.id}`);
       if (cached) {
-        const context = JSON.parse(cached);
-        if (context.status === "active" && context.owner_id) {
+        let envelope;
+        try { envelope=JSON.parse(cached); } catch (_) { envelope=null; }
+        const context=envelope?.context, age=Date.now()-envelope?.verifiedAt;
+        if (envelope?.userId===userId && Number.isFinite(age) && age>=0 && age<=OFFLINE_CONTEXT_TTL && context?.status==="active" && context.owner_id && ["owner","admin","worker"].includes(context.role)) {
           state.legacyAccount = false;
-          setRanchContext(context);
+          verify(); setRanchContext(context,false);
           await switchRanchDatabase(context.owner_id);
+          verify();
           return;
         }
       }
       state.ranchReady = false;
+      state.ranchOwnerId=null; state.ranchRole=null; state.ranchContext=null;
+      clearPrivateView();
       return;
     }
 
     const { data, error } = await cloud.rpc("get_my_ranch_context");
+    verify();
     if (error) {
       if (!navigator.onLine) return loadRanchContext();
       if (error.code === "PGRST202" || /get_my_ranch_context|schema cache|could not find the function/i.test(error.message || "")) {
@@ -1126,12 +1155,17 @@
   }
 
   async function refresh() {
+    const generation=sessionGeneration, database=db;
+    const valid=()=>generation===sessionGeneration&&database===db&&(!currentUser||state.ranchReady&&state.ranchOwnerId&&db.name===`${DB_NAME}-ranch-${state.ranchOwnerId}`);
+    if(!valid())return;
     const [animals, events, photos, journeys, forecasts, fieldConfigRecord] = await Promise.all([
       getAll("animals"), getAll("events"), getAll("photos"), getAll("journeys"), getAll("growthForecasts"),
       getOne("ranchSettings", "animal-fields")
     ]);
-    state.animals = animals;
+    if(!valid())return;
     const assignedIds = await ensureAnimalInternalIds(animals);
+    if(!valid())return;
+    state.animals = animals;
     if (assignedIds) scheduleSync();
     state.events = events;
     state.photos = photos;
@@ -1143,6 +1177,7 @@
       state.fieldConfigRecord = { ...fieldConfigRecord, config: state.fieldConfig };
       await put("ranchSettings", state.fieldConfigRecord);
     }
+    if(!valid())return;
     const photoIds = new Set(state.photos.map(photo => photo.id));
     for (const [id, url] of state.photoUrls) {
       if (!photoIds.has(id)) {
@@ -6040,7 +6075,14 @@
         cloud = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
         cloud.auth.onAuthStateChange((event, session) => {
           if (event === "INITIAL_SESSION") return;
+          const oldUser=currentUser?.id;
           currentUser = session?.user || null;
+          if(oldUser!==currentUser?.id){
+            sessionGeneration++;
+            state.ranchReady=false; state.ranchOwnerId=null; state.ranchRole=null; state.ranchContext=null;
+            if(oldUser)try{localStorage.removeItem(`ganadero-ranch-context:${oldUser}`);}catch(_){}
+            clearPrivateView();
+          }
           $("#account-button").hidden = Boolean(currentUser);
           $("#account-manage-button").hidden = !currentUser;
           $("#sign-out-button").hidden = !currentUser;
