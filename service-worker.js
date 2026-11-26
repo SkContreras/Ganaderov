@@ -1,4 +1,4 @@
-const CACHE_NAME = "ganadero-v50";
+const CACHE_NAME = "ganadero-v51";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -43,6 +43,9 @@ self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
   const request = event.request;
   const url = new URL(request.url);
+  const staticUrls = new Set(APP_FILES.map(path => new URL(path,self.registration.scope).href));
+  if (request.headers.has("Authorization") || request.headers.has("apikey")) return;
+  if (!staticUrls.has(url.href) && url.href !== SUPABASE_SCRIPT) return;
   // Authentication and recovery query strings must not enter the offline cache.
   if (url.origin === self.location.origin && url.search) {
     event.respondWith(fetch(request, { cache: "no-store" }));
