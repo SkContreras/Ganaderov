@@ -1271,65 +1271,77 @@
     });
   }
 
-  async function syncJourneys(localJourneys) {
-    const { data: remoteRows, error } = await cloud.from("journey_sync_records")
-      .select("journey_id, updated_at, payload");
-    if (error) throw error;
-    const remote = new Map((remoteRows || []).map(record => [record.journey_id, record]));
-    const local = new Map(localJourneys.map(journey => [journey.id, journey]));
-    const journeyIds = new Set([...local.keys(), ...remote.keys()]);
-
-    for (const journeyId of journeyIds) {
-      const localJourney = local.get(journeyId);
-      const remoteRecord = remote.get(journeyId);
-      const metadata = await getOne("syncMeta", `journey:${journeyId}`);
-      const localFingerprint = localJourney ? JSON.stringify(stableValue(localJourney)) : null;
-      const remoteFingerprintValue = remoteRecord ? JSON.stringify(stableValue(remoteRecord.payload)) : null;
-      if (localJourney && remoteRecord && localFingerprint === remoteFingerprintValue) {
-        await put("syncMeta", {
-          id: `journey:${journeyId}`, fingerprint: localFingerprint, remoteVersion: remoteRecord.updated_at
-        });
-        continue;
-      }
-      const localChanged = Boolean(localJourney && (!metadata || localFingerprint !== metadata.fingerprint));
-      const remoteChanged = Boolean(remoteRecord && (!metadata || remoteRecord.updated_at !== metadata.remoteVersion));
-      let useLocal = Boolean(localJourney && (!remoteRecord || localChanged));
-      if (localJourney && remoteRecord && localChanged && remoteChanged) {
-        useLocal = confirm(
-          `La jornada «${journeyName(localJourney)}» también cambió en otro dispositivo.\n\n` +
-          "Aceptar: conservar la versión de este dispositivo.\nCancelar: conservar la versión de la nube."
-        );
-      } else if (!localJourney && remoteRecord) {
-        useLocal = false;
-      } else if (!localJourney || !remoteRecord) {
-        useLocal = Boolean(localJourney);
-      } else if (!localChanged && remoteChanged) {
-        useLocal = false;
-      }
-
-      if (useLocal && localJourney) {
-        const { data, error: saveError } = await cloud.from("journey_sync_records").upsert({
-          owner_id: state.ranchOwnerId,
-          journey_id: journeyId,
-          payload: localJourney
-        }, { onConflict: "owner_id,journey_id" }).select("updated_at").single();
-        if (saveError) throw saveError;
-        await put("syncMeta", {
-          id: `journey:${journeyId}`, fingerprint: localFingerprint, remoteVersion: data.updated_at
-        });
-      } else if (remoteRecord) {
-        const latestLocal = await getOne("journeys", journeyId);
-        const latestFingerprint = latestLocal ? JSON.stringify(stableValue(latestLocal)) : null;
-        if (latestFingerprint !== localFingerprint) continue;
-        await put("journeys", remoteRecord.payload);
-        await put("syncMeta", {
-          id: `journey:${journeyId}`, fingerprint: remoteFingerprintValue, remoteVersion: remoteRecord.updated_at
-        });
-      }
+  async function readSyncRows(table, idColumn, columns, scope) {
+    const rows = [];
+    let last = null;
+    for (;;) {
+      assertSyncScope(scope);
+      let query = cloud.from(table).select(columns).eq("owner_id", scope.ownerId);
+      if (last !== null) query = query.gt(idColumn, last);
+      const { data, error } = await query.order(idColumn, { ascending: true }).limit(200);
+      if (error) throw error;
+      assertSyncScope(scope);
+      if (!data?.length) return rows;
+      rows.push(...data);
+      const next = data[data.length - 1][idColumn];
+      if (typeof next !== "string" || next === last) throw new Error("Paginación de sincronización inválida.");
+      last = next;
     }
   }
 
-  async function applyRemoteRecord(record, expectedLocalFingerprint) {
+  function assertSyncScope(scope) {
+    if (!currentUser || currentUser.id !== scope.userId || state.ranchOwnerId !== scope.ownerId || db !== scope.database || !state.ranchReady) {
+      throw new Error("La sesión o el rancho cambió durante la sincronización.");
+    }
+  }
+
+  async function syncJourneys(localJourneys, scope) {
+    const remoteRows = await readSyncRows("journey_sync_records", "journey_id", "journey_id, updated_at, payload", scope);
+    const remote = new Map(remoteRows.map(record => [record.journey_id, record]));
+    const local = new Map(localJourneys.map(journey => [journey.id, journey]));
+    let pending = 0;
+    for (const journeyId of new Set([...local.keys(), ...remote.keys()])) {
+      assertSyncScope(scope);
+      const l = local.get(journeyId), r = remote.get(journeyId);
+      const meta = await getOne("syncMeta", `journey:${journeyId}`);
+      const lf = l ? JSON.stringify(stableValue(l)) : null;
+      const rf = r ? JSON.stringify(stableValue(r.payload)) : null;
+      if (l && r && lf === rf) {
+        await put("syncMeta", { id: `journey:${journeyId}`, fingerprint: lf, remoteVersion: r.updated_at });
+        continue;
+      }
+      const lc = Boolean(l && (!meta || lf !== meta.fingerprint));
+      const rc = Boolean(r && (!meta || r.updated_at !== meta.remoteVersion));
+      // Closing/reopening a journey has effects on animal histories. Do not
+      // automatically merge a concurrent transition with attendance.
+      if (l && r && lc && rc) {
+        pending++;
+        continue;
+      }
+      if (l && !r && meta) { pending++; continue; }
+      if (l && (!r || lc)) {
+        assertSyncScope(scope);
+        const query = r
+          ? cloud.from("journey_sync_records").update({ payload: l }).eq("owner_id", scope.ownerId).eq("journey_id", journeyId).eq("updated_at", r.updated_at)
+          : cloud.from("journey_sync_records").insert({ owner_id: scope.ownerId, journey_id: journeyId, payload: l });
+        const { data, error } = await query.select("updated_at").maybeSingle();
+        assertSyncScope(scope);
+        if (error && error.code !== "23505") throw error;
+        if (!data || error) { pending++; continue; }
+        await put("syncMeta", { id: `journey:${journeyId}`, fingerprint: lf, remoteVersion: data.updated_at });
+      } else if (r) {
+        const latest = await getOne("journeys", journeyId);
+        assertSyncScope(scope);
+        if ((latest ? JSON.stringify(stableValue(latest)) : null) !== lf) { pending++; continue; }
+        await put("journeys", r.payload);
+        await put("syncMeta", { id: `journey:${journeyId}`, fingerprint: rf, remoteVersion: r.updated_at });
+      }
+    }
+    return pending;
+  }
+
+  async function applyRemoteRecord(record, expectedLocalFingerprint, scope) {
+    assertSyncScope(scope);
     const deletedAt = record.deleted_at;
     let downloaded = null;
     if (!deletedAt) {
@@ -1346,6 +1358,7 @@
       downloaded = { animal, events, photos: storedPhotos, forecasts };
     }
     const currentBundle = await getLocalBundle(record.animal_id);
+    assertSyncScope(scope);
     const currentFingerprint = currentBundle ? bundleFingerprint(currentBundle) : null;
     if (currentFingerprint !== expectedLocalFingerprint) return false;
     const oldPhotos = state.photos.filter(photo => photo.animalId === record.animal_id);
@@ -1386,73 +1399,47 @@
     return true;
   }
 
-  async function removeUnusedRemotePhotos(animalId, retainedPaths) {
-    const bucket = cloud.storage.from("animal-photos");
-    const prefix = `${state.ranchOwnerId}/${animalId}`;
-    const removePaths = [];
-    for (let offset = 0; ; offset += 100) {
-      const { data, error } = await bucket.list(prefix, { limit: 100, offset });
-      if (error) throw error;
-      const files = data || [];
-      files.forEach(file => {
-        const path = `${prefix}/${file.name}`;
-        if (!retainedPaths.has(path)) removePaths.push(path);
-      });
-      if (files.length < 100) break;
-    }
-    if (removePaths.length) {
-      const { error } = await bucket.remove(removePaths);
-      if (error) throw error;
-    }
-  }
-
-  async function writeRemoteRecord(animalId, bundle) {
+  async function writeRemoteRecord(animalId, bundle, remoteRecord, scope) {
+    assertSyncScope(scope);
     const deletedAt = bundle.deletedAt || null;
-    const retainedPaths = new Set();
+    if (isRanchWorker() && (deletedAt || !remoteRecord)) throw new Error("Los trabajadores no pueden crear ni eliminar fichas.");
     let payload = null;
     if (!deletedAt) {
-      const photos = await Promise.all(bundle.photos.map(async photo => {
-        const storagePath = `${state.ranchOwnerId}/${animalId}/${photo.id}`;
-        if (!isRanchWorker()) {
-          const { error } = await cloud.storage.from("animal-photos").upload(storagePath, photo.blob, {
-            contentType: photo.mime,
-            upsert: true
-          });
-          if (error) throw error;
+      const existingPhotos = new Map((remoteRecord?.payload?.photos || []).map(p => [p.id, p]));
+      const photos = [];
+      for (const photo of bundle.photos) {
+        assertSyncScope(scope);
+        const storagePath = `${scope.ownerId}/${animalId}/${photo.id}`;
+        if (!existingPhotos.has(photo.id)) {
+          if (isRanchWorker()) throw new Error("No tienes permiso para subir fotografías.");
+          const { error } = await cloud.storage.from("animal-photos").upload(storagePath, photo.blob, { contentType: photo.mime, upsert: false });
+          // An earlier upload may have succeeded before its row write. Never
+          // overwrite an existing object; verify its bytes before reusing it.
+          if (error) {
+            if (!["409", "Duplicate"].includes(String(error.statusCode || error.code))) throw error;
+            const { data, error: readError } = await cloud.storage.from("animal-photos").download(storagePath);
+            if (readError) throw readError;
+            const expected = new Uint8Array(await photo.blob.arrayBuffer());
+            const actual = new Uint8Array(await data.arrayBuffer());
+            if (expected.length !== actual.length || !expected.every((byte, i) => byte === actual[i])) throw new Error("Conflicto de contenido de fotografía.");
+          }
         }
-        retainedPaths.add(storagePath);
-        return {
-          id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
-          primary: Boolean(photo.primary), createdAt: photo.createdAt,
-          cropX: photoCrop(photo).x, cropY: photoCrop(photo).y, storagePath
-        };
-      }));
-      payload = {
-        animal: bundle.animal,
-        events: bundle.events,
-        forecasts: bundle.forecasts || [],
-        photos
-      };
+        photos.push({ id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
+          primary: Boolean(photo.primary), createdAt: photo.createdAt, cropX: photoCrop(photo).x, cropY: photoCrop(photo).y, storagePath });
+      }
+      payload = { ...(remoteRecord?.payload || {}), animal: bundle.animal, events: bundle.events, forecasts: bundle.forecasts || [], photos };
     }
-    const saveQuery = isRanchWorker()
-      ? deletedAt
-        ? Promise.reject(new Error("Los trabajadores no pueden eliminar fichas de animales."))
-        : cloud.from("animal_sync_records")
-          .update({ payload })
-          .eq("owner_id", state.ranchOwnerId)
-          .eq("animal_id", animalId)
-          .select("modified_at")
-          .single()
-      : cloud.from("animal_sync_records").upsert({
-          owner_id: state.ranchOwnerId,
-          animal_id: animalId,
-          deleted_at: deletedAt,
-          payload
-        }, { onConflict: "owner_id,animal_id" }).select("modified_at").single();
-    const { data, error } = await saveQuery;
-    if (error) throw error;
-    if (!isRanchWorker()) await removeUnusedRemotePhotos(animalId, retainedPaths);
-    return data.modified_at;
+    assertSyncScope(scope);
+    const values = isRanchWorker() ? { payload } : { payload, deleted_at: deletedAt };
+    const query = remoteRecord
+      ? cloud.from("animal_sync_records").update(values).eq("owner_id", scope.ownerId).eq("animal_id", animalId).eq("modified_at", remoteRecord.modified_at)
+      : cloud.from("animal_sync_records").insert({ owner_id: scope.ownerId, animal_id: animalId, ...values });
+    const { data, error } = await query.select("modified_at").maybeSingle();
+    assertSyncScope(scope);
+    if (error && error.code !== "23505") throw error;
+    // Storage garbage collection is intentionally disabled. A different
+    // client can upload an object before committing its metadata.
+    return error || !data ? null : data.modified_at;
   }
 
   async function syncAnimalFieldConfig() {
@@ -1516,29 +1503,7 @@
       }
       let config = normalizeAnimalFieldConfig(local.config);
       if (remoteRevision !== local.baseRevision) {
-        const keepLocal = confirm(
-          "La configuración de campos cambió en otro dispositivo.\n\n" +
-          "Aceptar: conservar la configuración de este dispositivo.\n" +
-          "Cancelar: cargar la configuración del rancho."
-        );
-        if (!keepLocal) {
-          if (!remote) throw new Error("La configuración local tiene una revisión anterior y no existe una versión en la nube para restaurar.");
-          if (state.fieldSettingsDirty && !confirm(
-            "Hay cambios adicionales de configuración sin guardar.\n\n" +
-            "Aceptar: descartarlos y cargar la configuración del rancho.\n" +
-            "Cancelar: conservarlos en pantalla; el resto de los datos sí se sincronizará."
-          )) return "Configuración en la nube pendiente de cargar · se conservaron cambios locales sin guardar";
-          state.fieldSettingsDirty = false;
-          const downloaded = {
-            ...local, config: normalizeAnimalFieldConfig(remote.config), revision: remote.revision,
-            baseRevision: remote.revision, dirty: false, updatedAt: remote.updated_at
-          };
-          await put("ranchSettings", downloaded);
-          state.fieldConfigRecord = downloaded;
-          state.fieldConfig = downloaded.config;
-          renderAnimalSettings();
-          return "Configuración actualizada desde el rancho";
-        }
+        return "Configuración en conflicto · cambios locales conservados";
       }
       const { data, error } = await cloud.rpc("save_ranch_animal_config", {
         p_owner_id: state.ranchOwnerId,
@@ -1615,20 +1580,22 @@
     state.syncing = true;
     setSyncStatus("Sincronizando…");
     try {
+      const scope = { userId: currentUser.id, ownerId: state.ranchOwnerId, database: db };
+      assertSyncScope(scope);
       const fieldConfigStatus = await syncAnimalFieldConfig();
+      assertSyncScope(scope);
       const [animals, events, photos, forecasts, deletions, journeys] = await Promise.all([
         getAll("animals"), getAll("events"), getAll("photos"), getAll("growthForecasts"), getAll("deletedAnimals"), getAll("journeys")
       ]);
       const local = buildLocalBundles(animals, events, photos, forecasts, deletions);
-      const { data: remoteRecords, error } = await cloud.from("animal_sync_records")
-        .select("animal_id, modified_at, deleted_at, payload");
-      if (error) throw error;
+      const remoteRecords = await readSyncRows("animal_sync_records", "animal_id", "animal_id, modified_at, deleted_at, payload", scope);
       const remote = new Map((remoteRecords || []).map(record => [record.animal_id, record]));
       const animalIds = new Set([...local.keys(), ...remote.keys()]);
       let conflicts = 0;
       let pendingChanges = 0;
 
       for (const animalId of animalIds) {
+        assertSyncScope(scope);
         const localBundle = local.get(animalId);
         const remoteRecord = remote.get(animalId);
         if (!localBundle && !remoteRecord) continue;
@@ -1646,40 +1613,33 @@
         const remoteChanged = Boolean(remoteRecord && (!metadata || remoteRecord.modified_at !== metadata.remoteVersion));
 
         if (localBundle && remoteRecord && localChanged && remoteChanged) {
-          const label = localBundle.animal?.name || localBundle.animal?.tag || animalId;
-          const keepLocal = confirm(
-            `${localBundle.animal ? `El animal ${label}` : `La ficha del animal ${animalId} eliminada en este dispositivo`} también cambió en otro dispositivo.\n\n` +
-            "Aceptar: conservar los cambios de este dispositivo y reemplazar la versión en la nube.\n" +
-            "Cancelar: conservar la versión de la nube y reemplazar los cambios de este dispositivo."
-          );
-          if (keepLocal) {
-            const version = await writeRemoteRecord(animalId, localBundle);
-            await saveSyncMeta(animalId, localVersion, version, localFingerprint);
-          } else {
-            const applied = await applyRemoteRecord(remoteRecord, localFingerprint);
-            if (applied) await saveSyncMeta(animalId, cloudVersion, remoteRecord.modified_at, cloudFingerprint);
-            else pendingChanges++;
-          }
+          // Do not overwrite or discard either side. A later resolution UI can
+          // use a three-way merge; for now the safest result is a pending conflict.
           conflicts++;
+          continue;
         } else if (localBundle && (!remoteRecord || localChanged)) {
-          const version = await writeRemoteRecord(animalId, localBundle);
+          if (!remoteRecord && metadata) { conflicts++; continue; }
+          const version = await writeRemoteRecord(animalId, localBundle, remoteRecord, scope);
+          if (!version) { pendingChanges++; continue; }
           await saveSyncMeta(animalId, localVersion, version, localFingerprint);
         } else if (remoteRecord && (!localBundle || remoteChanged)) {
-          const applied = await applyRemoteRecord(remoteRecord, localFingerprint);
+          const applied = await applyRemoteRecord(remoteRecord, localFingerprint, scope);
           if (applied) await saveSyncMeta(animalId, cloudVersion, remoteRecord.modified_at, cloudFingerprint);
           else pendingChanges++;
         }
       }
-      await syncJourneys(journeys);
+      conflicts += await syncJourneys(journeys, scope);
+      assertSyncScope(scope);
       await refresh();
       if ($("#detail-dialog").open && state.currentAnimalId) {
         if (state.animals.some(animal => animal.id === state.currentAnimalId)) openDetail(state.currentAnimalId, true);
         else $("#detail-dialog").close();
       }
       if ($("#journey-dialog").open && state.currentJourneyId) renderJourneyDetail();
-      setSyncStatus(pendingChanges
-        ? `${pendingChanges} cambio(s) pendiente(s) · vuelve a sincronizar`
-        : fieldConfigStatus || (conflicts ? `Sincronizado · ${conflicts} conflicto(s) resuelto(s)` : "Sincronizado"));
+      setSyncStatus(conflicts || pendingChanges
+        ? `${conflicts} conflicto(s) · ${pendingChanges} cambio(s) pendiente(s) · datos locales conservados`
+        : fieldConfigStatus || "Sincronizado");
+      if (conflicts) showToast("Hay cambios simultáneos. No se reemplazó ninguna versión en conflicto; conserva los datos locales y solicita revisión.");
     } catch (error) {
       setSyncStatus("Error de sincronización");
       showToast(`No se pudo sincronizar: ${error.message}`);
