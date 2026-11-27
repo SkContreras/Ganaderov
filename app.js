@@ -4920,6 +4920,7 @@
           <div class="detail-crop-panel">
             <label>Horizontal <input type="range" min="0" max="100" value="${heroCrop.x}" data-photo-crop="x" data-photo-id="${escapeHtml(heroPhoto.id)}" aria-label="Posición horizontal de la foto"></label>
             <label>Vertical <input type="range" min="0" max="100" value="${heroCrop.y}" data-photo-crop="y" data-photo-id="${escapeHtml(heroPhoto.id)}" aria-label="Posición vertical de la foto"></label>
+            <label>Acercamiento <input type="range" min="1" max="3" step="0.1" value="${heroCrop.zoom}" data-photo-crop="zoom" data-photo-id="${escapeHtml(heroPhoto.id)}" aria-label="Acercamiento"></label>
             <p class="detail-crop-help" aria-live="polite">Ajusta la posición de la foto en el marco.</p>
             <button class="detail-crop-reset" type="button" data-reset-photo-crop="${escapeHtml(heroPhoto.id)}">Centrar encuadre</button>
           </div>
@@ -6120,7 +6121,7 @@
       if (target.dataset.primaryPhoto) { choosePrimary(target.dataset.primaryPhoto); return; }
       if (target.dataset.resetPhotoCrop) {
         const cropControls = $$(".detail-crop-panel input[data-photo-crop]");
-        cropControls.forEach(input => { input.value = "50"; });
+        cropControls.forEach(input => { input.value = input.dataset.photoCrop === "zoom" ? "1" : "50"; });
         const photoId = target.dataset.resetPhotoCrop;
         savePhotoCrop(photoId, 50, 50);
         return;
@@ -6146,7 +6147,7 @@
       const x = Number(panel.querySelector('[data-photo-crop="x"]').value);
       const y = Number(panel.querySelector('[data-photo-crop="y"]').value);
       const image = $(".detail-hero img");
-      if (image) image.style.objectPosition = `${x}% ${y}%`;
+      if (image) { image.style.objectPosition = `${x}% ${y}%`; image.style.transformOrigin = `${x}% ${y}%`; image.style.transform = `scale(${Number(panel.querySelector('[data-photo-crop="zoom"]').value)})`; }
     });
     document.addEventListener("change", event => {
       if (event.target.matches("[data-show-detail-empty]")) {
@@ -6182,7 +6183,8 @@
         savePhotoCrop(
           event.target.dataset.photoId,
           Number(panel.querySelector('[data-photo-crop="x"]').value),
-          Number(panel.querySelector('[data-photo-crop="y"]').value)
+          Number(panel.querySelector('[data-photo-crop="y"]').value),
+          Number(panel.querySelector('[data-photo-crop="zoom"]').value)
         );
       }
       if (event.target.id === "animal-tag") event.target.setCustomValidity("");
