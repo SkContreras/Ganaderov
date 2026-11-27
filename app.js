@@ -1229,6 +1229,7 @@
       fingerprint.cropX = crop.x;
       fingerprint.cropY = crop.y;
     }
+    if(crop.zoom!==1)fingerprint.cropZoom=crop.zoom;
     return fingerprint;
   }
 
@@ -1489,7 +1490,7 @@
           }
         }
         photos.push({ id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
-          primary: Boolean(photo.primary), createdAt: photo.createdAt, cropX: photoCrop(photo).x, cropY: photoCrop(photo).y, storagePath });
+          primary: Boolean(photo.primary), createdAt: photo.createdAt, cropX: photoCrop(photo).x, cropY: photoCrop(photo).y, cropZoom: photoCrop(photo).zoom, storagePath });
       }
       payload = { ...(remoteRecord?.payload || {}), animal: bundle.animal, events: bundle.events, forecasts: bundle.forecasts || [], photos };
     }
@@ -2035,7 +2036,7 @@
   }
   function photoCrop(photo) {
     const coordinate = value => Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Number(value))) : 50;
-    return { x: coordinate(photo?.cropX), y: coordinate(photo?.cropY) };
+    return { x: coordinate(photo?.cropX), y: coordinate(photo?.cropY), zoom: Math.max(1,Math.min(3,Number(photo?.cropZoom)||1)) };
   }
   function updatePhotoCropControls() {
     const image = $(".detail-hero img");
@@ -4886,7 +4887,7 @@
     const heroPhoto = photos.find(photo => photo.primary) || photos[0];
     const heroCrop = photoCrop(heroPhoto);
     const heroImage = heroPhoto
-      ? `<img src="${photoUrl(heroPhoto)}" alt="Fotografía principal de ${escapeHtml(animal.name || animal.tag || "animal")}" data-view-photo="${escapeHtml(heroPhoto.id)}" style="object-position: ${heroCrop.x}% ${heroCrop.y}%;">`
+      ? `<img src="${photoUrl(heroPhoto)}" alt="Fotografía principal de ${escapeHtml(animal.name || animal.tag || "animal")}" data-view-photo="${escapeHtml(heroPhoto.id)}" style="object-position: ${heroCrop.x}% ${heroCrop.y}%; transform: scale(${heroCrop.zoom}); transform-origin: ${heroCrop.x}% ${heroCrop.y}%;">`
       : `<div class="detail-hero-placeholder">${icon("inventory")}</div>`;
     const sexIcon = animal.sex === "Hembra" ? icon("female") : animal.sex === "Macho" ? icon("male") : "";
     const manager = canManageRanch();
@@ -5153,12 +5154,23 @@
     }
   }
 
+  async function photoPresentationRevision(photo){
+    const scope=outboxScope();
+    const {data,error}=await cloud.rpc("sync_read_entity",{p_owner:scope.ownerId,p_kind:"photo",p_id:photo.id});
+    assertSyncScope(scope);
+    if(error)throw error;
+    if(!Number.isSafeInteger(data?.revision)||data.parentId!==photo.animalId||JSON.stringify(stableValue(photoFingerprint(data.data)))!==JSON.stringify(stableValue(photoFingerprint(photo))))throw Error("La fotografía cambió; actualiza la ficha.");
+    return data.revision;
+  }
   async function choosePrimary(photoId) {
     if (!canManageRanch()) return;
     const photo = state.photos.find(item => item.id === photoId);
     if (!photo) return;
     const related = state.photos.filter(item => item.animalId === photo.animalId);
     try {
+      if(eventOutboxEnabled()){
+        await queueForecastOperation("photo.primary",photo.id,{animalId:photo.animalId,previousPrimaryId:related.find(p=>p.primary)?.id??null},await photoPresentationRevision(photo));showToast("Fotografía principal en cola.");return;
+      }
       await transaction(["photos"], "readwrite", tx => {
         const store = tx.objectStore("photos");
         related.forEach(item => store.put({ ...item, primary: item.id === photoId }));
@@ -5171,12 +5183,16 @@
     }
   }
 
-  async function savePhotoCrop(photoId, x, y) {
+  async function savePhotoCrop(photoId, x, y, zoom=1) {
     if (!canManageRanch()) return;
     const photo = state.photos.find(item => item.id === photoId);
     if (!photo) return;
     try {
-      await put("photos", { ...photo, cropX: x, cropY: y });
+      if(![x,y,zoom].every(Number.isFinite)||x<0||x>100||y<0||y>100||zoom<1||zoom>3)throw Error("Encuadre inválido.");
+      if(eventOutboxEnabled()){
+        await queueForecastOperation("photo.crop",photo.id,{animalId:photo.animalId,cropX:x,cropY:y,cropZoom:zoom},await photoPresentationRevision(photo));showToast("Encuadre en cola.");return;
+      }
+      await put("photos", { ...photo, cropX: x, cropY: y,cropZoom:zoom });
       await touchAnimal(photo.animalId);
       await refresh();
       openDetail(photo.animalId, true);
@@ -5192,6 +5208,7 @@
     const photo = state.photos.find(item => item.id === photoId);
     if (!photo || !confirm("¿Está seguro de que desea eliminar esta fotografía?")) return;
     try {
+      if(eventOutboxEnabled()){await queueForecastOperation("photo.delete",photo.id,{animalId:photo.animalId},await photoPresentationRevision(photo));showToast("Eliminación en cola.");return;}
       await remove("photos", photoId);
       const remaining = state.photos.filter(item => item.animalId === photo.animalId && item.id !== photoId);
       if (photo.primary && remaining.length) await put("photos", { ...remaining[0], primary: true });
@@ -5368,7 +5385,7 @@
       };
       payload.photos = await Promise.all(state.photos.map(async photo => ({
         id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
-        primary: photo.primary, cropX: photoCrop(photo).x, cropY: photoCrop(photo).y,
+        primary: photo.primary, cropX: photoCrop(photo).x, cropY: photoCrop(photo).y, cropZoom: photoCrop(photo).zoom,
         createdAt: photo.createdAt, data: await blobToDataUrl(photo.blob)
       })));
       const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
@@ -5448,7 +5465,7 @@
         const blob = await response.blob();
         return {
           id: item.id, animalId: item.animalId, name: item.name, mime: item.mime,
-          primary: Boolean(item.primary), cropX: photoCrop(item).x, cropY: photoCrop(item).y,
+          primary: Boolean(item.primary), cropX: photoCrop(item).x, cropY: photoCrop(item).y, cropZoom: photoCrop(item).zoom,
           createdAt: item.createdAt, blob
         };
       }));

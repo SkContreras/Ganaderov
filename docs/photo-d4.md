@@ -1,0 +1,2 @@
+# D4
+20 actions. Non-destructive crop position 0–100, zoom 1–3. Primary compare-and-set includes previous primary ID to prevent two different selected photos silently overwriting one another. Server revision and parent verified; original object untouched. Web primary/crop/delete RPC when event flag enabled; legacy upload still exists. No production migration.
