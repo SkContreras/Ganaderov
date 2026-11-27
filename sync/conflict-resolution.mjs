@@ -10,8 +10,9 @@ export function resolutionFields(operation,remote){
  const c=operation.changes;
  if(operation.action==="animal.update")return Object.keys(c.fields).map(key=>({key,local:c.fields[key],remote:remote.data[key]}));
  if(operation.action==="event.update"){
-  if(remote.parentId!==c.animalId||remote.data.type!=="weight"||remote.data.journeyId)throw Error("Evento incompatible");
-  return [{key:"weight",local:c.weight,remote:remote.data.weight}];
+  if(remote.parentId!==c.animalId||remote.data.journeyId||Object.hasOwn(c,"weight")&&remote.data.type!=="weight")throw Error("Evento incompatible");
+  return ["date","product","notes","weight"].filter(key=>Object.hasOwn(c,key))
+   .map(key=>({key,local:c[key],remote:remote.data[key==="product"?"label":key]}));
  }
  if(operation.action==="config.update")return [{key:"config",local:c.config,remote:remote.data}];
  throw Error("Esta acción debe revisarse desde su formulario original");
@@ -20,6 +21,8 @@ export function replacement(operation,reviewed,current,selected,newId,capturedAt
  if(!same(reviewed,current))throw Error("La entidad volvió a cambiar. Revisa de nuevo.");
  const fields=resolutionFields(operation,current);
  if(!selected.length||new Set(selected).size!==selected.length||selected.some(k=>!fields.some(f=>f.key===k)))throw Error("Selección inválida");
- const changes=operation.action==="animal.update"?{fields:Object.fromEntries(fields.filter(f=>selected.includes(f.key)).map(f=>[f.key,f.local]))}:structuredClone(operation.changes);
+ const chosen=Object.fromEntries(fields.filter(f=>selected.includes(f.key)).map(f=>[f.key,f.local]));
+ const changes=operation.action==="animal.update"?{fields:chosen}:
+  operation.action==="event.update"?{animalId:operation.changes.animalId,...(operation.changes.reason?{reason:operation.changes.reason}:{}),...chosen}:structuredClone(operation.changes);
  return {...operation,operationId:newId,capturedAt,baseRevision:current.revision,changes};
 }

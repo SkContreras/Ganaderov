@@ -53,6 +53,8 @@ Las estimaciones de peso y rentabilidad son escenarios matemáticos con datos de
 
 El encuadre conserva la fotografía original y permite elegir la principal, ajustar posición y acercamiento, previsualizar y guardar explícitamente. La ruta RPC guarda cambios pendientes sin conexión después de sincronizar la foto una vez; mantiene una operación de fotografía por animal hasta su confirmación o revisión. Consulta [D4: fotografías, encuadre y trabajo offline](./docs/photo-d4.md) para configuración, límites y pruebas.
 
+La [ampliación de la sincronización universal](./docs/universal-completion.md) incorpora altas y cambios de animales, actividades independientes, configuración completa, fotografías originales y jornadas con dependencias duraderas. Incluye recuperación revisada de capturas anteriores, eliminación de estimaciones y entrega en segundo plano con autorización limitada. Su activación requiere el backend compatible y los flags correspondientes; publicar el código no instala las migraciones ni activa estos servicios en producción.
+
 ## Interfaz
 
 La interfaz está diseñada alrededor de cuatro áreas: inventario, jornadas, análisis y configuración. Usa iconografía SVG, estados textuales y una identidad visual inspirada en el campo.
@@ -95,7 +97,7 @@ flowchart TD
 1. Las operaciones se registran localmente en IndexedDB.
 2. Al existir conexión y sesión autorizada, la aplicación sincroniza los registros con Supabase.
 3. Las políticas de acceso del servidor limitan las operaciones según la membresía y el rol.
-4. Si la misma ficha cambió en ambos lados, la aplicación solicita elegir la versión que se conservará. La resolución reemplaza la ficha completa.
+4. En la ruta universal, cada cambio conserva su UUID, revisión y recibo. Un conflicto requiere revisión explícita de los valores seleccionados; los cambios anteriores se recuperan desde una copia conservada. La ruta legada conserva su resolución por ficha completa mientras no se active la universal.
 5. El service worker almacena los recursos necesarios para volver a abrir la aplicación offline tras una primera visita en línea. Las URL de autenticación con parámetros no se incorporan a la caché.
 
 La autenticación inicial, la aprobación de solicitudes y la sincronización requieren conexión. Los datos locales no equivalen a un respaldo remoto.

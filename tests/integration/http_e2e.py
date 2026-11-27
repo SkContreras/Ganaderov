@@ -2,8 +2,9 @@
 """Real Supabase Auth + PostgREST + Storage verification; disposable targets only.
 
 No SQL, SDK mocks, production endpoint, invitation emails, or paid provisioning.
-Admin credentials provision/remove only generated Auth users. Every product RPC,
-table read and Storage operation runs with a real password-login user JWT.
+Admin credentials provision/remove only generated Auth users. Product requests
+use real password-login JWTs or the restricted, revocable background capability.
+The photo gateway alone uses its server-side Storage credential.
 """
 from __future__ import annotations
 
@@ -99,6 +100,16 @@ class Api:
 
     def rpc(self, account, name, arguments):
         return self.json("POST", "/rest/v1/rpc/" + name, payload=arguments, token=account["token"])
+
+    def background_photo(self, capability, operation, content, mime="image/png"):
+        boundary = "ganaderov-" + secrets.token_hex(16)
+        parts = []
+        for name, value in (("capability", capability), ("operation", json.dumps(operation, separators=(",", ":")))):
+            parts.append(("--" + boundary + '\r\nContent-Disposition: form-data; name="' + name + '"\r\n\r\n' + value + "\r\n").encode())
+        parts.append(("--" + boundary + '\r\nContent-Disposition: form-data; name="file"; filename="original.png"\r\nContent-Type: ' + mime + "\r\n\r\n").encode())
+        parts.extend((content, ("\r\n--" + boundary + "--\r\n").encode()))
+        return self.request("POST", "/functions/v1/sync-background-photo", raw=b"".join(parts),
+                            headers={"Content-Type": "multipart/form-data; boundary=" + boundary})
 
 
 def png_fixture():
@@ -287,6 +298,136 @@ class Suite:
             status, _, data = self.api.request("GET", "/storage/v1/object/authenticated/animal-photos/" + photo["storagePath"], token=owner["token"])
             check(status == 200 and hashlib.sha256(data).hexdigest() == photo["sha256"], "Metadata edit/delete changed original file bytes")
 
+    def universal_completion(self):
+        actor = self.accounts["ownerB"]
+        animal, event = str(uuid.uuid4()), str(uuid.uuid4())
+        self.send(actor, "animal.create", animal, {"fields": {"tag": "completion-" + self.run_id}}, owner=actor["id"])
+        snapshot = self.read(actor, "animal", animal, actor["id"])
+        check(re.fullmatch(r"ANM-\d{5,}", snapshot["data"].get("internalId", "")), "Server did not assign internal ID")
+        self.send(actor, "event.create", event, {"animalId": animal, "type": "note", "date": str(self.today), "notes": "Initial"},
+                  owner=actor["id"])
+        self.send(actor, "event.update", event, {"animalId": animal, "notes": "Corrected", "date": str(self.today - dt.timedelta(days=1)),
+                                               "reason": "Correct the recorded observation"}, 1, owner=actor["id"])
+        note = self.read(actor, "event", event, actor["id"])
+        check(note["data"]["notes"] == "Corrected" and note["data"]["type"] == "note"
+              and note["data"]["updatedBy"]["authUserId"] == actor["id"], "Extended event editor did not preserve authenticated provenance")
+        self.send(actor, "event.update", event, {"animalId": animal, "notes": "No reason"}, 2, owner=actor["id"],
+                  expected="rejected", code="INVALID_REQUEST")
+        config = {"schemaVersion": 1, "modules": {}, "fields": {}, "layout": {}}
+        self.send(actor, "config.update", actor["id"], {"config": config}, 0, owner=actor["id"])
+        batch = self.api.rpc(actor, "sync_read_entities", {"p_owner": actor["id"], "p_entities": [
+            {"kind": "animal", "id": animal}, {"kind": "event", "id": event}, {"kind": "config", "id": actor["id"]}]})
+        check([row["revision"] for row in batch] == [1, 2, 1], "Batch revisions are not independent entity versions")
+        check(batch[1]["data"] == note["data"], "Batch snapshot differs from canonical entity")
+        status, _, _ = self.api.request("POST", "/rest/v1/rpc/sync_read_entities", token=self.accounts["ownerA"]["token"],
+                                       payload={"p_owner": actor["id"], "p_entities": [{"kind": "animal", "id": animal}]})
+        check(status in (401, 403), "Batch revision prefetch leaked another ranch")
+        self.background_animal = animal
+
+    def background_capabilities(self):
+        actor, device = self.accounts["ownerB"], str(uuid.uuid4())
+        issue = lambda: self.api.rpc(actor, "sync_issue_background_capability",
+                                     {"p_owner": actor["id"], "p_device": device, "p_ttl_seconds": 3600})
+        cap = issue()
+        check(re.fullmatch(r"[0-9a-f]{64}", cap["capability"]) and cap["actorId"] == actor["id"]
+              and cap["ownerId"] == actor["id"] and cap["deviceId"] == device and len(cap["allowedActions"]) == 20,
+              "Background issuance returned an invalid scope")
+        issued = dt.datetime.fromisoformat(cap["issuedAt"].replace("Z", "+00:00"))
+        expires = dt.datetime.fromisoformat(cap["expiresAt"].replace("Z", "+00:00"))
+        check(0 < (expires - issued).total_seconds() <= 3600, "Background delegation exceeded requested TTL")
+        operation = self.operation(actor, "animal.create", str(uuid.uuid4()), {"fields": {"tag": "background-" + self.run_id}}, owner=actor["id"])
+        operation["deviceId"] = device
+        deliver = lambda token, op: self.api.request("POST", "/rest/v1/rpc/sync_apply_background_operation",
+                                                    payload={"p_capability": token, "p_operation": op})
+        status, _, _ = deliver("0" * 64, operation)
+        check(status == 401, "Invalid background capability was accepted")
+        for changed in ({**operation, "ownerId": self.accounts["ownerA"]["id"]}, {**operation, "deviceId": str(uuid.uuid4())}):
+            status, _, _ = deliver(cap["capability"], changed)
+            check(status == 403, "Background scope was transferable to another ranch or device")
+        status, receipt, _ = deliver(cap["capability"], operation)
+        check(status == 200 and receipt["status"] == "applied", "Anonymous capability delivery did not apply")
+        status, duplicate, _ = deliver(cap["capability"], operation)
+        check(status == 200 and duplicate == {**receipt, "status": "duplicate"}, "Capability retry changed the immutable receipt")
+        status, reused, _ = deliver(cap["capability"], {**operation, "changes": {"fields": {"tag": "different"}}})
+        check(status == 200 and reused["status"] == "conflict" and reused["code"] == "OPERATION_ID_REUSED", "Capability accepted changed request under the same UUID")
+        applied = self.read(actor, "animal", operation["entityId"], actor["id"])
+        check(applied["data"]["createdBy"]["authUserId"] == actor["id"], "Background delivery forged/lost the actor")
+        # Independent concurrent HTTP requests exercise the server's ranch ID allocator.
+        operations = [self.operation(actor, "animal.create", str(uuid.uuid4()), {"fields": {"tag": "concurrent-" + str(i) + "-" + self.run_id}}, owner=actor["id"]) for i in range(2)]
+        for op in operations:
+            op["deviceId"] = device
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda op: deliver(cap["capability"], op), operations))
+        check(all(status == 200 and result["status"] == "applied" for status, result, _ in results), "Concurrent background creates failed")
+        ids = [self.read(actor, "animal", op["entityId"], actor["id"])["data"]["internalId"] for op in operations]
+        check(len(set(ids)) == 2, "Concurrent server internal IDs collided")
+        status, _, _ = self.api.request("POST", "/rest/v1/rpc/sync_issue_background_capability", token=actor["token"],
+                                       payload={"p_owner": actor["id"], "p_device": device, "p_ttl_seconds": 21601})
+        check(status == 400, "Oversized capability lifetime accepted")
+        # Rotation revokes the old token without exposing either token in reports.
+        renewed = issue()
+        status, body, _ = deliver(cap["capability"], operation)
+        check(status == 401 and body.get("message") == "BACKGROUND_REVOKED", "Capability rotation did not revoke the old token")
+        self.api.rpc(actor, "sync_revoke_background_capability", {"p_capability_id": renewed["capabilityId"]})
+        status, _, _ = deliver(renewed["capability"], operation)
+        check(status == 401, "Authenticated capability revocation failed")
+        renewed = issue()
+        self.api.json("POST", "/rest/v1/rpc/sync_revoke_background_token", payload={"p_capability": renewed["capability"]})
+        status, _, _ = deliver(renewed["capability"], operation)
+        check(status == 401, "Offline-logout token revocation failed")
+        self.background_capability = issue()
+        self.background_device = device
+        # Preserve an active worker token to verify current membership after revocation.
+        worker = self.accounts["worker"]
+        self.worker_background = self.api.rpc(worker, "sync_issue_background_capability",
+                                              {"p_owner": self.accounts["ownerA"]["id"], "p_device": str(uuid.uuid4())})
+        forbidden = self.operation(worker, "animal.create", str(uuid.uuid4()), {"fields": {"tag": "forbidden"}})
+        forbidden["deviceId"] = self.worker_background["deviceId"]
+        status, _, _ = deliver(self.worker_background["capability"], forbidden)
+        check(status == 403, "Worker capability escalated to manager actions")
+
+    def background_uploads(self):
+        actor, cap = self.accounts["ownerB"], self.background_capability
+        photo = str(uuid.uuid4())
+        operation = self.operation(actor, "photo.create", photo,
+                                   {"animalId": self.background_animal, "name": "background.png", "mime": "image/png"}, owner=actor["id"])
+        operation["deviceId"] = cap["deviceId"]
+        path = actor["id"] + "/" + self.background_animal + "/" + photo
+        self.uploads.append(path)  # Retain cleanup ownership even after a partial success.
+        status, receipt, _ = self.api.background_photo(cap["capability"], operation, self.original)
+        check(status == 200 and receipt.get("status") == "applied", f"Background photo gateway failed: HTTP {status}, code={receipt.get('code') if isinstance(receipt,dict) else None}")
+        status, duplicate, _ = self.api.background_photo(cap["capability"], operation, self.original)
+        check(status == 200 and duplicate == {**receipt, "status": "duplicate"}, "Background photo retry did not preserve its receipt")
+        status, changed, _ = self.api.background_photo(cap["capability"], operation, self.original + b"changed")
+        check(status == 200 and changed.get("status") == "conflict" and changed.get("code") == "BACKGROUND_UPLOAD_CONFLICT", "Same photo operation accepted different bytes")
+        status, _, body = self.api.request("GET", "/storage/v1/object/authenticated/animal-photos/" + path, token=actor["token"])
+        check(status == 200 and body == self.original, "Gateway overwrote original bytes")
+        status, _, _ = self.api.background_photo(cap["capability"], operation, b"not an image")
+        check(status == 400, "Gateway accepted non-image bytes")
+        status, _, _ = self.api.background_photo(cap["capability"], operation, self.original + b"x" * (10 * 1024 * 1024))
+        check(status in (400, 413), "Gateway accepted an oversized image")
+        invalid_path = {**operation, "operationId": str(uuid.uuid4()), "entityId": "../escape"}
+        status, _, _ = self.api.background_photo(cap["capability"], invalid_path, self.original)
+        check(status == 400, "Gateway accepted a noncanonical Storage path")
+        # A preexisting object is never overwritten even before metadata exists.
+        collision_photo = str(uuid.uuid4())
+        collision = self.operation(actor, "photo.create", collision_photo,
+                                   {"animalId": self.background_animal, "name": "collision.png", "mime": "image/png"}, owner=actor["id"])
+        collision["deviceId"] = cap["deviceId"]
+        collision_path = actor["id"] + "/" + self.background_animal + "/" + collision_photo
+        self.uploads.append(collision_path)
+        self.api.json("POST", "/storage/v1/object/animal-photos/" + collision_path, token=actor["token"],
+                      raw=self.original + b"existing", headers={"Content-Type": "image/png", "x-upsert": "false"})
+        status, result, _ = self.api.background_photo(cap["capability"], collision, self.original)
+        check(status == 200 and result.get("status") == "conflict" and result.get("code") == "PHOTO_BYTES_CONFLICT",
+              "Gateway failed to reject a conflicting original object")
+        check(self.read(actor, "photo", collision_photo, actor["id"])["data"] is None, "Conflicting upload wrote metadata")
+        # A live Auth session is required even while the delegated token is fresh.
+        self.api.json("POST", "/auth/v1/logout?scope=local", token=actor["token"])
+        status, body, _ = self.api.request("POST", "/rest/v1/rpc/sync_apply_background_operation",
+                                         payload={"p_capability": cap["capability"], "p_operation": operation})
+        check(status == 401 and body.get("message") == "BACKGROUND_SESSION_ENDED", "Logged-out session retained delegated authorization")
+
     def revocation(self):
         owner, worker = self.accounts["ownerA"], self.accounts["worker"]
         animal = self.entities["ownerA"]["animals"]["forecast"]
@@ -297,6 +438,12 @@ class Suite:
         photo = self.entities["ownerA"]["browserPhotos"][0]
         status, _, _ = self.api.request("GET", "/storage/v1/object/authenticated/animal-photos/" + photo["storagePath"], token=worker["token"])
         check(status >= 400, "Revoked worker retained Storage access through an old JWT")
+        if hasattr(self, "worker_background"):
+            queued["deviceId"] = self.worker_background["deviceId"]
+            status, body, _ = self.api.request("POST", "/rest/v1/rpc/sync_apply_background_operation",
+                                             payload={"p_capability": self.worker_background["capability"], "p_operation": queued})
+            check(status == 403 and body.get("message") == "BACKGROUND_MEMBERSHIP_REQUIRED",
+                  "Background capability retained revoked ranch membership")
 
     def save_fixtures(self):
         accounts = {role: {k: v for k, v in user.items() if k != "token"} for role, user in self.accounts.items()}
@@ -309,9 +456,11 @@ class Suite:
 
     def cleanup(self):
         # Actual Storage API, never SQL deletion or disabled protection. Only this run's paths.
-        owner = self.accounts.get("ownerA", {})
-        if self.uploads and owner.get("token"):
-            self.api.json("DELETE", "/storage/v1/object/animal-photos", payload={"prefixes": self.uploads}, token=owner["token"])
+        for role in ("ownerA", "ownerB"):
+            owner = self.accounts.get(role, {})
+            paths = [path for path in self.uploads if path.startswith(owner.get("id", "") + "/")]
+            if paths and owner.get("token"):
+                self.api.json("DELETE", "/storage/v1/object/animal-photos", payload={"prefixes": paths}, token=owner["token"])
         for actor in reversed(list(self.accounts.values())):
             if actor.get("token"):
                 self.api.request("POST", "/auth/v1/logout", token=actor["token"])
@@ -324,6 +473,9 @@ class Suite:
             self.case("D2: server forecast calculation, frozen evaluation, stale deletion and target CAS", self.forecasts)
             self.case("D3: custom permissions, concurrent attendance, additions, incomplete/resume/finish", self.journeys)
             self.case("D4: uploaded original, HTTP primary CAS, replay, stale/deleted target and bytes", self.photos)
+            self.case("Universal completion: event corrections, config CAS, server IDs and batch revisions", self.universal_completion)
+            self.case("Background: scoped anonymous delivery, immutable retries, TTL and revocation", self.background_capabilities)
+            self.case("Background: real photo gateway, original integrity, retry and ended Auth session", self.background_uploads)
             self.case("Offline authorization: revoked membership with the original Auth JWT", self.revocation)
             if keep:
                 self.save_fixtures()

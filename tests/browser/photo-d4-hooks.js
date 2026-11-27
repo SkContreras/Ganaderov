@@ -19,6 +19,7 @@ window.__d4 = {
     clearTimeout(state.syncTimer);
     state.syncRequested=false;
     state.ranchContext=coldStart?null:{status:'active',role,owner_id:ownerId,display_name:'D4 synthetic'};
+    if(!coldStart)setRanchContext(state.ranchContext,true);
     if(coldStart)clearPrivateView();
     db=await openDatabase(coldStart?DB_NAME:localScopeName(ownerId,userId));
     await (await protectedModule()).migrateProtected(db,protectedStores,()=>{});

@@ -22,7 +22,7 @@ const tests = [], network = [], blocked = [], pageErrors = [];
 const pendingResponses = new Set();
 let fixture, server, browser, origin, apiOrigin, sourceSha256, sdkSha256, offline = false;
 let page, context, secrets = [], phase = 'startup';
-let cropOperation, primaryOperation, forecastOperation, journeyId, firstPhoto, secondPhoto;
+let cropOperation, primaryOperation, forecastOperation, journeyId, firstPhoto, secondPhoto, newAnimalId;
 
 function safe(value) {
   let text = typeof value === 'string' ? value : JSON.stringify(value);
@@ -159,7 +159,8 @@ function observe(ctx) {
     p.on('pageerror', error => pageErrors.push({phase, error: safe(error.message)}));
     p.on('dialog', async dialog => {
       // Only the user-facing confirmation for our own incomplete test journey.
-      if (dialog.type() === 'confirm' && /animal.*pendiente|animales pendientes/.test(dialog.message())) await dialog.accept();
+      if (dialog.type() === 'confirm' && /animal.*pendiente|animales pendientes|Eliminar este registro|Eliminar esta estimación/.test(dialog.message())) await dialog.accept();
+      else if (dialog.type() === 'prompt' && /^Motivo de la eliminación/.test(dialog.message())) await dialog.accept('Corrección de una captura de prueba');
       else await dialog.dismiss();
     });
   });
@@ -332,6 +333,88 @@ async function main() {
   // D2/D3 UI is optional; the HTTP suite already covers both protocols.
   if (process.env.GANADEROV_BROWSER_EXTENDED === '1') {
     await page.locator('#detail-dialog [data-close="detail-dialog"]').click();
+    await check('Universal UI creates an offline animal with initial note and original photograph', async () => {
+      const previous=await snap(page),tag='web-offline-'+fixture.runId;
+      await context.setOffline(true);offline=true;
+      await page.locator('#add-animal-button').click();
+      await page.locator('#animal-tag').fill(tag);await page.locator('#animal-name').fill('Animal offline UI');
+      await page.locator('#animal-sex').selectOption('Hembra');
+      await page.locator('#initial-observation').fill('Observación capturada con el alta offline');
+      const original=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=','base64');
+      await page.locator('#initial-photos').setInputFiles({name:'offline-original.png',mimeType:'image/png',buffer:original});
+      await page.locator('#animal-save').click();
+      const pending=await until(page,`state.outbox.some(op=>op.action==='animal.create'&&op.changes.fields.tag===${JSON.stringify(tag)})`);
+      const create=pending.outbox.find(op=>op.action==='animal.create'&&op.changes.fields.tag===tag);newAnimalId=create.entityId;
+      const children=pending.outbox.filter(op=>op.changes.animalId===newAnimalId);
+      assert.equal(children.length,2);assert(children.every(op=>op.dependsOn.includes(create.id)));
+      assert.equal(pending.animals.length,previous.animals.length);assert(pending.displayAnimals.some(animal=>animal.id===newAnimalId&&animal._pending));
+      await page.reload({waitUntil:'domcontentloaded'});
+      const restored=await until(page,`state.ready&&state.ranchContextOffline&&state.displayAnimals.some(animal=>animal.id===${JSON.stringify(newAnimalId)})`);
+      assert(restored.outbox.some(op=>op.id===create.id));
+      offline=false;await context.setOffline(false);await page.locator('#sync-button').click();
+      await confirmed(page,create.id);
+      for(const child of children)await confirmed(page,child.id,child.action==='photo.create');
+      const after=await until(page,`state.animals.some(animal=>animal.id===${JSON.stringify(newAnimalId)})&&state.allEventIds.some(event=>event.animalId===${JSON.stringify(newAnimalId)})`);
+      assert.match(after.animals.find(animal=>animal.id===newAnimalId).internalId,/^ANM-\d{5,}$/);
+      const originals=await page.evaluate(id=>window.__ganaderovIntegration.originals(id),newAnimalId);
+      assert.equal(originals.originals[0].sha256,crypto.createHash('sha256').update(original).digest('hex'));
+      return {animalId:newAnimalId,operationId:create.id,children:children.map(child=>({id:child.id,action:child.action})),originalBytesPreserved:true};
+    });
+    await check('Universal history UI creates, corrects with a reason and deletes an independent note',async()=>{
+      await showAnimal(page);await page.locator('[data-add-record="note"]').click();
+      const text='Observación UI '+fixture.runId;
+      await page.locator('#record-fields [name="notes"]').fill(text);await page.locator('#record-form button[type="submit"]').click();
+      const queued=await until(page,`state.outbox.some(op=>op.action==='event.create'&&op.changes.notes===${JSON.stringify(text)})`);
+      const create=queued.outbox.find(op=>op.action==='event.create'&&op.changes.notes===text);await confirmed(page,create.id);
+      await until(page,`state.events.some(event=>event.id===${JSON.stringify(create.entityId)})`);
+      await page.locator(`[data-edit-event="${create.entityId}"]`).click();
+      await page.locator('#record-fields [name="notes"]').fill(text+' corregida');
+      await page.locator('#record-fields [name="reason"]').fill('Corregir la observación capturada');
+      await page.locator('#record-form button[type="submit"]').click();
+      const updated=await until(page,`state.outbox.some(op=>op.action==='event.update'&&op.entityId===${JSON.stringify(create.entityId)})`);
+      const update=updated.outbox.find(op=>op.action==='event.update'&&op.entityId===create.entityId);await confirmed(page,update.id);
+      const after=await until(page,`state.events.some(event=>event.id===${JSON.stringify(create.entityId)}&&event.notes===${JSON.stringify(text+' corregida')})`);
+      assert.equal(after.events.find(event=>event.id===create.entityId).type,'note');
+      await page.locator(`[data-delete-event="${create.entityId}"]`).click();
+      const deleted=await until(page,`state.outbox.some(op=>op.action==='event.delete'&&op.entityId===${JSON.stringify(create.entityId)})`);
+      const remove=deleted.outbox.find(op=>op.action==='event.delete'&&op.entityId===create.entityId);await confirmed(page,remove.id);
+      await until(page,`!state.events.some(event=>event.id===${JSON.stringify(create.entityId)})`);
+      return {eventId:create.entityId,create:create.id,update:update.id,delete:remove.id,reasonRequired:true,typePreserved:true};
+    });
+    await check('Universal animal editor, archive and restore keep the canonical revision chain',async()=>{
+      await showAnimal(page);await page.locator(`[data-edit-animal="${animalId()}"]`).click();
+      const name='Ficha editada UI '+fixture.runId;await page.locator('#animal-name').fill(name);await page.locator('#animal-save').click();
+      let state=await until(page,`state.outbox.some(op=>op.action==='animal.update'&&op.entityId===${JSON.stringify(animalId())})`);
+      const edit=state.outbox.find(op=>op.action==='animal.update'&&op.entityId===animalId());await confirmed(page,edit.id);
+      await until(page,`state.animals.some(animal=>animal.id===${JSON.stringify(animalId())}&&animal.name===${JSON.stringify(name)})`);
+      await page.locator(`[data-deactivate-animal="${animalId()}"]`).click();
+      let dialog=page.getByRole('dialog').filter({has:page.getByRole('heading',{name:'Archivar animal',exact:true})});
+      await dialog.locator('select').selectOption('Vendido');await dialog.getByRole('button',{name:'Confirmar',exact:true}).click();
+      state=await until(page,`state.outbox.some(op=>op.action==='animal.archive'&&op.entityId===${JSON.stringify(animalId())})`);
+      const archive=state.outbox.find(op=>op.action==='animal.archive'&&op.entityId===animalId());await confirmed(page,archive.id);
+      await until(page,`state.animals.some(animal=>animal.id===${JSON.stringify(animalId())}&&animal.status==='Vendido')`);
+      await page.locator('#archive-toggle').click();await showAnimal(page);
+      await page.locator(`[data-reactivate-animal="${animalId()}"]`).click();
+      dialog=page.getByRole('dialog').filter({has:page.getByRole('heading',{name:'Restaurar animal',exact:true})});
+      await dialog.locator('select').selectOption('Activo');await dialog.getByRole('button',{name:'Confirmar',exact:true}).click();
+      state=await until(page,`state.outbox.some(op=>op.action==='animal.restore'&&op.entityId===${JSON.stringify(animalId())})`);
+      const restore=state.outbox.find(op=>op.action==='animal.restore'&&op.entityId===animalId());await confirmed(page,restore.id);
+      await until(page,`state.animals.some(animal=>animal.id===${JSON.stringify(animalId())}&&animal.status==='Activo')`);
+      return {animalId:animalId(),operations:[edit.id,archive.id,restore.id],historyPreserved:true};
+    });
+    await check('Universal configuration editor saves offline and keeps the raw server snapshot separate',async()=>{
+      await page.locator('#settings-nav').click();await context.setOffline(true);offline=true;
+      await page.locator('[data-settings-tab="advanced"]').click();
+      const before=await snap(page);const label='Arete de prueba UI';
+      await page.locator('[data-field-label="tag"]').fill(label);await page.locator('#save-animal-settings').click();
+      const pending=await until(page,`state.outbox.some(op=>op.action==='config.update'&&op.state==='pending')`);
+      assert.deepEqual(pending.config,before.config);
+      const change=pending.outbox.find(op=>op.action==='config.update'&&op.state==='pending');
+      assert.equal(change.changes.config.fields.tag.label,label);
+      offline=false;await context.setOffline(false);await confirmed(page,change.id);
+      await until(page,`state.config?.fields?.tag?.label===${JSON.stringify(label)}&&state.outbox.some(op=>op.id===${JSON.stringify(change.id)}&&op.settled)`);
+      return {operationId:change.id,rawSchemaVersion:1,offlineCapture:true};
+    });
     await check('D2 UI forecast queues offline and confirms through real RPC', async () => {
       await page.locator('#calculator-nav').click();
       await page.locator('#calculator-animal').selectOption(animalId());
@@ -355,28 +438,43 @@ async function main() {
       await page.locator('#new-journey-button').click();
       await page.locator('#journey-type').selectOption('bath');
       await page.locator('#journey-notes').fill('Browser integration ' + fixture.runId);
+      await context.setOffline(true);offline=true;
       await page.locator('#start-journey-button').click();
       const s = await until(page, `state.outbox.some(op => op.action === 'journey.create')`);
       const pending = s.outbox.find(op => op.action === 'journey.create'); journeyId = pending.entityId;
-      const op = await confirmed(page, pending.id);
-      await until(page, `state.journeys.some(journey => journey.id === ${JSON.stringify(journeyId)})`);
-      return {journeyId, operationId:op.id, receipt:op.receipt};
+      assert.equal(pending.state,'pending');
+      assert.equal(s.journeys.some(journey=>journey.id===journeyId),false);
+      return {journeyId, operationId:pending.id,offlineCapture:true};
     });
     await check('D3 UI attendance and finish create exactly one history event', async () => {
-      await page.locator(`[data-open-journey="${journeyId}"]`).first().click();
+      if(!await page.locator('#journey-dialog[open]').count())await page.locator(`[data-open-journey="${journeyId}"]`).first().click();
       await page.locator(`[data-toggle-attendance="${animalId()}"]`).click();
       const s = await until(page, `state.outbox.some(op => op.action === 'journey.attend' && op.entityId === ${JSON.stringify(journeyId)})`);
       const attend = s.outbox.find(op => op.action === 'journey.attend' && op.entityId === journeyId);
-      await confirmed(page, attend.id);
-      await until(page, `state.journeys.find(journey => journey.id === ${JSON.stringify(journeyId)})?.roster.some(animal => animal.id === ${JSON.stringify(animalId())} && animal.attended)`);
+      assert.equal(attend.sealed,false);assert.equal(attend.baseRevision,null);
       await page.locator('[data-finish-journey]').click();
       const finishing = await until(page, `state.outbox.some(op => op.action === 'journey.finish' && op.entityId === ${JSON.stringify(journeyId)})`);
       const finish = finishing.outbox.find(op => op.action === 'journey.finish' && op.entityId === journeyId);
+      assert.equal(finish.sealed,false);assert.equal(finish.baseOperationId,attend.id);
+      offline=false;await context.setOffline(false);
       const op = await confirmed(page, finish.id);
       const after = await until(page, `state.events.filter(event => event.journeyId === ${JSON.stringify(journeyId)}).length === 1`);
       assert(['completed','incomplete'].includes(after.journeys.find(journey => journey.id === journeyId).status));
       await screenshot('05-journey-finished');
       return {journeyId, attendOperationId:attend.id, finishOperationId:op.id, receipt:op.receipt, historyEvents:after.events.filter(event => event.journeyId === journeyId)};
+    });
+    await check('D3 UI resumes and finishes an incomplete journey offline without duplicating history',async()=>{
+      await context.setOffline(true);offline=true;
+      await page.locator(`[data-reopen-journey="${journeyId}"]`).click();
+      const resumed=await until(page,`state.outbox.some(op=>op.action==='journey.resume'&&op.entityId===${JSON.stringify(journeyId)})`);
+      const resume=resumed.outbox.find(op=>op.action==='journey.resume'&&op.entityId===journeyId);
+      await page.locator('[data-finish-journey]').click();
+      const finishing=await until(page,`state.outbox.filter(op=>op.action==='journey.finish'&&op.entityId===${JSON.stringify(journeyId)}).length===2`);
+      const finish=finishing.outbox.find(op=>op.action==='journey.finish'&&op.baseOperationId===resume.id);assert(finish);
+      offline=false;await context.setOffline(false);await confirmed(page,finish.id);
+      const after=await until(page,`state.outbox.some(op=>op.id===${JSON.stringify(finish.id)}&&op.settled)`);
+      assert.equal(after.events.filter(event=>event.journeyId===journeyId).length,1);
+      return {journeyId,resume:resume.id,finish:finish.id,historyCount:1};
     });
   }
 
@@ -393,6 +491,15 @@ async function main() {
       if (journeyId) assert.equal(s.events.filter(event => event.journeyId === journeyId).length,1);
       return {cleanIndexedDB:true, photoCrop:{x:crop.cropX,y:crop.cropY,zoom:crop.cropZoom}, primaryId:secondPhoto, originals:await assertOriginals(freshPage)};
     } finally {await freshContext.close();}
+  });
+  if(forecastOperation)await check('Universal forecast history deletes through an explicit UI operation',async()=>{
+    await showAnimal(page);
+    await page.locator(`[data-delete-forecast="${forecastOperation.entityId}"]`).click();
+    const pending=await until(page,`state.outbox.some(op=>op.action==='forecast.delete'&&op.entityId===${JSON.stringify(forecastOperation.entityId)})`);
+    const operation=pending.outbox.find(op=>op.action==='forecast.delete'&&op.entityId===forecastOperation.entityId);
+    await confirmed(page,operation.id);
+    await until(page,`!state.forecasts.some(item=>item.id===${JSON.stringify(forecastOperation.entityId)})`);
+    return {forecastId:forecastOperation.entityId,operationId:operation.id};
   });
   await check('Network evidence contains only local real services and confirmed RPCs', async () => {
     await Promise.all([...pendingResponses]);

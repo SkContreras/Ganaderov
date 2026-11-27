@@ -13,6 +13,9 @@ import 'package:ganaderov/core/database/offline_store.dart';
 import 'package:ganaderov/features/livestock/data/supabase_inventory_repository.dart';
 import 'package:ganaderov/features/livestock/domain/animal_photos.dart';
 import 'package:ganaderov/features/livestock/domain/inventory.dart';
+import 'package:ganaderov/features/livestock/domain/event_draft.dart';
+import 'package:ganaderov/features/settings/domain/animal_configuration.dart';
+import 'package:uuid/uuid.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:pointycastle/digests/sha256.dart';
@@ -253,6 +256,8 @@ class RealPhotoSuite {
       'photo_metadata',
       'photo_originals',
       'universal_outbox',
+      'universal_drafts',
+      'entity_revisions',
     ]) {
       // The table names above are fixed test constants, not external input.
       final rows = await store!
@@ -382,6 +387,555 @@ class RealPhotoSuite {
         'primaryId': detail['primaryId'],
         'crop': expectedCrop,
         'webCommit': object(report['source'], 'Web source')['commit'],
+      };
+    });
+  }
+
+  Future<Map<String, dynamic>> remoteEntity(String kind, String id) async =>
+      object(
+        await client.rpc(
+          'sync_read_entity',
+          params: {'p_owner': ownerId, 'p_kind': kind, 'p_id': id},
+        ),
+        'Remote $kind',
+      );
+
+  Future<void> reopenCompletionStore() async {
+    await store!.close();
+    store = null;
+    repository = null;
+    openStore('completion');
+    current = await repository!.load();
+  }
+
+  Future<void> runCompletionSteps() async {
+    const uuid = Uuid();
+    final firstId = uuid.v4(),
+        secondId = uuid.v4(),
+        eventId = uuid.v4(),
+        journeyId = uuid.v4();
+    final today = DateTime.now().toUtc().toIso8601String().substring(0, 10);
+    final yesterday = DateTime.now()
+        .toUtc()
+        .subtract(const Duration(days: 1))
+        .toIso8601String()
+        .substring(0, 10);
+    final tag = 'mobile-${fixture['runId']}';
+    final ids = <String>{};
+    String? correctionId, deletionId;
+
+    await step('Universal offline CRUD, new-entity dependencies, configuration and real SQLite restart', () async {
+      await store!.close();
+      store = null;
+      repository = null;
+      openStore('completion');
+      current = await repository!.load();
+      await repository!.prepareOfflineInventory(current!);
+      await repository!.journeys(current!);
+      transport.offline = true;
+      current = await repository!.load();
+      require(current!.offline, 'Expected a verified offline inventory');
+      final before = network.length, blocked = transport.blockedOffline;
+      await repository!.saveAnimal(
+        current!,
+        null,
+        {
+          'tag': '$tag-a',
+          'name': 'Mobile nueva',
+          'sex': 'Hembra',
+          'status': 'Activo',
+        },
+        createId: firstId,
+        operationId: uuid.v4(),
+      );
+      current = await repository!.refreshLocalInventory(current!);
+      await repository!.saveAnimal(
+        current!,
+        null,
+        {
+          'tag': '$tag-b',
+          'name': 'Mobile segunda',
+          'sex': 'Macho',
+          'status': 'Activo',
+        },
+        createId: secondId,
+        operationId: uuid.v4(),
+      );
+      current = await repository!.refreshLocalInventory(current!);
+      require(
+        current!.animals
+                .singleWhere((a) => a.id == firstId)
+                .value('internalId') ==
+            'Por asignar',
+        'The client invented an internal ID',
+      );
+      await repository!.saveAnimal(current!, firstId, {
+        'name': 'Mobile editada',
+      }, operationId: uuid.v4());
+      current = await repository!.refreshLocalInventory(current!);
+      await repository!.setAnimalStatus(current!, firstId, 'Vendido');
+      current = await repository!.refreshLocalInventory(current!);
+      require(
+        !current!.animals.singleWhere((a) => a.id == firstId).active,
+        'Archive preview was lost',
+      );
+      await repository!.setAnimalStatus(current!, firstId, 'Activo');
+      current = await repository!.refreshLocalInventory(current!);
+      await repository!.addEvent(
+        current!,
+        firstId,
+        EventDraft(id: eventId, type: 'weight', date: today, weight: 320),
+      );
+      current = await repository!.refreshLocalInventory(current!);
+      await repository!.createJourney(
+        current!,
+        journeyId,
+        'weight',
+        today,
+        '',
+        '',
+        'Mobile dependency chain',
+        {firstId, secondId},
+      );
+      var journey = (await repository!.refreshLocalJourneys(current!))
+          .singleWhere((j) => j.id == journeyId);
+      await repository!.attendJourney(current!, journey, firstId, 321);
+      journey = (await repository!.refreshLocalJourneys(current!))
+          .singleWhere((j) => j.id == journeyId);
+      await repository!.finishJourney(current!, journey);
+      journey = (await repository!.refreshLocalJourneys(current!))
+          .singleWhere((j) => j.id == journeyId);
+      require(
+        journey.status == 'incomplete',
+        'Incomplete finish preview is wrong',
+      );
+      await repository!.resumeJourney(current!, journey);
+      journey = (await repository!.refreshLocalJourneys(current!))
+          .singleWhere((j) => j.id == journeyId);
+      await repository!.attendJourney(current!, journey, secondId, 333);
+      journey = (await repository!.refreshLocalJourneys(current!))
+          .singleWhere((j) => j.id == journeyId);
+      await repository!.finishJourney(current!, journey);
+      final configuration = editableAnimalConfiguration(current!.config);
+      (configuration['fields'] as Map)['name']['label'] = 'Nombre desde Mobile';
+      await repository!.saveConfiguration(
+        current!,
+        configuration,
+        operationId: uuid.v4(),
+      );
+      current = await repository!.refreshLocalInventory(current!);
+      require(
+        network.length == before && transport.blockedOffline == blocked,
+        'Offline universal capture attempted HTTP',
+      );
+      final captured = await store!.localUniversalChanges(
+        userId,
+        ownerId,
+        origin.origin,
+      );
+      require(
+        captured.length == 13,
+        'An intended capture was lost or duplicated',
+      );
+      ids.addAll(captured.map((entry) => entry['id'] as String));
+      require(
+        ids.length == 13 &&
+            captured.where((entry) => entry['state'] == 'waiting').length == 10,
+        'Dependent intents became sendable before their real receipts',
+      );
+      final canonical = await store!.read(userId, project: origin.origin);
+      require(
+        !canonical!.animals.any((a) => [firstId, secondId].contains(a.id)),
+        'Pending creates changed the confirmed cache',
+      );
+      require(
+        (canonical.config['fields'] as Map?)?['name']?['label'] !=
+            'Nombre desde Mobile',
+        'Pending configuration changed confirmed cache',
+      );
+      await reopenCompletionStore();
+      final reopened = await store!.localUniversalChanges(
+        userId,
+        ownerId,
+        origin.origin,
+      );
+      require(
+        reopened.map((entry) => entry['id']).toSet().containsAll(ids),
+        'Restart changed a captured UUID',
+      );
+      require(
+        current!.offline &&
+            current!.animals
+                    .singleWhere((a) => a.id == firstId)
+                    .value('name') ==
+                'Mobile editada',
+        'Restart lost the offline animal projection',
+      );
+      final restored = (await repository!.refreshLocalJourneys(current!))
+          .singleWhere((j) => j.id == journeyId);
+      require(
+        restored.status == 'completed' && restored.attended == 2,
+        'Restart lost the complete journey projection',
+      );
+      require(
+        (current!.config['fields'] as Map)['name']['label'] ==
+            'Nombre desde Mobile',
+        'Restart lost pending configuration',
+      );
+      return {
+        'captures': ids.length,
+        'waitingForReceipts': 10,
+        'captureHTTPRequests': 0,
+        'firstAnimalId': firstId,
+        'secondAnimalId': secondId,
+        'journeyId': journeyId,
+        ...await encryptedRows(),
+      };
+    });
+
+    await step('Real universal delivery seals exact receipt revisions and commits offline CRUD and journey chain', () async {
+      transport.offline = false;
+      await repository!.syncEvents(manual: true);
+      final confirmed = await store!.localUniversalChanges(
+        userId,
+        ownerId,
+        origin.origin,
+        includeArchived: true,
+      );
+      require(
+        confirmed.length == ids.length &&
+            confirmed.every((entry) => entry['state'] == 'confirmed'),
+        'Real delivery did not confirm every captured intention: ${confirmed.map((entry) => '${(entry['operation'] as Map)['action']}:${entry['state']}:${entry['receipt']}').join(', ')}',
+      );
+      final byId = {for (final entry in confirmed) entry['id']: entry};
+      var revisionsChecked = 0;
+      for (final entry in confirmed) {
+        final from = entry['revisionFrom'];
+        if (from != null) {
+          final predecessor = byId[from]!;
+          require(
+            (entry['operation'] as Map)['baseRevision'] ==
+                (predecessor['receipt'] as Map)['revision'],
+            'A dependent body did not use the exact confirmed predecessor revision',
+          );
+          revisionsChecked++;
+        }
+      }
+      require(
+        revisionsChecked == 8,
+        'Not every same-entity dependency was exercised',
+      );
+      require(
+        (await store!.universalPending(userId, ownerId)).isEmpty,
+        'A delivered operation remains pending',
+      );
+      final animal = object(
+        (await remoteEntity('animal', firstId))['data'],
+        'Created animal',
+      );
+      final secondAnimal = object(
+        (await remoteEntity('animal', secondId))['data'],
+        'Second animal',
+      );
+      require(
+        animal['name'] == 'Mobile editada' && animal['status'] == 'Activo',
+        'Remote animal CRUD differs from intent',
+      );
+      require(
+        RegExp(r'^ANM-\d{5,}$').hasMatch(animal['internalId'] as String) &&
+            animal['internalId'] != secondAnimal['internalId'],
+        'Server internal IDs are missing or collide',
+      );
+      final remoteJourney = object(
+        (await remoteEntity('journey', journeyId))['data'],
+        'Journey',
+      );
+      require(
+        remoteJourney['status'] == 'completed' &&
+            (remoteJourney['roster'] as List).every(
+              (row) => (row as Map)['attended'] == true,
+            ),
+        'Remote finish/resume chain did not complete',
+      );
+      final independent = object(
+        (await remoteEntity('event', eventId))['data'],
+        'Independent event',
+      );
+      require(
+        independent['weight'] == 320 && independent['animalId'] == firstId,
+        'Event on the offline-created animal is missing',
+      );
+      for (final id in [firstId, secondId]) {
+        final generated = object(
+          (await remoteEntity('event', 'journey:$journeyId:$id'))['data'],
+          'Journey event',
+        );
+        require(
+          generated['journeyId'] == journeyId && generated['animalId'] == id,
+          'Journey event escaped its parent',
+        );
+      }
+      final config = object(
+        (await remoteEntity('config', ownerId))['data'],
+        'Configuration',
+      );
+      require(
+        (config['fields'] as Map)['name']['label'] == 'Nombre desde Mobile',
+        'Remote configuration differs from saved intent',
+      );
+      current = await repository!.load();
+      await repository!.journeys(current!);
+      require(
+        (await store!.localUniversalChanges(
+          userId,
+          ownerId,
+          origin.origin,
+        )).isEmpty,
+        'Causally fresh snapshots did not retire confirmed previews',
+      );
+      return {
+        'confirmed': confirmed.length,
+        'receiptRevisionsChecked': revisionsChecked,
+        'internalId': animal['internalId'],
+        'journeyStatus': remoteJourney['status'],
+        ...await encryptedRows(),
+      };
+    });
+
+    await step('Historical correction is captured offline, survives restart and preserves real event provenance', () async {
+      transport.offline = true;
+      current = await repository!.load();
+      final event = current!.animals
+          .singleWhere((a) => a.id == firstId)
+          .events
+          .singleWhere((e) => e.id == eventId);
+      final before = network.length, blocked = transport.blockedOffline;
+      await repository!.updateHistoricalEvent(
+        current!,
+        firstId,
+        event,
+        {
+          'date': yesterday,
+          'weight': 325,
+          'product': 'Báscula ajustada',
+          'notes': 'Observación corregida desde Mobile',
+        },
+        'Corrección documentada de la lectura',
+        operationId: uuid.v4(),
+      );
+      final entry = (await store!.localUniversalChanges(
+        userId,
+        ownerId,
+        origin.origin,
+      )).single;
+      correctionId = entry['id'] as String;
+      require(
+        (entry['operation'] as Map)['baseRevision'] is int &&
+            (entry['operation'] as Map)['changes']['reason'] ==
+                'Corrección documentada de la lectura',
+        'Historical correction omitted its real revision or reason',
+      );
+      require(
+        network.length == before && transport.blockedOffline == blocked,
+        'Historical offline edit attempted HTTP',
+      );
+      await reopenCompletionStore();
+      require(
+        current!.animals
+                .singleWhere((a) => a.id == firstId)
+                .events
+                .singleWhere((e) => e.id == eventId)
+                .weight ==
+            325,
+        'Restart lost corrected event preview',
+      );
+      transport.offline = false;
+      await repository!.syncEvents(manual: true);
+      final remote = object(
+        (await remoteEntity('event', eventId))['data'],
+        'Corrected event',
+      );
+      require(
+        remote['type'] == 'weight' &&
+            remote['date'] == yesterday &&
+            remote['weight'] == 325 &&
+            remote['label'] == 'Báscula ajustada' &&
+            remote['notes'] == 'Observación corregida desde Mobile',
+        'Real historical correction changed the wrong fields',
+      );
+      require(
+        (remote['performedBy'] as Map)['authUserId'] == userId &&
+            (remote['updatedBy'] as Map)['authUserId'] == userId,
+        'Real historical correction lost authenticated provenance',
+      );
+      current = await repository!.load();
+      return {
+        'operationId': correctionId,
+        'eventId': eventId,
+        'captureHTTPRequests': 0,
+        'typePreserved': true,
+      };
+    });
+
+    await step('Historical deletion with reason remains a separate offline preview until real acknowledgement', () async {
+      transport.offline = true;
+      current = await repository!.load();
+      final event = current!.animals
+          .singleWhere((a) => a.id == firstId)
+          .events
+          .singleWhere((e) => e.id == eventId);
+      final before = network.length, blocked = transport.blockedOffline;
+      await repository!.deleteHistoricalEvent(
+        current!,
+        firstId,
+        event,
+        'Registro duplicado revisado',
+        operationId: uuid.v4(),
+      );
+      final entry = (await store!.localUniversalChanges(
+        userId,
+        ownerId,
+        origin.origin,
+      )).single;
+      deletionId = entry['id'] as String;
+      current = await repository!.refreshLocalInventory(current!);
+      require(
+        !current!.animals
+            .singleWhere((a) => a.id == firstId)
+            .events
+            .any((e) => e.id == eventId),
+        'Delete preview remained visible as an event',
+      );
+      final canonical = await store!.read(userId, project: origin.origin);
+      require(
+        canonical!.animals
+            .singleWhere((a) => a.id == firstId)
+            .events
+            .any((e) => e.id == eventId),
+        'Delete preview mutated canonical event history',
+      );
+      require(
+        network.length == before && transport.blockedOffline == blocked,
+        'Historical offline delete attempted HTTP',
+      );
+      await reopenCompletionStore();
+      transport.offline = false;
+      await repository!.syncEvents(manual: true);
+      require(
+        (await remoteEntity('event', eventId))['data'] == null,
+        'Real deletion did not tombstone the event',
+      );
+      current = await repository!.load();
+      require(
+        !current!.animals
+            .singleWhere((a) => a.id == firstId)
+            .events
+            .any((e) => e.id == eventId),
+        'Deleted event returned after fresh pull',
+      );
+      return {
+        'operationId': deletionId,
+        'eventId': eventId,
+        'captureHTTPRequests': 0,
+      };
+    });
+
+    await step('A real remote conflict preserves the immutable parent and its visible blocked dependent after restart', () async {
+      final baseline = await remoteEntity('animal', secondId);
+      transport.offline = true;
+      current = await repository!.load();
+      final before = network.length, blocked = transport.blockedOffline;
+      await repository!.saveAnimal(current!, secondId, {
+        'name': 'Edición local en conflicto',
+      }, operationId: uuid.v4());
+      current = await repository!.refreshLocalInventory(current!);
+      await repository!.saveAnimal(current!, secondId, {
+        'name': 'Hija local que espera',
+      }, operationId: uuid.v4());
+      final drafts = await store!.localUniversalChanges(
+        userId,
+        ownerId,
+        origin.origin,
+      );
+      require(
+        drafts.length == 2 && drafts.last['state'] == 'waiting',
+        'The dependent edit was not durable and waiting',
+      );
+      final parentBody = jsonEncode(drafts.first['operation']);
+      require(
+        network.length == before && transport.blockedOffline == blocked,
+        'Conflict setup attempted offline HTTP',
+      );
+      transport.offline = false;
+      final competing = object(
+        await client.rpc(
+          'sync_apply_operation',
+          params: {
+            'p_operation': {
+              'protocolVersion': 1,
+              'operationId': uuid.v4(),
+              'action': 'animal.update',
+              'entityId': secondId,
+              'ownerId': ownerId,
+              'deviceId': uuid.v4(),
+              'baseRevision': baseline['revision'],
+              'capturedAt': DateTime.now().toUtc().toIso8601String(),
+              'changes': {
+                'fields': {'name': 'Cambio remoto confirmado'},
+              },
+            },
+          },
+        ),
+        'Competing receipt',
+      );
+      require(
+        competing['status'] == 'applied',
+        'The competing real mutation failed',
+      );
+      await repository!.syncEvents(manual: true);
+      final terminal = await store!.localUniversalChanges(
+        userId,
+        ownerId,
+        origin.origin,
+      );
+      require(
+        terminal.length == 2 &&
+            terminal.first['state'] == 'conflict' &&
+            terminal.last['state'] == 'blocked',
+        'Real conflict was hidden, discarded, rebased or automatically resolved',
+      );
+      require(
+        jsonEncode(terminal.first['operation']) == parentBody,
+        'Conflict handling rewrote the sealed body',
+      );
+      require(
+        (terminal.last['operation'] as Map)['baseRevision'] == null &&
+            terminal.last['draft'] == true,
+        'A blocked dependent received an invented revision',
+      );
+      await reopenCompletionStore();
+      final review = await repository!.reviewOperations();
+      require(
+        review
+                .where(
+                  (entry) =>
+                      drafts.any((original) => original['id'] == entry['id']),
+                )
+                .length ==
+            2,
+        'A terminal parent or child disappeared from the review screen after restart',
+      );
+      require(
+        current!.animals.singleWhere((a) => a.id == secondId).value('name') ==
+            'Cambio remoto confirmado',
+        'Conflict overlay replaced the newly confirmed remote state',
+      );
+      return {
+        'parentId': drafts.first['id'],
+        'dependentId': drafts.last['id'],
+        'parentState': 'conflict',
+        'dependentState': 'blocked',
+        'autoRebase': false,
       };
     });
   }
@@ -733,6 +1287,7 @@ class RealPhotoSuite {
           };
         },
       );
+      await runCompletionSteps();
     } catch (_) {
       failed = true;
       rethrow;
@@ -816,7 +1371,7 @@ void main() {
     expect(() => clientKeyOnly('sb_secret_forbidden'), throwsStateError);
   });
   test(
-    'D4 repository against real disposable Supabase',
+    'D4 and universal completion repository against real disposable Supabase',
     () async {
       Map<String, dynamic> fixture;
       try {
@@ -834,9 +1389,6 @@ void main() {
           '${Directory.systemTemp.path}/ganaderov-mobile-real-artifacts';
       await RealPhotoSuite(fixture, Directory(output)).run();
     },
-    skip: path == null || path.isEmpty
-        ? 'No disposable fixture supplied; real integration was not executed.'
-        : false,
-    timeout: const Timeout(Duration(minutes: 3)),
+    timeout: const Timeout(Duration(minutes: 6)),
   );
 }

@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "sourceCommit": "d19da276339ddb46f40f4d102c3e3abb8f7ffad2",
+  "sourceCommit": "759c6c9f4e552e07899afe4134c6d03c1bfaa89a",
   "baseSchema": {
     "path": "supabase-schema.sql",
     "sha256": "a416452d8c9b59a2a39372a22a06d555b9b99eaf528afa45ea2abc7c91628345"
@@ -45,6 +45,14 @@
     {
       "path": "backend/photo_operations_d4.sql",
       "sha256": "a295cc58c9a3a5153f4a35262d744988f03a53787831b9fe0d7ced5015e47704"
+    },
+    {
+      "path": "backend/20261127035958_universal_completion_v1.sql",
+      "sha256": "95880abde68122e24641424d144c3c2a3ee3194f4c4420cf4edbe82e9d0619e2"
+    },
+    {
+      "path": "backend/20261127040000_background_capabilities_v1.sql",
+      "sha256": "3dd33e45cffb43457f8e58308470b73c87c7a74578ecc75100a0aaf5b2b1cc75"
     }
   ]
 }

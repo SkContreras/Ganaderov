@@ -302,8 +302,10 @@ async function legacyBundlePhotoRegression(origin,animal,bytes) {
     await legacyPage.goto(origin);await legacyPage.waitForFunction(()=>!!window.__d4);
     await legacyPage.evaluate(({userId,ownerId})=>window.__d4.setup({userId,ownerId}),{userId:USER,ownerId:OWNER});
     await legacyPage.evaluate(async record=>{
+      window.GANADERO_CONFIG.syncEventRpcV1=false;
       await window.__d4.call('applyRemoteRecord',record,null,window.__d4.scope());
       await window.__d4.call('refresh');
+      window.GANADERO_CONFIG.syncEventRpcV1=true;
     },record);
     await legacyPage.evaluate(()=>window.__d4.cacheRevisions());
     await legacyPage.evaluate(async({animalId,record})=>{
@@ -389,7 +391,7 @@ async function main(){
   await page.goto(origin);
   await page.waitForFunction(()=>!!window.__d4);
   await page.evaluate(async()=>{
-    await navigator.serviceWorker.register('./service-worker.js');
+    await navigator.serviceWorker.register('./service-worker.js', {type:'module'});
     await navigator.serviceWorker.ready;
     if(!navigator.serviceWorker.controller)await new Promise(resolve=>navigator.serviceWorker.addEventListener('controllerchange',resolve,{once:true}));
   });
@@ -582,22 +584,26 @@ async function main(){
   await page.evaluate(record=>window.__d4.importRemote(record),{animal_id:ANIMAL,modified_at:new Date().toISOString(),payload:{animal,events:[],photos:remotePhotos.map(photoData),forecasts:[]},deleted_at:null});
   await page.evaluate(()=>window.__d4.cacheRevisions());
   await page.evaluate(id=>window.__d4.show(id),ANIMAL);
-  await test('Unpublished local photo is preserved offline and never invents a server revision',async()=>{
+  await test('Unpublished photo stays in the encrypted upload outbox and never invents a revision',async()=>{
     online=false;await context.setOffline(true);
     const before=await page.evaluate(()=>window.__d4.inspect());
     await page.evaluate(bytes=>window.__d4.call('addPhotos',[new File([Uint8Array.from(bytes)],'new-offline.png',{type:'image/png'})]),bytes);
     let snapshot=await page.evaluate(()=>window.__d4.inspect());
-    const added=snapshot.photos.find(p=>!before.photos.some(old=>old.id===p.id));
+    const added=snapshot.display.find(p=>!before.photos.some(old=>old.id===p.id));
     assert(added);assert.deepEqual(added.blob.bytes,bytes);
+    const create=snapshot.outbox.find(entry=>entry.operation.action==='photo.create'&&entry.operation.entityId===added.id);
+    assert(create);assert.equal(create.operation.baseRevision,null);
+    assert.equal(snapshot.photos.some(photo=>photo.id===added.id),false);
+    const originals=await page.evaluate(()=>window.__d4.raw('photoUploads'));
+    assert(originals.some(row=>row.id===create.id&&row.encrypted));
     const callsBefore=rpcCalls.length;
     await page.evaluate(id=>window.__d4.call('savePhotoCrop',id,12,24,1.9),added.id);
     snapshot=await page.evaluate(()=>window.__d4.inspect());
-    assert.equal(snapshot.outbox.length,before.outbox.length);
-    assert.equal(snapshot.photos.find(p=>p.id===added.id).cropX,50);
+    assert.equal(snapshot.outbox.length,before.outbox.length+1);
     assert.equal(snapshot.display.find(p=>p.id===added.id).cropX,50);
     assert.equal(rpcCalls.length,callsBefore);
-    assert.match(await page.locator('#toast').innerText(),/Sincroniza esta fotografía una vez/);
-    await page.evaluate(id=>window.__d4.call('remove','photos',id),added.id);
+    assert.match(await page.locator('#toast').innerText(),/pendiente/);
+    await page.evaluate(async id=>{await window.__d4.call('remove','operationOutbox',id);await window.__d4.call('remove','photoUploads',id);},create.id);
     await page.evaluate(id=>window.__d4.show(id),ANIMAL);
   });
   await test('Unsupported and oversized images are rejected before persistence',async()=>{
