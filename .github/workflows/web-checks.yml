@@ -15,6 +15,8 @@ jobs:
       - run: node --check app.js && node --check service-worker.js
       - run: node --test tests/*.test.cjs tests/*.test.mjs
       - run: python3 -m py_compile tests/concurrency_staging.py tests/photo_concurrency_staging.py
+      - run: python3 scripts/check-backend-release.py
+      - run: python3 -m py_compile tests/integration/http_e2e.py scripts/check-backend-release.py
 
   browser:
     runs-on: ubuntu-latest
@@ -60,7 +62,11 @@ jobs:
           PGPASSWORD: postgres
           PGDATABASE: postgres
         run: |
-          for sql in supabase-schema.sql backend/{sync_event_create_v1,entity_projection_v1,incremental_sync_v1,incremental_retention_v1,journey_transitions_v1,universal_operations_v1,security_hardening_v1,forecast_operations_v1,journey_operations_d3,photo_operations_d4}.sql tests/sql/{event_rpc_audit,universal_operations,incremental_retention,security_hardening,photo_operations_d4}.sql; do
+          python3 scripts/check-backend-release.py --paths --include-base > "$RUNNER_TEMP/backend-sql-paths.txt"
+          while IFS= read -r sql; do
+            psql -X -v ON_ERROR_STOP=1 -f "$sql"
+          done < "$RUNNER_TEMP/backend-sql-paths.txt"
+          for sql in tests/sql/{event_rpc_audit,universal_operations,incremental_retention,security_hardening,photo_operations_d4}.sql; do
             psql -X -v ON_ERROR_STOP=1 -f "$sql"
           done
       - name: Concurrent authenticated writers
@@ -71,3 +77,22 @@ jobs:
           python -m pip install 'psycopg[binary]>=3.2,<4'
           python tests/concurrency_staging.py
           python tests/photo_concurrency_staging.py
+      - name: Real Auth, PostgREST and Storage integration
+        env:
+          GANADEROV_DISPOSABLE_DB: 'YES'
+          GANADEROV_SUPABASE_STATUS: ${{ runner.temp }}/supabase-status.private.json
+        run: |
+          umask 077
+          supabase status -o json > "$GANADEROV_SUPABASE_STATUS"
+          python tests/integration/http_e2e.py --keep-fixtures --output "$RUNNER_TEMP/d234"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: supabase-http-results
+          path: ${{ runner.temp }}/d234/http-report.json
+          if-no-files-found: ignore
+      - name: Remove temporary credentials and discard test services
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/supabase-status.private.json" "$RUNNER_TEMP/d234/fixtures.private.json"
+          supabase stop --no-backup
