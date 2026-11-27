@@ -26,7 +26,10 @@
         "journey.attend",
         "journey.finish",
         "journey.resume",
-        "config.update"
+        "config.update",
+        "forecast.create",
+        "forecast.delete",
+        "animal.target.update"
       ]
     },
     "entityId": {
@@ -675,6 +678,156 @@
             },
             "required": [
               "config"
+            ]
+          },
+          "baseRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "forecast.create"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "changes": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "animalId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "baselineWeight": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100000
+              },
+              "baselineDate": {
+                "type": "string",
+                "format": "date"
+              },
+              "gainKgPerDay": {
+                "type": "number",
+                "minimum": -100,
+                "maximum": 100
+              },
+              "days": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3650
+              }
+            },
+            "required": [
+              "animalId",
+              "baselineWeight",
+              "baselineDate",
+              "gainKgPerDay",
+              "days"
+            ]
+          },
+          "baseRevision": {
+            "type": "null"
+          },
+          "entityId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "forecast.delete"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "changes": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "animalId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "animalId"
+            ]
+          },
+          "baseRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "animal.target.update"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "changes": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "minimum": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "maximum": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "minimum",
+              "maximum"
             ]
           },
           "baseRevision": {
