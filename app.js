@@ -1391,8 +1391,8 @@
     await remove("syncMeta",`conflict:${kind}:${id}`);
   }
 
-  async function syncJourneys(localJourneys, scope) {
-    const remoteRows = await readSyncRows("journey_sync_records", "journey_id", "journey_id, updated_at, payload", scope);
+  async function syncJourneys(localJourneys, scope, downloaded) {
+    const remoteRows = downloaded ?? await readSyncRows("journey_sync_records", "journey_id", "journey_id, updated_at, payload", scope);
     const remote = new Map(remoteRows.map(record => [record.journey_id, record]));
     const local = new Map(localJourneys.map(journey => [journey.id, journey]));
     let pending = 0;
@@ -1540,9 +1540,9 @@
     return error || !data ? null : data.modified_at;
   }
 
-  async function syncAnimalFieldConfig() {
+  async function syncAnimalFieldConfig(downloaded) {
     const local = await getOne("ranchSettings", "animal-fields");
-    const { data: remote, error: fetchError } = await cloud.from("ranch_animal_configs")
+    const { data: remote, error: fetchError } = downloaded ?? await cloud.from("ranch_animal_configs")
       .select("owner_id, config, revision, updated_at")
       .eq("owner_id", state.ranchOwnerId)
       .maybeSingle();
@@ -1829,13 +1829,19 @@
       const scope = { userId: currentUser.id, ownerId: state.ranchOwnerId, database: db };
       assertSyncScope(scope);
       // First send legacy changes and new animals; then process independent events.
-      const fieldConfigStatus = await syncAnimalFieldConfig();
+      let downloaded;
+      if (window.GANADERO_CONFIG?.syncIncrementalV1 && !state.legacyAccount) {
+        const {pullFromIndexedDB} = await import("./sync/pull-v1.mjs");
+        downloaded = (await pullFromIndexedDB(scope,cloud,() => assertSyncScope(scope))).records;
+      }
+      const recordsOf = kind => downloaded?.filter(row => row.kind === kind).map(row => row.record);
+      const fieldConfigStatus = await syncAnimalFieldConfig(downloaded && {data: recordsOf("config")[0] ?? null});
       assertSyncScope(scope);
       const [animals, events, photos, forecasts, deletions, journeys] = await Promise.all([
         getAll("animals"), getAll("events"), getAll("photos"), getAll("growthForecasts"), getAll("deletedAnimals"), getAll("journeys")
       ]);
       const local = buildLocalBundles(animals, events, photos, forecasts, deletions);
-      const remoteRecords = await readSyncRows("animal_sync_records", "animal_id", "animal_id, modified_at, deleted_at, payload", scope);
+      const remoteRecords = recordsOf("animal") ?? await readSyncRows("animal_sync_records", "animal_id", "animal_id, modified_at, deleted_at, payload", scope);
       const remote = new Map((remoteRecords || []).map(record => [record.animal_id, record]));
       const animalIds = new Set([...local.keys(), ...remote.keys()]);
       let conflicts = 0;
@@ -1875,7 +1881,7 @@
           else pendingChanges++;
         }
       }
-      conflicts += await syncJourneys(journeys, scope);
+      conflicts += await syncJourneys(journeys, scope, recordsOf("journey"));
       assertSyncScope(scope);
       await flushEventOutbox(scope);
       const outboxRows = await scopedOutbox(scope);
