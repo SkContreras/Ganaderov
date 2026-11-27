@@ -53,7 +53,23 @@ window.__d4 = {
         return query;
       }
     };
-    if(!this.eventsRegistered){registerEvents();this.eventsRegistered=true;}
+    if(!this.eventsRegistered){
+      // Component tests drive delivery explicitly and do not provide a complete
+      // syncData transport. Keep UI callbacks, but cancel polling registered by
+      // registerEvents so a slower runner cannot invalidate this fixture after
+      // 30 seconds. Real initialize/automatic triggers have their own lifecycle
+      // harness; never fake a busy sync or change its completion promise here.
+      const intervals=[],originalSetInterval=window.setInterval;
+      window.setInterval=(...args)=>{
+        const id=Reflect.apply(originalSetInterval,window,args);
+        intervals.push(id);return id;
+      };
+      try{registerEvents();this.eventsRegistered=true;}
+      finally{
+        window.setInterval=originalSetInterval;
+        for(const id of intervals)window.clearInterval(id);
+      }
+    }
     await refresh();
     document.querySelector('#auth-gate')?.remove();
     return db.name;
