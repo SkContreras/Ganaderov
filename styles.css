@@ -626,8 +626,25 @@ td { height: 54px; }
 .animal-advanced-fields > summary { color: #416c48; cursor: pointer; font-size: 11px; font-weight: 700; }
 .animal-advanced-fields[open] > .form-grid { margin-top: 13px; }
 .animal-age-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
-.table-extra-values { display: grid; gap: 3px; color: #596459; font-size: 9px; line-height: 1.35; }
-.table-extra-values strong { color: #7b8679; font-weight: 600; }
+.inventory-card > .table-wrap { container: inventory-table / inline-size; }
+#animal-extra-headers { width: 32%; }
+.table-extra-values {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 180px;
+  gap: 4px 16px;
+  color: var(--ink);
+  font-size: inherit;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.table-extra-values strong { color: #596459; font-weight: 650; }
+.table-extra-note { grid-column: 1 / -1; }
+@container inventory-table (min-width: 1080px) {
+  .table-extra-values { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .table-extra-values > :not(.table-extra-note) > strong { display: block; font-size: 10px; }
+}
 .settings-table-wrap { overflow-x: auto; }
 .settings-table { min-width: 800px; }
 .settings-table th { height: 39px; background: #f8f9f6; white-space: nowrap; }

@@ -1,6 +1,6 @@
 import {runBackgroundDelivery} from "./sync/background-universal.mjs";
 
-const CACHE_NAME = "ganadero-v67";
+const CACHE_NAME = "ganadero-v68";
 const APP_FILES = [
   "./",
   "./index.html",

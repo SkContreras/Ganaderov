@@ -3607,8 +3607,11 @@
         : escapeHtml(initials(animal));
       const extraValues = extraTableFields.map(field => {
         const value = animalFieldDisplayValue(field, animal);
-        return value ? `<span><strong>${escapeHtml(animalFieldConfig(field.id).label)}:</strong> ${escapeHtml(value)}</span>` : "";
-      }).filter(Boolean).join(" · ");
+        if (!value) return "";
+        const label = escapeHtml(animalFieldConfig(field.id).label);
+        const layout = field.type === "textarea" ? ' class="table-extra-note"' : "";
+        return `<span${layout}><strong>${label}:</strong> ${escapeHtml(value)}</span>`;
+      }).join("");
       return `<tr>
         <td><div class="animal-cell"><div class="animal-avatar">${avatar}</div><div>
           <button class="animal-link" data-config-field="name" data-config-surface="table" data-open-animal="${escapeHtml(animal.id)}" type="button">${escapeHtml(animal.name || "Sin nombre")}</button>
