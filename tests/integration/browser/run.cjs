@@ -98,7 +98,7 @@ async function serve(req, res) {
     }
     const rel = url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname).slice(1);
     assert(!rel.split('/').some(part => part.startsWith('.') || !part), 'Invalid local path');
-    assert(!rel.includes('/') || /^sync\/[a-z0-9-]+\.mjs$/.test(rel), 'Only application assets are served');
+    assert(!rel.includes('/') || /^(sync|ui)\/[a-z0-9-]+\.mjs$/.test(rel), 'Only application assets are served');
     assert(/\.(html|css|js|mjs|svg|png|ico|webmanifest)$/.test(rel), 'Unsupported local asset');
     const target = path.resolve(ROOT, rel);
     assert(target.startsWith(ROOT + path.sep), 'Invalid local asset');
@@ -214,15 +214,39 @@ async function showAnimal(p) {
   await p.locator('[data-toggle-detail-view]').click();
 }
 
-async function setSlider(p, axis, value) {
-  const locator = p.locator(`[data-photo-crop="${axis}"]`);
-  const range = await locator.evaluate(el => ({min: Number(el.min), max: Number(el.max), step: Number(el.step) || 1}));
-  const fromStart = Math.round((value - range.min) / range.step);
-  const fromEnd = Math.round((range.max - value) / range.step);
-  await locator.focus();
-  await p.keyboard.press(fromStart <= fromEnd ? 'Home' : 'End');
-  for (let i = 0; i < Math.min(fromStart, fromEnd); i++) await p.keyboard.press(fromStart <= fromEnd ? 'ArrowRight' : 'ArrowLeft');
-  assert(Math.abs(Number(await locator.inputValue()) - value) < 0.001, 'Real keyboard input did not set slider');
+async function openFraming(p) {
+  await p.locator('[data-edit-photo-crop]').click();
+  await p.locator('#photo-crop-dialog').waitFor({state:'visible'});
+  await p.waitForFunction(() => {
+    const frame=document.querySelector('#photo-crop-frame'), image=frame?.querySelector('img');
+    return image?.complete && image.naturalWidth > 0 && Number.isFinite(Number(frame.dataset.cropZoom));
+  });
+  await p.locator('#photo-crop-dialog').evaluate(async dialog => {
+    await Promise.all(dialog.getAnimations().map(animation => animation.finished.catch(() => {})));
+  });
+}
+
+async function readFraming(p) {
+  return p.locator('#photo-crop-frame').evaluate(frame => ({
+    x:Number(frame.dataset.cropX),y:Number(frame.dataset.cropY),zoom:Number(frame.dataset.cropZoom)
+  }));
+}
+
+async function setFraming(p, {x,y,zoom}) {
+  const frame=p.locator('#photo-crop-frame');
+  await frame.focus();await p.keyboard.press('Home');
+  for(let i=0;i<Math.round((zoom-1)*10);i++)await p.locator('[data-photo-zoom="in"]').click();
+  await frame.focus();
+  // Starting at a clamped boundary keeps the historical integer fixture exact
+  // without rounding production metadata or invoking an application setter.
+  for(const [wanted,decrease,increase] of [[x,'ArrowRight','ArrowLeft'],[y,'ArrowDown','ArrowUp']]){
+    const fromLow=wanted<=50,edge=fromLow?decrease:increase,move=fromLow?increase:decrease;
+    for(let i=0;i<10;i++)await p.keyboard.press('Shift+'+edge);
+    const distance=fromLow?wanted:100-wanted;
+    for(let i=0;i<Math.floor(distance/10);i++)await p.keyboard.press('Shift+'+move);
+    for(let i=0;i<distance%10;i++)await p.keyboard.press(move);
+  }
+  assert.deepEqual(await readFraming(p),{x,y,zoom},'Real keyboard/button input did not set framing');
 }
 
 async function assertOriginals(p) {
@@ -276,15 +300,35 @@ async function main() {
     return {userId:s.userId, ownerId:s.ownerId, photoCount:s.canonicalPhotos.length, originals:await assertOriginals(page)};
   });
   await showAnimal(page);
-  await check('D4 offline crop through actual sliders and Save', async () => {
+  await check('D4 real drag and wheel preview can be cancelled without persistence', async () => {
+    const before=await snap(page);
+    await openFraming(page);
+    await setFraming(page,{x:50,y:50,zoom:1.8});
+    const frame=await page.locator('#photo-crop-frame').boundingBox();
+    await page.mouse.move(frame.x+frame.width/2,frame.y+frame.height/2);await page.mouse.down();
+    await page.mouse.move(frame.x+frame.width/2+22,frame.y+frame.height/2-8,{steps:5});await page.mouse.up();
+    const moved=await readFraming(page);
+    assert(moved.x<50 && moved.y>50,'Mouse drag did not move the framing');
+    await page.mouse.wheel(0,-120);
+    await page.waitForFunction(() => Number(document.querySelector('#photo-crop-frame').dataset.cropZoom)>1.8);
+    await screenshot('00-gesture-editor-preview');
+    await page.locator('#photo-crop-dialog').getByRole('button',{name:'Cancelar',exact:true}).click();
+    await page.locator('#photo-crop-dialog').waitFor({state:'hidden'});
+    const after=await snap(page);
+    assert.deepEqual(after.outbox,before.outbox,'Preview or Cancel enqueued an operation');
+    assert.deepEqual(after.canonicalPhotos,before.canonicalPhotos,'Preview changed canonical metadata');
+    return {drag:moved,originals:await assertOriginals(page)};
+  });
+  await check('D4 offline crop through keyboard, zoom buttons and Save', async () => {
     const before = await snap(page);
     const previous = before.canonicalPhotos.find(photo => photo.id === firstPhoto);
     await context.setOffline(true); offline = true;
     const mutations = network.filter(request => request.operation).length;
-    await page.locator('.detail-crop summary').click();
-    await setSlider(page, 'zoom', 2.2); await setSlider(page, 'x', 17); await setSlider(page, 'y', 81);
+    await openFraming(page);
+    await setFraming(page,{x:17,y:81,zoom:2.2});
     assert.equal((await snap(page)).outbox.filter(op => op.action === 'photo.crop').length, 0, 'Preview must not enqueue');
     await page.locator('[data-save-photo-crop]').click();
+    await page.locator('#photo-crop-dialog').waitFor({state:'hidden'});
     const s = await until(page, `state.outbox.some(op => op.action === 'photo.crop' && op.state === 'pending') && state.displayPhotos.some(photo => photo.id === ${JSON.stringify(firstPhoto)} && photo.cropX === 17 && photo.cropY === 81 && photo.cropZoom === 2.2)`);
     cropOperation = s.outbox.find(op => op.action === 'photo.crop' && op.state === 'pending');
     assert.equal(network.filter(request => request.operation).length, mutations, 'Offline save attempted a mutation RPC');

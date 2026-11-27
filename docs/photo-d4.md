@@ -2,6 +2,14 @@
 
 D4 incorpora `photo.crop` y `photo.primary` al contrato de 20 acciones. El encuadre guarda posición horizontal/vertical de 0 a 100 y acercamiento de 1 a 3. El original no se recodifica, sustituye ni elimina al encuadrar. La ficha y la galería aplican estos valores; el visor abre el original completo.
 
+## Editor de encuadre
+
+**Ajustar encuadre** abre un editor con la misma proporción que la imagen de la ficha. La fotografía se mueve arrastrándola con ratón o dedo. La pinza de dos dedos y la rueda ajustan el acercamiento alrededor del punto elegido; los botones **− / +** ofrecen una alternativa sin gestos. Los límites mantienen la imagen cubriendo todo el marco.
+
+Con el marco enfocado, las flechas desplazan la imagen, **Mayús + flecha** amplía el paso, **+ / −** ajusta el zoom e **Inicio** restablece el encuadre. **Restablecer** sólo cambia la vista previa. **Cancelar**, cerrar el editor o pulsar **Escape** descarta la vista previa; únicamente **Guardar encuadre** genera el cambio persistente.
+
+El selector del alta usa un botón accesible, indica cuántas fotografías se han seleccionado y conserva las miniaturas con su acción de quitar. El botón de la galería también admite teclado. El editor y su módulo se guardan en la caché de la PWA para usarlos sin conexión.
+
 ## Captura y sincronización
 
 Con `syncEventRpcV1: true`, encuadrar, cambiar la principal y eliminar una foto utilizan operaciones persistentes. La sincronización o la primera edición online guarda una revisión confirmada de esa fotografía, vinculada a su contenido, usuario y rancho. Después puede capturarse el cambio sin red. Una foto nueva que todavía no tiene revisión confirmada debe sincronizarse primero.
@@ -23,8 +31,9 @@ La incorporación de estos archivos no instala SQL ni activa las banderas en una
 ## Pruebas de regresión
 
 - `tests/photo-outbox.test.mjs`: revisiones por ámbito y contenido, proyección sin mutar los originales, recibos, conflictos, principal y borrado.
+- `tests/photo-framing.test.mjs`: geometría compatible con el encuadre existente, límites, arrastre y conservación del punto focal al acercar.
 - `tests/sql/photo_operations_d4.sql`: contrato, permisos, aislamiento, objetos originales, compatibilidad heredada, límites del encuadre y revisiones.
 - `tests/photo_concurrency_staging.py`: carreras de principal, recorte, envío duplicado y recorte frente a borrado. Sólo contra una base desechable de pruebas, con las variables y guardas que usa CI.
-- `tests/browser/photo-d4.cjs`: navegador real, IndexedDB cifrado, recarga offline, dos pestañas, confirmación y conflictos, con servidor y cuentas sintéticas locales.
+- `tests/browser/photo-d4.cjs`: gestos reales, teclado, selección de archivos, cancelación, navegador real, IndexedDB cifrado, recarga offline, dos pestañas, confirmación y conflictos, con servidor y cuentas sintéticas locales.
 
 La suite Node se ejecuta con `node --test tests/*.test.cjs tests/*.test.mjs`. Las suites SQL y de concurrencia se ejecutan en CI contra Supabase local. El navegador usa Playwright; no requiere credenciales de un rancho real.

@@ -133,6 +133,9 @@
   let db;
   let cloud;
   let currentUser;
+  let photoCropEditor = null;
+  let photoCropSession = null;
+  let photoCropOpening = 0;
   state.confirmedAnimals = [];
   state.pendingEvents = [];
   state.universalOperations = [];
@@ -2444,28 +2447,81 @@
     return { x: coordinate(photo?.cropX), y: coordinate(photo?.cropY), zoom: Math.max(1,Math.min(3,Number(photo?.cropZoom)||1)) };
   }
   function updatePhotoCropControls() {
-    const image = $(".detail-hero img");
-    const frame = $(".detail-hero");
-    const panel = $(".detail-crop-panel");
-    if (!image || !frame || !panel || !image.naturalWidth || !image.naturalHeight) return;
-    const horizontal = panel.querySelector('[data-photo-crop="x"]');
-    const vertical = panel.querySelector('[data-photo-crop="y"]');
-    const imageRatio = image.naturalWidth / image.naturalHeight;
-    const frameRatio = frame.clientWidth / frame.clientHeight;
-    const zoom = Number(panel.querySelector('[data-photo-crop="zoom"]').value);
-    const blocked = Boolean(photoOperationFor(state.currentAnimalId));
-    horizontal.disabled = blocked || zoom <= 1 && imageRatio <= frameRatio + 0.01;
-    vertical.disabled = blocked || zoom <= 1 && imageRatio >= frameRatio - 0.01;
-    panel.querySelector('[data-photo-crop="zoom"]').disabled = blocked;
-    const help = panel.querySelector(".detail-crop-help");
-    help.textContent = blocked ? "Hay un cambio de fotografía pendiente. Sincronízalo o revisa su conflicto antes de otro cambio."
-      : horizontal.disabled && vertical.disabled
-      ? "La foto se muestra completa. Acércala para ajustar ambos ejes."
-      : horizontal.disabled
-        ? "Esta foto se recorta arriba y abajo. Ajusta la posición vertical."
-        : vertical.disabled
-          ? "Esta foto se recorta a los lados. Ajusta la posición horizontal."
-          : "Ajusta la posición de la foto en el marco.";
+    const dialog = $("#photo-crop-dialog"), session = photoCropSession;
+    if (!session || !dialog.open) return;
+    const currentPhoto = state.photos.find(photo => photo.id === session.photoId);
+    if (session.scope !== photoCropScope() || !canManageRanch() || state.currentAnimalId !== session.animalId || !currentPhoto) {
+      dialog.close(); return;
+    }
+    const image = $("#photo-crop-image"), hero = $(".detail-hero");
+    if (hero?.clientWidth && hero.clientHeight) $("#photo-crop-frame").style.aspectRatio = String(hero.clientWidth / hero.clientHeight);
+    const ready = image.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
+    const pending = Boolean(photoOperationFor(session.animalId));
+    const changed = photoFramingFingerprint(currentPhoto) !== session.fingerprint;
+    const blocked = session.saving || pending || changed || !ready;
+    photoCropEditor?.setDisabled(blocked);
+    const crop = photoCropEditor?.crop || session.initial;
+    $("#photo-crop-zoom").textContent = Math.round(crop.zoom * 100) + "%";
+    $("[data-photo-zoom='out']", dialog).disabled = blocked || crop.zoom <= 1;
+    $("[data-photo-zoom='in']", dialog).disabled = blocked || crop.zoom >= 3;
+    $("[data-reset-photo-crop]", dialog).disabled = blocked;
+    $("[data-save-photo-crop]", dialog).disabled = blocked;
+    $("[data-save-photo-crop]", dialog).textContent = session.saving ? "Guardando…" : "Guardar encuadre";
+    $$('[data-close="photo-crop-dialog"]', dialog).forEach(button => {button.disabled = session.saving;});
+    $("#photo-crop-message").textContent = session.saving ? "Guardando el encuadre…"
+      : pending ? "Hay un cambio de fotografía pendiente. Sincronízalo o revisa su conflicto para continuar."
+      : changed ? "La fotografía cambió mientras editabas. Cierra y vuelve a abrir el editor."
+      : !ready ? image.complete ? "No se pudo abrir esta imagen. Cierra el editor e inténtalo de nuevo." : "Preparando la fotografía…"
+      : "Arrastra para mover · Pellizca o usa la rueda para acercar";
+  }
+  function photoCropScope() {
+    return JSON.stringify([db?.name, currentUser?.id, state.ranchOwnerId, sessionGeneration]);
+  }
+  function photoFramingFingerprint(photo) {
+    return JSON.stringify([photoFingerprint(photo), photo.storagePath || null]);
+  }
+  function clearPhotoCropEditor() {
+    if ($("#photo-crop-dialog").open) return;
+    photoCropOpening += 1;
+    photoCropEditor?.destroy(); photoCropEditor = null; photoCropSession = null;
+    $("#photo-crop-image").removeAttribute("src");
+  }
+  async function openPhotoCrop(photoId) {
+    const photo = state.photos.find(item => item.id === photoId), dialog = $("#photo-crop-dialog");
+    if (!photo || !canManageRanch() || photoOperationFor(photo.animalId) || dialog.open) return;
+    const scope = photoCropScope(), request = ++photoCropOpening;
+    try {
+      const {createPhotoFraming} = await import("./ui/photo-framing.mjs");
+      if (request !== photoCropOpening || scope !== photoCropScope() || !canManageRanch() || state.currentAnimalId !== photo.animalId || photoOperationFor(photo.animalId)) return;
+      photoCropEditor?.destroy();
+      photoCropSession = {photoId, animalId: photo.animalId, scope, photo: {...photo}, fingerprint: photoFramingFingerprint(photo), initial: photoCrop(photo), saving: false};
+      const image = $("#photo-crop-image"), frame = $("#photo-crop-frame");
+      image.src = photoUrl(photo);
+      $("[data-save-photo-crop]", dialog).dataset.savePhotoCrop = photoId;
+      $("[data-reset-photo-crop]", dialog).dataset.resetPhotoCrop = photoId;
+      dialog.showModal();
+      photoCropEditor = createPhotoFraming({frame, image, crop: photoCropSession.initial, onChange: updatePhotoCropControls});
+      updatePhotoCropControls();
+      frame.focus({preventScroll: true});
+    } catch (error) {
+      if (dialog.open) dialog.close();
+      clearPhotoCropEditor();
+      showToast("No se pudo abrir el editor de fotografía: " + error.message);
+    }
+  }
+  async function saveActivePhotoCrop() {
+    const session = photoCropSession, editor = photoCropEditor;
+    if (!session || !editor || session.saving || session.scope !== photoCropScope() || photoOperationFor(session.animalId)) return;
+    const currentPhoto = state.photos.find(photo => photo.id === session.photoId);
+    if (!currentPhoto || photoFramingFingerprint(currentPhoto) !== session.fingerprint) {updatePhotoCropControls(); return;}
+    session.saving = true; updatePhotoCropControls();
+    const {x, y, zoom} = editor.crop;
+    try {
+      const saved = await savePhotoCrop(session.photoId, x, y, zoom, session.photo);
+      if (saved && photoCropSession === session) $("#photo-crop-dialog").close();
+    } finally {
+      if (photoCropSession === session) {session.saving = false; updatePhotoCropControls();}
+    }
   }
 
   function validAnalysisWeight(value) {
@@ -4306,7 +4362,7 @@
       error.hidden = true;
       error.textContent = "";
     });
-    $$("#animal-form label.is-invalid").forEach(label => label.classList.remove("is-invalid"));
+    $$("#animal-form label.is-invalid, #animal-form .photo-upload-field.is-invalid").forEach(label => label.classList.remove("is-invalid"));
   }
 
   function saveAnimalDraft() {
@@ -4432,7 +4488,8 @@
     const stepIndex = steps.findIndex(step => step.element === section);
     if (stepIndex >= 0 && isAnimalFormMobile()) setAnimalFormStep(stepIndex);
     if (section?.matches("details")) section.open = true;
-    const visibleControl = control.closest(".chip-select")?.querySelector(".chip-option") || control;
+    const visibleControl = control.id === "initial-photos" ? $('[data-select-photos="initial-photos"]')
+      : control.closest(".chip-select")?.querySelector(".chip-option") || control;
     visibleControl.focus();
   }
 
@@ -4657,6 +4714,7 @@
   }
 
   function requestClose(dialogId) {
+    if (dialogId === "photo-crop-dialog" && photoCropSession?.saving) return;
     const hasAnimalChanges = dialogId === "animal-dialog" && animalFormValues() !== state.animalFormSnapshot;
     if (hasAnimalChanges && !confirm("Hay cambios sin guardar. ¿Salir sin guardarlos?")) return;
     if (hasAnimalChanges) saveAnimalDraft();
@@ -4672,7 +4730,7 @@
   }
 
   function setFieldError(control, message) {
-    const label = control.closest("label") || control.closest("[data-config-field]");
+    const label = control.closest("label") || control.closest("[data-config-field]") || control.closest(".photo-upload-field");
     if (!label) return;
     label.classList.add("is-invalid");
     let error = $(".field-error", label);
@@ -4986,6 +5044,10 @@
     if (!input || !preview) return;
     $$("img[data-object-url]", preview).forEach(image => URL.revokeObjectURL(image.dataset.objectUrl));
     const files = [...input.files];
+    $("#initial-photos-label").textContent = files.length ? "Cambiar selección" : "Seleccionar fotografías";
+    $("#initial-photos-status").textContent = files.length
+      ? files.length + (files.length === 1 ? " fotografía seleccionada" : " fotografías seleccionadas")
+      : "Puedes elegir varias imágenes de tu dispositivo.";
     if (!files.length) {
       preview.hidden = true;
       preview.innerHTML = "";
@@ -5406,17 +5468,9 @@
         </div>
         <div class="detail-hero">${heroImage}<span class="detail-hero-status" data-detail-field="status" data-detail-has-value="true">${statusMarkup(animal.status, "status-display")}</span></div>
         ${photoStatus ? `<p class="photo-sync-status" role="status">${escapeHtml(photoStatus)} <button type="button" class="add-link" data-review-photo-operations>Revisar sincronización</button></p>` : ""}
-        ${heroPhoto && manager ? `<details class="detail-crop" data-detail-view="full" data-detail-has-value="true">
-          <summary aria-label="Ajustar encuadre de la foto" title="Ajustar encuadre">${icon("edit")} Ajustar encuadre</summary>
-          <div class="detail-crop-panel">
-            <label>Horizontal <input type="range" min="0" max="100" value="${heroCrop.x}" data-photo-crop="x" data-photo-id="${escapeHtml(heroPhoto.id)}" aria-label="Posición horizontal de la foto"></label>
-            <label>Vertical <input type="range" min="0" max="100" value="${heroCrop.y}" data-photo-crop="y" data-photo-id="${escapeHtml(heroPhoto.id)}" aria-label="Posición vertical de la foto"></label>
-            <label>Acercamiento <input type="range" min="1" max="3" step="0.1" value="${heroCrop.zoom}" data-photo-crop="zoom" data-photo-id="${escapeHtml(heroPhoto.id)}" aria-label="Acercamiento"></label>
-            <p class="detail-crop-help" aria-live="polite">Ajusta la posición de la foto en el marco.</p>
-            <div class="detail-crop-actions"><button class="button button-small" type="button" data-save-photo-crop="${escapeHtml(heroPhoto.id)}" ${photoDisabled}>Guardar encuadre</button>
-            <button class="detail-crop-reset" type="button" data-reset-photo-crop="${escapeHtml(heroPhoto.id)}" ${photoDisabled}>Restablecer encuadre</button></div>
-          </div>
-        </details>` : ""}
+        ${heroPhoto && manager ? `<div class="detail-crop">
+          <button class="photo-frame-button" type="button" data-edit-photo-crop="${escapeHtml(heroPhoto.id)}" ${photoDisabled}>${icon("edit")} Ajustar encuadre</button>
+        </div>` : ""}
         <div class="detail-identity">
           <span class="detail-tag-icon">${icon("tag")}</span>
           <div data-config-field="name" data-config-surface="detail" data-detail-field="name" data-detail-has-value="${Boolean(animal.name)}"><h2>${escapeHtml(animal.name || "Animal sin nombre")}</h2></div>
@@ -5463,7 +5517,7 @@
         </section>
         <section class="detail-section" data-detail-view="full" data-detail-has-value="${manager || photos.length > 0}">
           <div class="detail-section-head"><h3>Galería de fotografías <span class="muted">(${photos.length})</span></h3></div>
-          <div class="gallery">${gallery}${manager && !photoOperation ? `<label class="photo-add" title="Añadir fotografías" aria-label="Añadir fotografías">${icon("photo")}<input id="photo-input" type="file" accept="image/*" multiple hidden></label>` : ""}</div>
+          <div class="gallery">${gallery}${manager && !photoOperation ? `<button class="photo-add" type="button" data-select-photos="photo-input">${icon("photo")}<span>Añadir fotos</span></button><input id="photo-input" type="file" accept="image/*" multiple hidden aria-label="Añadir fotografías">` : ""}</div>
         </section>
         <div class="detail-section animal-management" data-detail-view="full" data-detail-has-value="true">
           ${manager && !isActiveAnimal(animal) ? `<button class="button button-outline button-small" type="button" data-reactivate-animal="${escapeHtml(animal.id)}">${icon("active")} Reactivar animal</button>` : ""}
@@ -5474,9 +5528,7 @@
     applyAnimalFieldVisibility($("#detail-content"));
     applyDetailPresentation();
     if (!$("#detail-dialog").open) $("#detail-dialog").showModal();
-    const detailPhotoImage = $(".detail-hero img");
-    if (detailPhotoImage?.complete) updatePhotoCropControls();
-    else detailPhotoImage?.addEventListener("load", updatePhotoCropControls, { once: true });
+    updatePhotoCropControls();
   }
 
   function renderHistory(records, allowDelete = canManageRanch()) {
@@ -5755,23 +5807,25 @@
     }
   }
 
-  async function savePhotoCrop(photoId, x, y, zoom=1) {
-    if (!canManageRanch()) return;
-    const photo = state.photos.find(item => item.id === photoId);
-    if (!photo) return;
+  async function savePhotoCrop(photoId, x, y, zoom=1, expectedPhoto=null) {
+    if (!canManageRanch()) return false;
+    const currentPhoto = state.photos.find(item => item.id === photoId);
+    if (!currentPhoto) return false;
+    const photo = expectedPhoto || currentPhoto;
     try {
+      if (expectedPhoto && photoFramingFingerprint(currentPhoto) !== photoFramingFingerprint(expectedPhoto)) throw Error("La fotografía cambió mientras editabas. Cierra y vuelve a abrir el editor.");
       if(![x,y,zoom].every(Number.isFinite)||x<0||x>100||y<0||y>100||zoom<1||zoom>3)throw Error("Encuadre inválido.");
       if(eventOutboxEnabled()){
-        await queuePhotoChange("photo.crop", photo, {animalId:photo.animalId,cropX:x,cropY:y,cropZoom:zoom});showToast("Encuadre guardado; pendiente de sincronizar.");return;
+        await queuePhotoChange("photo.crop", photo, {animalId:photo.animalId,cropX:x,cropY:y,cropZoom:zoom});showToast("Encuadre guardado; pendiente de sincronizar.");return true;
       }
       await put("photos", { ...photo, cropX: x, cropY: y,cropZoom:zoom });
       await touchAnimal(photo.animalId);
       await refresh();
       openDetail(photo.animalId, true);
-      const controls = $$(".detail-crop");
-      controls.forEach(control => { control.open = true; });
+      return true;
     } catch (error) {
       showToast(`No se pudo guardar el encuadre: ${error.message}`);
+      return false;
     }
   }
 
@@ -6737,22 +6791,11 @@
       if (target.dataset.deletePhoto) { deletePhoto(target.dataset.deletePhoto); return; }
       if (target.dataset.primaryPhoto) { choosePrimary(target.dataset.primaryPhoto); return; }
       if (target.hasAttribute("data-review-photo-operations")) { showEventOutbox(); return; }
-      if (target.dataset.savePhotoCrop) {
-        const panel = target.closest(".detail-crop-panel");
-        target.disabled = true;
-        savePhotoCrop(target.dataset.savePhotoCrop,
-          Number(panel.querySelector('[data-photo-crop="x"]').value),
-          Number(panel.querySelector('[data-photo-crop="y"]').value),
-          Number(panel.querySelector('[data-photo-crop="zoom"]').value)
-        ).finally(() => { if (target.isConnected) target.disabled = Boolean(photoOperationFor(state.currentAnimalId)); });
-        return;
-      }
-      if (target.dataset.resetPhotoCrop) {
-        const cropControls = $$(".detail-crop-panel input[data-photo-crop]");
-        cropControls.forEach(input => { input.value = input.dataset.photoCrop === "zoom" ? "1" : "50"; });
-        cropControls[0]?.dispatchEvent(new Event("input", {bubbles:true}));
-        return;
-      }
+      if (target.dataset.selectPhotos) {$("#" + target.dataset.selectPhotos)?.click(); return;}
+      if (target.dataset.editPhotoCrop) {openPhotoCrop(target.dataset.editPhotoCrop); return;}
+      if (target.dataset.savePhotoCrop) {void saveActivePhotoCrop(); return;}
+      if (target.dataset.resetPhotoCrop) {photoCropEditor?.reset(); return;}
+      if (target.dataset.photoZoom) {photoCropEditor?.zoomBy(target.dataset.photoZoom === "in" ? 0.1 : -0.1); return;}
       if (target.dataset.viewPhoto) {
         const photo = state.photos.find(item => item.id === target.dataset.viewPhoto);
         if (photo) { $("#photo-large").src = photoUrl(photo); $("#photo-dialog").showModal(); }
@@ -6771,13 +6814,6 @@
         updateJourneyWeightFeedback();
         return;
       }
-      if (!input.dataset.photoCrop) return;
-      const panel = input.closest(".detail-crop-panel");
-      const x = Number(panel.querySelector('[data-photo-crop="x"]').value);
-      const y = Number(panel.querySelector('[data-photo-crop="y"]').value);
-      const image = $(".detail-hero img");
-      if (image) { image.style.objectPosition = `${x}% ${y}%`; image.style.transformOrigin = `${x}% ${y}%`; image.style.transform = `scale(${Number(panel.querySelector('[data-photo-crop="zoom"]').value)})`; }
-      updatePhotoCropControls();
     });
     document.addEventListener("change", event => {
       if (event.target.matches("[data-show-detail-empty]")) {
@@ -6816,12 +6852,16 @@
         $("#search-input").focus();
       }
     });
-    [$("#animal-dialog"), $("#detail-dialog"), $("#record-dialog"), $("#photo-dialog"), $("#journey-create-dialog"), $("#journey-dialog"), $("#tag-scanner-dialog")].forEach(dialog => {
+    [$("#animal-dialog"), $("#detail-dialog"), $("#record-dialog"), $("#photo-dialog"), $("#photo-crop-dialog"), $("#journey-create-dialog"), $("#journey-dialog"), $("#tag-scanner-dialog")].forEach(dialog => {
       dialog.addEventListener("click", event => {
         if (event.target === dialog) requestClose(dialog.id);
       });
     });
     $("#tag-scanner-dialog").addEventListener("close", stopTagScanner);
+    $("#photo-crop-dialog").addEventListener("close", clearPhotoCropEditor);
+    $("#photo-crop-dialog").addEventListener("cancel", event => {if (photoCropSession?.saving) event.preventDefault();});
+    $("#photo-crop-image").addEventListener("load", updatePhotoCropControls);
+    $("#photo-crop-image").addEventListener("error", updatePhotoCropControls);
     [$("#account-dialog"), $("#ranch-dialog")].forEach(dialog => dialog.addEventListener("click", event => {
       if (event.target === event.currentTarget) dialog.close();
     }));
