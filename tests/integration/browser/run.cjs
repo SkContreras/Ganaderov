@@ -302,8 +302,10 @@ async function main() {
   });
   await check('D4 reconnect and the Sync button apply real RPC and retire the confirmed overlay', async () => {
     offline = false; await context.setOffline(false);
+    await page.locator('#detail-dialog [data-close="detail-dialog"]').click();
     await page.locator('#sync-button').click();
     const op = await confirmed(page, cropOperation.id, true);
+    await showAnimal(page);
     const s = await snap(page);
     assert.equal(s.canonicalPhotos.find(photo => photo.id === firstPhoto).cropX, 17);
     assert.equal(s.canonicalPhotos.find(photo => photo.id === firstPhoto).cropY, 81);
