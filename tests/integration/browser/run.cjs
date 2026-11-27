@@ -404,6 +404,7 @@ async function main() {
     });
     await check('Universal configuration editor saves offline and keeps the raw server snapshot separate',async()=>{
       await page.locator('#settings-nav').click();await context.setOffline(true);offline=true;
+      await page.locator('[data-settings-tab="advanced"]').click();
       const before=await snap(page);const label='Arete de prueba UI';
       await page.locator('[data-field-label="tag"]').fill(label);await page.locator('#save-animal-settings').click();
       const pending=await until(page,`state.outbox.some(op=>op.action==='config.update'&&op.state==='pending')`);
