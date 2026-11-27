@@ -1,4 +1,4 @@
-// Pure page validator; deliberately not wired into legacy synchronization.
+// Validate a complete page before committing its records and cursor.
 export function applyChangePage(snapshot, page, ownerId) {
   if (!snapshot || snapshot.ownerId!==ownerId || page?.protocolVersion!==1 || page.status!=="ok") throw Error("Reset or invalid scope");
   if (typeof page.epoch!=="string" || !page.epoch || (snapshot.epoch!==null&&snapshot.epoch!==page.epoch)) throw Error("Epoch mismatch");
