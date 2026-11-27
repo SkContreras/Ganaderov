@@ -35,11 +35,21 @@ jobs:
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/d4-browser/node_modules/playwright" node tests/browser/photo-d4.cjs
         env:
           D4_BROWSER_ARTIFACTS: ${{ runner.temp }}/d4-browser-results
+      - name: Universal offline dependencies and closed PWA delivery
+        run: |
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/d4-browser/node_modules/playwright" node tests/browser/universal-completion.cjs
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/d4-browser/node_modules/playwright" node tests/browser/background-universal.cjs
+        env:
+          UNIVERSAL_BROWSER_ARTIFACTS: ${{ runner.temp }}/universal-browser-results
+          BACKGROUND_BROWSER_ARTIFACTS: ${{ runner.temp }}/background-browser-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: d4-browser-results
-          path: ${{ runner.temp }}/d4-browser-results
+          path: |
+            ${{ runner.temp }}/d4-browser-results
+            ${{ runner.temp }}/universal-browser-results
+            ${{ runner.temp }}/background-browser-results
           if-no-files-found: ignore
 
   protocol:
@@ -56,7 +66,7 @@ jobs:
       - name: Start disposable Supabase
         run: |
           supabase init
-          supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor,realtime,inbucket
+          supabase start -x studio,imgproxy,logflare,vector,supavisor,realtime,inbucket
       - name: Install schema and exercise all operations
         env:
           PGHOST: 127.0.0.1
@@ -71,7 +81,7 @@ jobs:
           done < "$RUNNER_TEMP/backend-sql-paths.txt"
           psql -X -v ON_ERROR_STOP=1 -c "NOTIFY pgrst, 'reload schema';"
           psql -X -qAt -v ON_ERROR_STOP=1 -f scripts/supabase-audit.sql > "$RUNNER_TEMP/backend-audit.json"
-          for sql in tests/sql/{event_rpc_audit,universal_operations,incremental_retention,security_hardening,photo_operations_d4}.sql; do
+          for sql in tests/sql/{event_rpc_audit,universal_operations,incremental_retention,security_hardening,photo_operations_d4,universal_completion,background_capabilities}.sql; do
             psql -X -v ON_ERROR_STOP=1 -f "$sql"
           done
       - name: Concurrent authenticated writers
@@ -90,6 +100,19 @@ jobs:
         run: |
           umask 077
           supabase status -o json > "$GANADEROV_SUPABASE_STATUS"
+          supabase functions serve sync-background-photo --no-verify-jwt > "$RUNNER_TEMP/background-photo.private.log" 2>&1 &
+          python3 - <<'PY'
+          import json, os, time, urllib.request, urllib.error
+          status=json.load(open(os.environ['GANADEROV_SUPABASE_STATUS']))
+          for attempt in range(60):
+              try:
+                  request=urllib.request.Request(status['API_URL']+'/functions/v1/sync-background-photo',method='OPTIONS',headers={'apikey':status['ANON_KEY']})
+                  with urllib.request.urlopen(request,timeout=3) as response:
+                      if response.status==204: break
+              except (urllib.error.URLError, TimeoutError): pass
+              time.sleep(1)
+          else: raise SystemExit('The isolated photo gateway did not become ready')
+          PY
           python tests/integration/http_e2e.py --keep-fixtures --output "$RUNNER_TEMP/d234"
       - name: Install tools for real browser integration
         run: |
@@ -108,6 +131,7 @@ jobs:
           GANADEROV_BROWSER_ARTIFACTS: ${{ runner.temp }}/d234/browser-artifacts
           PLAYWRIGHT_MODULE: ${{ runner.temp }}/d234-browser/node_modules/playwright
           SUPABASE_JS_UMD: ${{ runner.temp }}/supabase-2.49.8.js
+          GANADEROV_BROWSER_EXTENDED: '1'
         run: node tests/integration/browser/run.cjs
       - name: Check out the exact Mobile consumer
         if: always() && steps.real_http.outcome == 'success'
@@ -149,5 +173,5 @@ jobs:
       - name: Remove temporary credentials and discard test services
         if: always()
         run: |
-          rm -f "$RUNNER_TEMP/supabase-status.private.json" "$RUNNER_TEMP/d234/fixtures.private.json"
+          rm -f "$RUNNER_TEMP/supabase-status.private.json" "$RUNNER_TEMP/d234/fixtures.private.json" "$RUNNER_TEMP/background-photo.private.log"
           supabase stop --no-backup

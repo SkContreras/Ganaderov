@@ -7,10 +7,10 @@ Object.defineProperty(window, '__ganaderovIntegration', {
     async snapshot(animalId) {
       const database = db;
       if (!database) return {ready: false};
-      const names = ['animals', 'photos', 'operationOutbox', 'syncMeta', 'growthForecasts', 'journeys', 'events'];
+      const names = ['animals', 'photos', 'operationOutbox', 'syncMeta', 'growthForecasts', 'journeys', 'events', 'ranchSettings'];
       const values = await Promise.all(names.map(name => readDatabaseStore(database, name)));
       if (db !== database) return {ready: false};
-      const [animals, photos, entries, meta, forecasts, journeys, events] = values;
+      const [animals, photos, entries, meta, forecasts, journeys, events, settings] = values;
       const photo = item => ({
         id: item.id, animalId: item.animalId, primary: Boolean(item.primary),
         ...photoCrop(item), cropX: photoCrop(item).x, cropY: photoCrop(item).y,
@@ -25,6 +25,12 @@ Object.defineProperty(window, '__ganaderovIntegration', {
         ranchContextOffline: Boolean(state.ranchContextOffline),
         syncing: state.syncing, serviceWorker: Boolean(navigator.serviceWorker.controller),
         animal: animals.find(item => item.id === animalId) ? {id: animalId} : null,
+        animals: animals.map(({id,tag,name,status,internalId})=>({id,tag,name,status,internalId})),
+        displayAnimals:state.animals.map(({id,tag,name,status,_pending})=>({id,tag,name,status,_pending})),
+        pendingEvents:state.pendingEvents,
+        allEventIds:events.map(item=>({id:item.id,animalId:item.animalId})),
+        config:settings.find(row=>row.id==='animal-fields')?.config??null,
+        displayConfig:state.fieldConfig,
         canonicalPhotos: photos.filter(item => item.animalId === animalId).map(photo),
         displayPhotos: state.photos.filter(item => item.animalId === animalId).map(photo),
         outbox: scoped.map(entry => ({
@@ -32,19 +38,20 @@ Object.defineProperty(window, '__ganaderovIntegration', {
           entityType: entry.operation?.entityType, entityId: entry.operation?.entityId,
           baseRevision: entry.operation?.baseRevision, changes: entry.operation?.changes,
           photoSettled: entry.photoSettled,
+          settled:entry.settled,sealed:entry.sealed,dependsOn:entry.dependsOn,baseOperationId:entry.baseOperationId,
           receipt: entry.receipt ? {
             operationId: entry.receipt.operationId, status: entry.receipt.status,
             revision: entry.receipt.revision, code: entry.receipt.code
           } : null
         })),
-        revisions: meta.filter(item => /^(photo|journey)-revision:/.test(item.id)).map(item => ({id: item.id, revision: item.revision})),
+        revisions: meta.filter(item => /^(photo|journey|entity)-revision:/.test(item.id)).map(item => ({id: item.id, revision: item.revision})),
         forecasts: forecasts.filter(item => item.animalId === animalId),
         journeys: journeys.map(item => ({
           id: item.id, status: item.status, type: item.type, notes: item.notes,
           roster: item.roster.map(animal => ({id: animal.id, attended: Boolean(animal.attended)}))
         })),
         events: events.filter(item => item.animalId === animalId).map(item => ({
-          id: item.id, type: item.type, journeyId: item.journeyId, date: item.date
+          id: item.id, type: item.type, journeyId: item.journeyId, date: item.date,notes:item.notes,label:item.label,weight:item.weight
         }))
       };
     },

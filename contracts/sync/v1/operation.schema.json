@@ -256,7 +256,9 @@
                   "deworm",
                   "injection",
                   "medication",
-                  "review"
+                  "review",
+                  "note",
+                  "other"
                 ]
               },
               "date": {
@@ -303,6 +305,25 @@
                     ]
                   }
                 }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "note"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "notes"
+                  ],
+                  "properties": {
+                    "notes": {
+                      "minLength": 1
+                    }
+                  }
+                }
               }
             ]
           },
@@ -330,23 +351,86 @@
       "then": {
         "properties": {
           "changes": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "animalId": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "animalId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "weight": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100000
+                  }
+                },
+                "required": [
+                  "animalId",
+                  "weight"
+                ]
               },
-              "weight": {
-                "type": "number",
-                "minimum": 0,
-                "maximum": 100000
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "animalId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "weight": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100000
+                  },
+                  "date": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "product": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "notes": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  }
+                },
+                "required": [
+                  "animalId",
+                  "reason"
+                ],
+                "anyOf": [
+                  {
+                    "required": [
+                      "date"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "product"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "notes"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "weight"
+                    ]
+                  }
+                ]
               }
-            },
-            "required": [
-              "animalId",
-              "weight"
             ]
           },
           "baseRevision": {

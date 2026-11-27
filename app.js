@@ -2,7 +2,7 @@
   "use strict";
 
   const DB_NAME = "ganadero-local";
-  const DB_VERSION = 7;
+  const DB_VERSION = 9;
   const ANIMAL_MODULES = [
     { id: "identification", label: "Identificación básica", description: "Datos esenciales para reconocer al animal.", locked: true },
     { id: "dates", label: "Fechas y procedencia", description: "Nacimiento, ingreso, origen, progenitores y destete." },
@@ -126,13 +126,17 @@
   }
   function journeyStatusMarkup(journey) {
     const iconName = journey.status === "completed" ? "check" : journey.status === "incomplete" ? "warning" : "clock";
-    return `<span class="journey-status ${journey.status}">${icon(iconName)}${escapeHtml(journeyStatus(journey))}</span>`;
+    return `<span class="journey-status ${journey.status}">${icon(iconName)}${escapeHtml(journeyStatus(journey))}${journey._pending ? " · pendiente de sincronizar" : ""}</span>`;
   }
   const hasRanchAccess = () => !currentUser || state.legacyAccount || ["owner", "admin", "worker"].includes(state.ranchRole);
   const state = { animals: [], events: [], photos: [], photoOperations: [], journeys: [], forecasts: [], photoUrls: new Map(), fieldConfig: null, fieldConfigRecord: null, fieldSettingsDirty: false, mainView: "inventory", sort: "tag", direction: 1, archiveView: false, currentAnimalId: null, detailView: "summary", detailShowEmpty: false, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyWeightWarning: null, journeyUpdating: new Set(), animalFormSnapshot: "", animalFormStep: 0, animalFormMode: "create", animalFormWeightWarning: null, recordFormWeightWarning: null, quickCaptureSeed: null, pendingUndo: null, undoTimer: null, toastAction: null, scannerStream: null, scannerFrame: null, calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, ranchContextOffline: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, accountIdentities: [], toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
   let cloud;
   let currentUser;
+  state.confirmedAnimals = [];
+  state.pendingEvents = [];
+  state.universalOperations = [];
+  state.configPending = false;
   const canManageRanch = () => !currentUser || state.legacyAccount || ["owner", "admin"].includes(state.ranchRole);
   const isRanchWorker = () => Boolean(currentUser && !state.legacyAccount && state.ranchRole === "worker");
 
@@ -143,6 +147,12 @@
         const database = request.result;
         if (!database.objectStoreNames.contains("operationOutbox")) {
           database.createObjectStore("operationOutbox", { keyPath: "id" });
+        }
+        if (!database.objectStoreNames.contains("photoUploads")) {
+          database.createObjectStore("photoUploads", { keyPath: "id" });
+        }
+        if (!database.objectStoreNames.contains("legacyRecovery")) {
+          database.createObjectStore("legacyRecovery", { keyPath: "id" });
         }
         if (!database.objectStoreNames.contains("animals")) database.createObjectStore("animals", { keyPath: "id" });
         if (!database.objectStoreNames.contains("events")) {
@@ -173,7 +183,7 @@
     });
   }
 
-  const protectedStores=["animals","events","photos","syncMeta","deletedAnimals","journeys","growthForecasts","ranchSettings","operationOutbox"];
+  const protectedStores=["animals","events","photos","syncMeta","deletedAnimals","journeys","growthForecasts","ranchSettings","operationOutbox","photoUploads","legacyRecovery"];
   const protectedModule=()=>import("./sync/protected-store.mjs");
   function localScopeName(ownerId,userId=currentUser?.id){
     return `${DB_NAME}-account-${encodeURIComponent(window.GANADERO_CONFIG?.supabaseUrl||"local")}-${userId}-ranch-${ownerId}`;
@@ -198,6 +208,7 @@
     if(!userId)throw Error("Sesión requerida.");
     const scopedName=localScopeName(ownerId,userId);
     if(db.name===scopedName)return false;
+    await (await import("./sync/background-universal.mjs")).disableBackgroundDelivery();
     const previous=db,generation=sessionGeneration;
     const target=await openDatabase(scopedName);
     const verify=()=>{if(generation!==sessionGeneration||currentUser?.id!==userId||state.ranchOwnerId!==ownerId||db!==previous)throw Error("La sesión cambió.");};
@@ -256,7 +267,7 @@
     state.ranchContextOffline = false;
     for (const url of state.photoUrls.values()) URL.revokeObjectURL(url);
     state.photoUrls.clear();
-    state.animals=[]; state.events=[]; state.photos=[]; state.journeys=[]; state.forecasts=[];
+    state.animals=[]; state.confirmedAnimals=[]; state.events=[]; state.pendingEvents=[]; state.universalOperations=[]; state.photoOperations=[]; state.photos=[]; state.journeys=[]; state.forecasts=[];
     state.currentAnimalId=null; state.currentJourneyId=null;
     state.calculatorProjection=null; state.calculatorMeasuredGain=null;
     state.quickCaptureSeed=null; state.pendingUndo=null; state.toastAction=null;
@@ -335,6 +346,7 @@
       }
       state.ranchContextOffline = false;
       if (status === 401 || status === 403) {
+        await (await import("./sync/background-universal.mjs")).disableBackgroundDelivery();
         try { localStorage.removeItem(`ganadero-ranch-context:${userId}`); } catch (_) {}
       }
       if (status === 404 && error.code === "PGRST202") {
@@ -582,6 +594,28 @@
       const registration = await navigator.serviceWorker.getRegistration();
       if (registration?.active && registration.sync) await registration.sync.register(BACKGROUND_SYNC_TAG);
     } catch (_) { /* Foreground retry remains available. */ }
+  }
+  async function updateBackgroundCapability(scope) {
+    const module = await import("./sync/background-universal.mjs");
+    if (window.GANADERO_CONFIG?.syncBackgroundV1 !== true || !universalWritesEnabled()) {
+      await module.disableBackgroundDelivery();
+      return;
+    }
+    assertRemoteSyncScope(scope);
+    const {data,error} = await cloud.auth.getSession();
+    assertRemoteSyncScope(scope);
+    if (error || !data.session?.access_token) return;
+    let sessionId;
+    try { sessionId = JSON.parse(atob(data.session.access_token.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))).session_id; } catch (_) { return; }
+    if (!sessionId) return;
+    await module.publishBackgroundCapability({database:scope.database,projectUrl:window.GANADERO_CONFIG.supabaseUrl,
+      publishableKey:window.GANADERO_CONFIG.supabaseAnonKey,userId:scope.userId,ownerId:scope.ownerId,
+      deviceId:outboxDeviceId(),sessionId,verify:()=>assertRemoteSyncScope(scope),
+      issueCapability:async()=>{
+        const {data,error} = await cloud.rpc("sync_issue_background_capability",{p_owner:scope.ownerId,p_device:outboxDeviceId(),p_ttl_seconds:3600});
+        assertRemoteSyncScope(scope); if (error) throw error; return data;
+      }});
+    await requestBackgroundWake();
   }
 
   function scheduleSync() {
@@ -864,7 +898,7 @@
       if (!basic) group.open = advancedOpen;
       target.append(group);
     }
-    $("#settings-dirty-status").textContent = state.fieldSettingsDirty ? "Cambios sin guardar" : "Configuración guardada";
+    $("#settings-dirty-status").textContent = state.fieldSettingsDirty ? "Cambios sin guardar" : state.configPending ? "Configuración pendiente de sincronizar" : "Configuración guardada";
     $("#save-animal-settings").hidden = !canManageRanch();
   }
   function renderCapturePreferences() {
@@ -943,6 +977,7 @@
   }
 
   function renderAnimalSettings() {
+    state.configFormBase = displayedConfigBase();
     const config = normalizeAnimalFieldConfig(state.fieldConfig);
     state.fieldConfig = config;
     const canEdit = canManageRanch();
@@ -1070,6 +1105,14 @@
       showToast("Cierra el formulario del animal antes de cambiar su configuración.");
       return;
     }
+    if (universalWritesEnabled()) {
+      await queueUniversal([{action:"config.update",id:state.ranchOwnerId,changes:{config:ranchAnimalFieldConfigPayload(normalizeAnimalFieldConfig(config))},...(state.configFormBase || displayedConfigBase())}]);
+      renderAnimalSettings(); applyAnimalFieldVisibility();
+      state.fieldSettingsDirty = false; updateSettingsWorkspace();
+      if ($("#detail-dialog").open && state.currentAnimalId) openDetail(state.currentAnimalId,true);
+      showToast("Configuración guardada en cola; pendiente de confirmación.");
+      return;
+    }
     const previous = await getOne("ranchSettings", "animal-fields");
     const record = {
       id: "animal-fields",
@@ -1146,17 +1189,39 @@
     const photoSync = await import("./sync/photo-outbox.mjs");
     if(!valid())return;
     // A slower earlier refresh must not replace a newer pending photo overlay.
-    state.animals = animals;
+    const universal = await import("./sync/universal-outbox.mjs");
+    const photoScope = {userId:currentUser?.id,ownerId:state.ranchOwnerId};
+    const projected = universalWritesEnabled()
+      ? universal.projectUniversal({animals, events, journeys, forecasts, config:fieldConfigRecord?.config ?? null}, operations, photoScope)
+      : {animals, events, journeys, forecasts, config:fieldConfigRecord?.config, pendingEvents:[], photoCreates:[]};
+    if(!valid())return;
+    const projectedPhotos = photoSync.projectPhotoOperations(photos, operations, photoScope);
+    // Originals remain in their separate encrypted store. Read only pending
+    // attachments that need a local preview, never every historical upload.
+    for (const photo of projected.photoCreates) {
+      if (projectedPhotos.some(item => item.id === photo.id)) continue;
+      const original = await (await protectedModule()).readProtectedRecord(database, "photoUploads", photo.attachmentId);
+      if(!valid())return;
+      if (original?.userId === photoScope.userId && original?.ownerId === photoScope.ownerId && original.blob instanceof Blob) {
+        if (photo.primary) for (const previous of projectedPhotos) if (previous.animalId === photo.animalId) previous.primary = false;
+        projectedPhotos.push({...photo, blob:original.blob});
+      }
+    }
+    if(!valid())return;
+    state.confirmedAnimals = animals;
+    state.animals = projected.animals;
     if (assignedIds) scheduleSync();
     state.events = events;
-    const photoScope = {userId:currentUser?.id,ownerId:state.ranchOwnerId};
+    state.pendingEvents = projected.pendingEvents;
+    state.universalOperations = operations.filter(entry => universal.inScope(entry, photoScope));
     state.photoOperations = operations.filter(entry => entry.userId === photoScope.userId && entry.ownerId === photoScope.ownerId && photoSync.blocksPhotoChanges(entry));
-    state.photos = photoSync.projectPhotoOperations(photos, operations, photoScope);
-    state.journeys = journeys;
-    state.forecasts = forecasts;
+    state.photos = projectedPhotos;
+    state.journeys = projected.journeys;
+    state.forecasts = projected.forecasts;
     state.fieldConfigRecord = fieldConfigRecord || null;
-    state.fieldConfig = normalizeAnimalFieldConfig(fieldConfigRecord?.config);
-    if (fieldConfigRecord?.config && fieldConfigRecord.config.schemaVersion !== 4) {
+    state.fieldConfig = normalizeAnimalFieldConfig(projected.config);
+    state.configPending = state.universalOperations.some(entry => entry.operation.action === "config.update" && ["pending","confirmed"].includes(entry.state) && !entry.settled);
+    if (!universalWritesEnabled() && fieldConfigRecord?.config && fieldConfigRecord.config.schemaVersion !== 4) {
       state.fieldConfigRecord = { ...fieldConfigRecord, config: state.fieldConfig };
       await put("ranchSettings", state.fieldConfigRecord);
     }
@@ -1174,6 +1239,7 @@
   }
 
   async function ensureAnimalInternalIds(animals, persist = true) {
+    if (universalWritesEnabled() && persist) return false;
     const ordered = animals.slice().sort((a, b) => a.id.localeCompare(b.id));
     const used = new Set();
     let maximum = 0;
@@ -1558,10 +1624,12 @@
   async function syncAnimalFieldConfig(downloaded) {
     const scope = outboxScope();
     const local = await getOne("ranchSettings", "animal-fields");
+    assertSyncScope(scope);
     const { data: remote, error: fetchError } = downloaded ?? await cloud.from("ranch_animal_configs")
       .select("owner_id, config, revision, updated_at")
-      .eq("owner_id", state.ranchOwnerId)
+      .eq("owner_id", scope.ownerId)
       .maybeSingle();
+    assertSyncScope(scope);
     if (fetchError) {
       if (fetchError.code === "PGRST205" || fetchError.code === "42P01" ||
           /ranch_animal_configs|schema cache|does not exist/i.test(fetchError.message || "")) {
@@ -1582,16 +1650,17 @@
         state.fieldSettingsDirty = false;
         const downloaded = {
           id: "animal-fields",
-          ownerId: state.ranchOwnerId,
-          config: normalizeAnimalFieldConfig(remote.config),
+          ownerId: scope.ownerId,
+          config: universalWritesEnabled() ? remote.config : normalizeAnimalFieldConfig(remote.config),
           revision: remote.revision,
           baseRevision: remote.revision,
           dirty: false,
           updatedAt: remote.updated_at
         };
         await put("ranchSettings", downloaded);
+        assertSyncScope(scope);
         state.fieldConfigRecord = downloaded;
-        state.fieldConfig = downloaded.config;
+        state.fieldConfig = normalizeAnimalFieldConfig(downloaded.config);
         renderAnimalSettings();
       }
       return "";
@@ -1599,7 +1668,7 @@
 
     const remoteRevision = remote?.revision || 0;
     if (local.dirty) {
-      if(strictRpcWrites()){await rememberSyncConflict(outboxScope(),"config",state.ranchOwnerId,null,local.config,remote?.config??null,remote?.revision??null);return "Configuración local conservada · requiere revisión RPC";}
+      if(strictRpcWrites()){await rememberSyncConflict(scope,"config",scope.ownerId,null,local.config,remote?.config??null,remote?.revision??null);return "Configuración local conservada · requiere revisión RPC";}
       if (!canManageRanch()) {
         state.fieldSettingsDirty = false;
         const downloaded = {
@@ -1611,6 +1680,7 @@
           updatedAt: remote?.updated_at || new Date().toISOString()
         };
         await put("ranchSettings", downloaded);
+        assertSyncScope(scope);
         state.fieldConfigRecord = downloaded;
         state.fieldConfig = downloaded.config;
         renderAnimalSettings();
@@ -1622,16 +1692,18 @@
       }
       assertRemoteSyncScope(scope);
       const { data, error } = await cloud.rpc("save_ranch_animal_config", {
-        p_owner_id: state.ranchOwnerId,
+        p_owner_id: scope.ownerId,
         p_expected_revision: remoteRevision,
         p_config: ranchAnimalFieldConfigPayload(config)
       });
+      assertSyncScope(scope);
       if (error) throw error;
       const saved = {
         ...local, config, revision: data.revision, baseRevision: data.revision,
         dirty: false, updatedAt: data.updated_at
       };
       await put("ranchSettings", saved);
+      assertSyncScope(scope);
       state.fieldConfigRecord = saved;
       state.fieldConfig = config;
       return "";
@@ -1645,12 +1717,13 @@
       )) return "Configuración en la nube pendiente de cargar · se conservaron cambios locales sin guardar";
       state.fieldSettingsDirty = false;
       const downloaded = {
-        ...local, config: normalizeAnimalFieldConfig(remote.config), revision: remote.revision,
+        ...local, config: universalWritesEnabled() ? remote.config : normalizeAnimalFieldConfig(remote.config), revision: remote.revision,
         baseRevision: remote.revision, dirty: false, updatedAt: remote.updated_at
       };
       await put("ranchSettings", downloaded);
+      assertSyncScope(scope);
       state.fieldConfigRecord = downloaded;
-      state.fieldConfig = downloaded.config;
+      state.fieldConfig = normalizeAnimalFieldConfig(downloaded.config);
       renderAnimalSettings();
       return "Configuración actualizada desde el rancho";
     }
@@ -1660,10 +1733,99 @@
     return "";
   }
 
-  const RPC_EVENT_TYPES = new Set(["weight","bath","vaccine","deworm","injection","medication","review"]);
+  const RPC_EVENT_TYPES = new Set(["weight","bath","vaccine","deworm","injection","medication","review","note","other"]);
   let recordSaving = false;
   function eventOutboxEnabled() {
     return window.GANADERO_CONFIG?.syncEventRpcV1 === true;
+  }
+  function universalWritesEnabled() {
+    return eventOutboxEnabled() && Boolean(currentUser && state.ranchOwnerId && !state.legacyAccount);
+  }
+  function displayedConfigBase() {
+    const last = state.universalOperations.filter(row=>row.operation.action === "config.update" && row.state !== "archived" &&
+      (row.state !== "confirmed" || !row.settled)).sort((a,b)=>(a.sequence||0)-(b.sequence||0) || a.createdAt.localeCompare(b.createdAt)).at(-1);
+    return last ? {expectedLastId:last.id} : {expectedLastId:null,expectedData:structuredClone(state.fieldConfigRecord?.config ?? null)};
+  }
+  function assertCaptureScope(scope) {
+    assertSyncScope(scope);
+    if (!hasRanchAccess()) throw Error("No tienes acceso a este rancho.");
+    if (!navigator.onLine || state.ranchContextOffline) {
+      let saved;
+      try { saved = JSON.parse(localStorage.getItem(`ganadero-ranch-context:${scope.userId}`)); } catch (_) {}
+      const age = Date.now() - saved?.verifiedAt;
+      if (saved?.userId !== scope.userId || saved?.context?.owner_id !== scope.ownerId ||
+          !Number.isFinite(age) || age < 0 || age > OFFLINE_CONTEXT_TTL) {
+        throw Error("Conéctate para renovar el acceso al rancho antes de capturar más cambios.");
+      }
+    }
+  }
+  const universalStore = kind => ({animal:"animals",event:"events",journey:"journeys",forecast:"growthForecasts",config:"ranchSettings"})[kind];
+  async function canonicalEntity(kind,id,scope=outboxScope()) {
+    const store = universalStore(kind);
+    if (!store) throw Error("Entidad no disponible.");
+    const row = await (await protectedModule()).readProtectedRecord(scope.database,store,kind === "config" ? "animal-fields" : id);
+    assertCaptureScope(scope);
+    return kind === "config" ? row?.config ?? null : row ?? null;
+  }
+  async function confirmedRevision(kind,id,expected,scope=outboxScope()) {
+    const module = await import("./sync/universal-outbox.mjs");
+    const cache = await (await protectedModule()).readProtectedRecord(scope.database,"syncMeta",module.revisionKey(kind,id));
+    assertCaptureScope(scope);
+    const cached = module.cachedRevision(cache,scope,kind,id,expected);
+    if (cached !== null) return cached;
+    if (!navigator.onLine || state.ranchContextOffline) throw Error("Sincroniza este registro una vez para editarlo sin conexión.");
+    const {data,error} = await cloud.rpc("sync_read_entity",{p_owner:scope.ownerId,p_kind:kind,p_id:id});
+    assertCaptureScope(scope);
+    if (error) throw error;
+    if (!Number.isSafeInteger(data?.revision) || data.revision < 0 || module.fingerprint(data.data) !== module.fingerprint(expected)) {
+      throw Error("El registro cambió en el servidor. Sincroniza antes de editarlo.");
+    }
+    await module.rememberEntities(scope.database,scope,[{...data,kind,id}],[{kind,id,data:expected}],()=>assertCaptureScope(scope));
+    return data.revision;
+  }
+  async function queueUniversal(descriptors) {
+    if (!universalWritesEnabled()) throw Error("El motor de sincronización no está activo.");
+    const scope = outboxScope(), module = await import("./sync/universal-outbox.mjs");
+    assertCaptureScope(scope);
+    const rows = await module.readQueue(scope.database,scope), items = [];
+    for (const descriptor of descriptors) {
+      const {action,id,changes} = descriptor, kind = module.entityKind(action);
+      const last = module.latestEntityOperation(rows,action,id);
+      if (last && !["pending","confirmed"].includes(last.state)) throw Error("Revisa primero el conflicto anterior de este registro.");
+      if (Object.hasOwn(descriptor,"expectedLastId") && (last?.id ?? null) !== descriptor.expectedLastId) {
+        throw Error("Hay un cambio nuevo en otra pestaña. Actualiza antes de guardar.");
+      }
+      const dependencies = new Set(descriptor.dependsOn || []);
+      const parentIds = [changes.animalId,...(changes.animalIds || []),changes.fields?.motherId,changes.fields?.fatherId].filter(Boolean);
+      for (const parentId of parentIds) {
+        const parent = module.latestEntityOperation(rows,"animal.update",parentId);
+        if (parent) dependencies.add(parent.id);
+      }
+      if (action.startsWith("animal.") || action === "journey.create") {
+        const config = module.latestEntityOperation(rows,"config.update",scope.ownerId);
+        if (config) dependencies.add(config.id);
+      }
+      if (action === "photo.create") {
+        const photo = module.ordered(rows).filter(row => module.unresolved(row) && row.operation.action.startsWith("photo.") && row.operation.changes.animalId === changes.animalId).at(-1);
+        if (photo) dependencies.add(photo.id);
+      }
+      const create = action.endsWith(".create"), baseOperationId = !create ? last?.id : null;
+      const expectedData = create || baseOperationId ? undefined : await canonicalEntity(kind,id,scope);
+      if (Object.hasOwn(descriptor,"expectedData") && module.fingerprint(expectedData) !== module.fingerprint(descriptor.expectedData)) {
+        throw Error("El registro cambió mientras estaba abierto el formulario. Actualiza y revisa tus cambios.");
+      }
+      const revision = create || baseOperationId ? null : await confirmedRevision(kind,id,expectedData,scope);
+      const operation = {protocolVersion:1,operationId:newId(),action,entityId:id,ownerId:scope.ownerId,
+        deviceId:outboxDeviceId(),baseRevision:revision,capturedAt:new Date().toISOString(),changes};
+      const item = {operation,expectedLastId:last?.id ?? null,baseOperationId,dependsOn:[...dependencies],
+        ...(descriptor.blob ? {blob:descriptor.blob} : {}),
+        ...(!create && !baseOperationId ? {expectedData} : {})};
+      items.push(item);
+      rows.push({id:operation.operationId,userId:scope.userId,ownerId:scope.ownerId,operation,state:"pending",sequence:Math.max(0,...rows.map(row=>row.sequence||0))+1,createdAt:operation.capturedAt});
+    }
+    await module.enqueueUniversalBatch(scope.database,scope,items,()=>assertCaptureScope(scope));
+    await refresh(); assertCaptureScope(scope); scheduleSync();
+    return items.map(item=>item.operation.operationId);
   }
   function outboxDeviceId() {
     const key = "ganaderov-sync-device-v1";
@@ -1678,11 +1840,7 @@
     return scope;
   }
   async function queueForecastOperation(action,id,changes,revision=null){
-    if(!eventOutboxEnabled())throw Error("Activa el motor RPC para guardar pronósticos.");
-    const scope=outboxScope(),stamp=new Date().toISOString();
-    const operation={protocolVersion:1,operationId:newId(),action,entityId:id,ownerId:scope.ownerId,deviceId:outboxDeviceId(),baseRevision:revision,capturedAt:stamp,changes};
-    await transaction(["operationOutbox"],"readwrite",tx=>tx.objectStore("operationOutbox").add({id:operation.operationId,userId:scope.userId,ownerId:scope.ownerId,operation,state:"pending",attempts:0,nextAt:0,code:"",createdAt:stamp}));
-    assertSyncScope(scope);scheduleSync();
+    return queueUniversal([{action,id,changes}]);
   }
   async function forecastRevision(kind,id,expected){
     const scope=outboxScope();
@@ -1693,7 +1851,6 @@
     return data.revision;
   }
   async function queueEventRecord(record) {
-    const scope = outboxScope();
     if (!RPC_EVENT_TYPES.has(record.type) || !state.animals.some(a => a.id === record.animalId && isActiveAnimal(a))) throw new Error("Animal o actividad no disponible.");
     const changes = { animalId: record.animalId, type: record.type, date: record.date };
     if (record.type === "weight") {
@@ -1702,21 +1859,40 @@
     }
     if (record.label) changes.product = record.label;
     if (record.notes) changes.notes = record.notes;
-    const operation = { protocolVersion: 1, operationId: newId(), entityId: record.id, action: "event.create",
-      ownerId: scope.ownerId, deviceId: outboxDeviceId(), baseRevision: null, capturedAt: record.createdAt, changes };
-    assertSyncScope(scope);
-    // Pending events stay outside the legacy events store. No legacy bundle
-    // upload can accidentally transmit an unconfirmed operation.
-    await transaction(["operationOutbox"], "readwrite", tx => tx.objectStore("operationOutbox").add({
-      id: operation.operationId, userId: scope.userId, ownerId: scope.ownerId, operation,
-      state: "pending", attempts: 0, nextAt: 0, code: "", createdAt: record.createdAt
-    }));
+    await queueUniversal([{action:"event.create",id:record.id,changes}]);
   }
   async function scopedOutbox(scope) {
     assertSyncScope(scope);
     const rows = await readDatabaseStore(scope.database, "operationOutbox");
     assertSyncScope(scope);
     return rows.filter(p => p.userId === scope.userId && p.ownerId === scope.ownerId);
+  }
+  async function cacheUniversalRevisions(scope) {
+    if (!universalWritesEnabled()) return;
+    const module = await import("./sync/universal-outbox.mjs");
+    const [animals,events,journeys,forecasts,settings,caches,operations] = await Promise.all([
+      ...["animals","events","journeys","growthForecasts","ranchSettings","syncMeta","operationOutbox"].map(store=>readDatabaseStore(scope.database,store))
+    ]);
+    assertRemoteSyncScope(scope);
+    const expected = [...animals.map(data=>({kind:"animal",id:data.id,data})),...events.map(data=>({kind:"event",id:data.id,data})),
+      ...journeys.map(data=>({kind:"journey",id:data.id,data})),...forecasts.map(data=>({kind:"forecast",id:data.id,data})),
+      {kind:"config",id:scope.ownerId,data:settings.find(row=>row.id === "animal-fields")?.config ?? null}];
+    const waiting = operations.filter(row=>module.inScope(row,scope) && row.state === "confirmed" && !row.settled && !row.operation.action.startsWith("photo."));
+    for (const entry of waiting) {
+      const kind = module.entityKind(entry.operation.action), id = entry.operation.entityId;
+      if (!expected.some(entity=>entity.kind === kind && entity.id === id)) expected.push({kind,id,data:null});
+    }
+    const cacheMap = new Map(caches.map(row=>[row.id,row]));
+    const needed = expected.filter(entity=>module.cachedRevision(cacheMap.get(module.revisionKey(entity.kind,entity.id)),scope,entity.kind,entity.id,entity.data) === null ||
+      waiting.some(row=>module.entityKind(row.operation.action) === entity.kind && row.operation.entityId === entity.id));
+    for (let offset=0;offset<needed.length;offset+=100) {
+      const batch = needed.slice(offset,offset+100);
+      const {data,error} = await cloud.rpc("sync_read_entities",{p_owner:scope.ownerId,p_entities:batch.map(({kind,id})=>({kind,id}))});
+      assertRemoteSyncScope(scope);
+      if (error) throw error;
+      if (!Array.isArray(data)) throw Error("Revisiones del servidor inválidas.");
+      await module.rememberEntities(scope.database,scope,data,batch,()=>assertRemoteSyncScope(scope));
+    }
   }
   async function updateOutbox(scope,entry,patch){
     assertSyncScope(scope);
@@ -1741,39 +1917,43 @@
     return flushEventOutboxUnlocked(scope);
   }
   async function flushEventOutboxUnlocked(scope) {
-    const rows = (await scopedOutbox(scope)).sort((a,b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-    for (const entry of rows) {
-      assertSyncScope(scope);
-      if (state.ranchContextOffline) return;
-      if (entry.state !== "pending" || entry.nextAt > Date.now()) continue;
-      const attempts = entry.attempts + 1;
-      let result;
-      try {
+    const module = await import("./sync/universal-outbox.mjs");
+    const result = await module.deliverUniversal({database:scope.database,userId:scope.userId,ownerId:scope.ownerId,
+      verify:()=>assertRemoteSyncScope(scope),
+      sendOperation:async operation=>{
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 20000);
         try {
-          result = await cloud.rpc("sync_apply_operation", { p_operation: entry.operation }).abortSignal(controller.signal);
+          const {data,error,status} = await cloud.rpc("sync_apply_operation",{p_operation:operation}).abortSignal(controller.signal);
+          assertRemoteSyncScope(scope);
+          if (error) { if ([401,403].includes(status)) error.stopDelivery = true; throw error; }
+          return data;
         } finally { clearTimeout(timer); }
-        assertSyncScope(scope);
-      } catch (error) {
-        assertSyncScope(scope);
-        await updateOutbox(scope, entry, { attempts, nextAt: Date.now() + Math.min(900000, 30000 * 2 ** Math.min(attempts-1,5)), code: "TRANSPORT_UNKNOWN" });
-        continue;
+      },
+      uploadPhoto:async({operation,blob})=>{
+        assertRemoteSyncScope(scope);
+        const path = `${scope.ownerId}/${operation.changes.animalId}/${operation.entityId}`;
+        const {error} = await cloud.storage.from("animal-photos").upload(path,blob,{contentType:operation.changes.mime,upsert:false});
+        assertRemoteSyncScope(scope);
+        if (!error) return;
+        if (!["409","Duplicate"].includes(String(error.statusCode || error.code))) throw error;
+        const {data,error:readError} = await cloud.storage.from("animal-photos").download(path);
+        assertRemoteSyncScope(scope);
+        if (readError) throw readError;
+        const expected = new Uint8Array(await blob.arrayBuffer()), actual = new Uint8Array(await data.arrayBuffer());
+        if (expected.length !== actual.length || !expected.every((byte,index)=>byte === actual[index])) {
+          throw Object.assign(Error("El archivo existente tiene otros bytes. Revisa el original antes de volver a enviarlo."),{requiresReview:true,code:"PHOTO_BYTES_CONFLICT"});
+        }
       }
-      const data = result.data;
-      if (!result.error && data?.protocolVersion === 1 && data.operationId === entry.id &&
-          ["applied","duplicate"].includes(data.status) && Number.isSafeInteger(data.revision) && data.revision >= 1 &&
-          typeof data.serverReceivedAt === "string" && Number.isFinite(Date.parse(data.serverReceivedAt))) {
-        await updateOutbox(scope, entry, { state: "confirmed", receipt: data, code: "OK", attempts });
-        if (entry.operation.action.startsWith("photo.")) state.syncRequested = true;
-      } else if (!result.error && data?.protocolVersion === 1 && data.operationId === entry.id && ["conflict","rejected"].includes(data.status)) {
-        await updateOutbox(scope, entry, { state: data.status, code: String(data.code || "REVIEW_REQUIRED").slice(0,100), attempts });
-      } else {
-        await updateOutbox(scope, entry, { attempts, nextAt: Date.now() + Math.min(900000, 30000 * 2 ** Math.min(attempts-1,5)), code: result.error?.code === "PGRST202" ? "RPC_NOT_INSTALLED" : "RESULT_UNKNOWN" });
-      }
+    });
+    if (result.sent) state.syncRequested = true;
+    if (result.stopped) {
+      await (await import("./sync/background-universal.mjs")).disableBackgroundDelivery();
+      try { localStorage.removeItem(`ganadero-ranch-context:${scope.userId}`); } catch (_) {}
+      throw Error("El servidor requiere comprobar de nuevo la sesión y los permisos.");
     }
   }
-  const strictRpcWrites=()=>window.GANADERO_CONFIG?.syncRpcOnlyV1===true;
+  const strictRpcWrites=()=>window.GANADERO_CONFIG?.syncRpcOnlyV1===true || universalWritesEnabled();
   async function reviewOperation(scope,entry,dialog){
     assertSyncScope(scope);
     const module=await import("./sync/conflict-resolution.mjs");
@@ -1826,8 +2006,8 @@
       req.onsuccess=()=>{
         const old=req.result;
         if(!old||old.userId!==scope.userId||old.ownerId!==scope.ownerId||old.resolvedBy)return;
-        if(archive&&["conflict","rejected"].includes(old.state))store.put({...old,archivedFrom:old.state,state:"archived"});
-        else if(!archive&&old.state==="archived"&&["conflict","rejected"].includes(old.archivedFrom))store.put({...old,state:old.archivedFrom});
+        if(archive&&["conflict","rejected","blocked"].includes(old.state))store.put({...old,archivedFrom:old.state,state:"archived"});
+        else if(!archive&&old.state==="archived"&&["conflict","rejected","blocked"].includes(old.archivedFrom))store.put({...old,state:old.archivedFrom});
       };
     },()=>assertSyncScope(scope));
   }
@@ -1845,14 +2025,26 @@
         const item = document.createElement("p");
         const c = entry.operation.changes;
         const labels = {"photo.crop":"Encuadre de fotografía", "photo.primary":"Fotografía principal", "photo.delete":"Eliminar fotografía"};
-        const statuses = {pending:"Pendiente", confirmed:entry.photoSettled === false ? "Confirmada; actualizando ficha" : "Confirmada", conflict:"Conflicto: requiere revisión", rejected:"Rechazada: requiere revisión", archived:"Archivada"};
+        const statuses = {pending:entry.sealed === false ? "Pendiente de una operación previa" : "Pendiente", confirmed:entry.photoSettled === false || entry.settled === false ? "Confirmada; actualizando ficha" : "Confirmada", conflict:"Conflicto: requiere revisión", rejected:"Rechazada: requiere revisión", blocked:"Bloqueada: revisa la operación previa o el original de la fotografía", archived:"Archivada"};
         item.textContent = [labels[entry.operation.action] || EVENT_TYPES[c.type] || entry.operation.action,
           c.animalId, c.date, statuses[entry.state] || entry.state, entry.code].filter(Boolean).join(" · ");
         dialog.append(item);
-        if (["conflict","rejected","archived"].includes(entry.state)) {
+        if (["conflict","rejected","blocked","archived"].includes(entry.state)) {
           const details=document.createElement("details"), title=document.createElement("summary"), pre=document.createElement("pre");
           title.textContent="Revisar operación"; pre.style.whiteSpace="pre-wrap"; pre.style.overflowWrap="anywhere";
           pre.textContent=JSON.stringify({operation:entry.operation,resolvedBy:entry.resolvedBy},null,2); details.append(title,pre); dialog.append(details);
+          if (entry.operation.action === "photo.create") {
+            const download = document.createElement("button");download.type="button";download.textContent="Descargar el original guardado";
+            download.onclick=async()=>{
+              try {
+                const original=await (await protectedModule()).readProtectedRecord(scope.database,"photoUploads",entry.attachmentId || entry.id);
+                assertSyncScope(scope);
+                if(original?.userId!==scope.userId||original?.ownerId!==scope.ownerId||!(original.blob instanceof Blob))throw Error("No se encontró el original en este dispositivo.");
+                const url=URL.createObjectURL(original.blob),link=document.createElement("a");link.href=url;link.download=(entry.operation.changes.name||"fotografia").replace(/[\\/]/g,"_");link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+              } catch(error) { showToast(error.message); }
+            };
+            details.append(download);
+          }
           if(!entry.resolvedBy){
             const archive=document.createElement("button");archive.type="button";archive.textContent=entry.state==="archived"?"Recuperar para revisión":"Archivar / conservar servidor";
             archive.onclick=async()=>{try{await setConflictArchive(scope,entry,entry.state!=="archived");await refresh();if($("#detail-dialog").open&&state.currentAnimalId)openDetail(state.currentAnimalId,true);dialog.close();await showEventOutbox();}catch(e){showToast(e.message);}};
@@ -1988,21 +2180,16 @@
         }
       }
       conflicts += await syncJourneys(journeys, scope, recordsOf("journey"));
-      if(journeyUniversalEnabled()){
-        for(const journey of await getAll("journeys")){
-          assertSyncScope(scope);
-          try{const revision=await forecastRevision("journey",journey.id,journey);await put("syncMeta",{id:"journey-revision:"+journey.id,revision,fingerprint:JSON.stringify(stableValue(journey))});}catch(e){assertSyncScope(scope);}
-        }
-      }
+      await cacheUniversalRevisions(scope);
       assertSyncScope(scope);
       await cachePhotoRevisions(scope);
       await flushEventOutbox(scope);
+      try { await updateBackgroundCapability(scope); } catch (_) { assertSyncScope(scope); /* Foreground delivery remains available. */ }
       const outboxRows = await scopedOutbox(scope);
       const pendingOperations = outboxRows.filter(p => !["confirmed","archived"].includes(p.state)).length;
       // Download RPC-created events on a later pass, never inject them into a stale bundle.
       if (outboxRows.some(p => p.state === "confirmed" && p.receipt &&
-          (p.operation.action === "event.create" && !events.some(e => e.id === p.operation.entityId) ||
-           p.operation.action.startsWith("photo.") && !p.photoSettled))) {
+          (p.operation.action.startsWith("photo.") ? !p.photoSettled : !p.settled))) {
         pendingChanges++;
       }
       await refresh();
@@ -2740,7 +2927,7 @@
       createdAt: new Date().toISOString()
     };
     try {
-      if(eventOutboxEnabled()){
+      if(universalWritesEnabled()){
         await queueForecastOperation("forecast.create",forecast.id,{animalId,baselineWeight:projection.baselineWeight,baselineDate:projection.baselineDate,gainKgPerDay:projection.gainKgPerDay,days:projection.days});
         $("#calculator-save-forecast").disabled=true;
         showToast("Pronóstico en cola; pendiente de confirmación.");return;
@@ -2795,6 +2982,7 @@
       return `<div class="growth-forecast-item">
         <div><strong>${formatProjectedWeight(forecast.predictedWeight)} · ${formatDate(forecast.targetDate)}</strong><span>${escapeHtml(source)} · base ${formatDate(forecast.baselineDate)} · ${forecast.days} días</span></div>
         <p class="${forecast.status === "evaluated" ? "evaluated" : ""}">${escapeHtml(result)}</p>
+        ${canManageRanch() && universalWritesEnabled() ? `<button class="danger-link" type="button" data-delete-forecast="${escapeHtml(forecast.id)}">Eliminar estimación</button>` : ""}
       </div>`;
     }).join("");
     return `<div class="growth-forecast-history"><strong>Estimaciones guardadas</strong>${rows}</div>`;
@@ -2807,6 +2995,7 @@
         <p class="growth-empty">Registra el primer peso para ver el crecimiento de este animal.</p>
         <button class="button button-outline button-small growth-first-weighing" type="button" data-add-record="weight">${icon("plus")} Registrar primer peso</button>
         ${renderGrowthTargetForm(animal)}
+        ${renderGrowthForecastHistory(animal.id)}
       </section>`;
     }
     const latest = points[points.length - 1];
@@ -2945,10 +3134,12 @@
     $("#add-animal-button").hidden = !canManageRanch();
     $("#empty-add-button").hidden = !canManageRanch();
     const activeAnimals = state.animals.filter(isActiveAnimal);
-    const activeIds = new Set(activeAnimals.map(animal => animal.id));
-    $("#stat-total").textContent = String(activeAnimals.length);
-    $("#stat-females").textContent = String(activeAnimals.filter(animal => animal.sex === "Hembra").length);
-    $("#stat-males").textContent = String(activeAnimals.filter(animal => animal.sex === "Macho").length);
+    const confirmedActive = universalWritesEnabled() ? state.confirmedAnimals.filter(isActiveAnimal) : activeAnimals;
+    const activeIds = new Set(confirmedActive.map(animal => animal.id));
+    $("#stat-total").textContent = String(confirmedActive.length);
+    $("#stat-females").textContent = String(confirmedActive.filter(animal => animal.sex === "Hembra").length);
+    $("#stat-males").textContent = String(confirmedActive.filter(animal => animal.sex === "Macho").length);
+    for (const selector of ["#stat-total","#stat-females","#stat-males","#stat-weighed"]) $(selector).title = universalWritesEnabled() ? "Datos confirmados por el servidor" : "Datos de este dispositivo";
     const weighed = new Set(state.events.filter(event => event.type === "weight" && activeIds.has(event.animalId)).map(event => event.animalId));
     $("#stat-weighed").textContent = String(weighed.size);
 
@@ -3002,6 +3193,7 @@
         <td><div class="animal-cell"><div class="animal-avatar">${avatar}</div><div>
           <button class="animal-link" data-config-field="name" data-config-surface="table" data-open-animal="${escapeHtml(animal.id)}" type="button">${escapeHtml(animal.name || "Sin nombre")}</button>
           <span class="animal-sub" data-config-field="tag" data-config-surface="table">${escapeHtml(animalFieldConfig("tag").label)} ${display(animal.tag)}</span>
+          ${animal._pending ? '<small class="animal-sub">Pendiente de sincronizar</small>' : ""}
         </div></div></td>
         <td data-config-field="sex" data-config-surface="table">${display(animal.sex)}</td>
         <td data-config-field="color" data-config-surface="table">${display(animal.color)}</td>
@@ -3137,22 +3329,11 @@
     $("#journey-dose-field").hidden = !["injection", "medication", "other"].includes(type);
   }
 
-  function journeyUniversalEnabled(){return eventOutboxEnabled()&&window.GANADERO_CONFIG?.syncJourneyUniversalV1===true;}
+  function journeyUniversalEnabled(){return universalWritesEnabled()&&window.GANADERO_CONFIG?.syncJourneyUniversalV1===true;}
   async function queueJourneyChange(journey,action,changes){
-    const scope=outboxScope(),fingerprint=JSON.stringify(stableValue(journey));
-    const meta=await getOne("syncMeta","journey-revision:"+journey.id);
-    let revision;
-    if(navigator.onLine && !state.ranchContextOffline){
-      revision=await forecastRevision("journey",journey.id,journey);
-      await put("syncMeta",{id:"journey-revision:"+journey.id,revision,fingerprint});
-    }else{
-      if(!meta||meta.fingerprint!==fingerprint||!Number.isSafeInteger(meta.revision))throw Error("Descarga esta jornada con conexión antes de capturar.");
-      revision=meta.revision;
-    }
-    assertSyncScope(scope);
-    const pending=await scopedOutbox(scope);
-    if(pending.some(p=>p.operation.entityId===journey.id&&p.operation.action.startsWith("journey.")&&p.state==="pending"&&(action!=="journey.attend"||p.operation.action!=="journey.attend"||p.operation.changes.animalId===changes.animalId)))throw Error("Hay un cambio pendiente para esta jornada o animal.");
-    await queueForecastOperation(action,journey.id,changes,revision);
+    if (["journey.finish","journey.resume"].includes(action) && !canManageRanch()) throw Error("Solo el propietario o administrador puede cerrar o reanudar jornadas.");
+    await queueUniversal([{action,id:journey.id,changes,expectedLastId:journey._operationId ?? null}]);
+    if ($("#journey-dialog").open) renderJourneyDetail();
     showToast("Cambio guardado en cola; pendiente de confirmación.");
   }
   async function createJourney(event) {
@@ -3192,7 +3373,7 @@
     try {
       if(journeyUniversalEnabled()){
         await queueForecastOperation("journey.create",journey.id,{type:journey.type,name:journey.name,date:journey.date,product:journey.product,dose:journey.dose,notes:journey.notes,animalIds:journey.roster.map(x=>x.id)});
-        $("#journey-create-dialog").close();showToast("Jornada pendiente de confirmación.");return;
+        $("#journey-create-dialog").close();setMainView("journeys");openJourney(journey.id);showToast("Jornada pendiente de confirmación. Puedes continuar capturando sin conexión.");return;
       }
       await put("journeys", journey);
       $("#journey-create-dialog").close();
@@ -3275,7 +3456,8 @@
         ${details.length ? `<p class="journey-meta">${details.map(escapeHtml).join(" · ")}</p>` : ""}
       </div>
       <div class="journey-detail-body">
-        ${finished ? `<div class="journey-finish-message ${counts.pending ? "warning" : "success"}">${counts.pending ? `${icon("warning")} ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}. No recibirán el registro de esta jornada.` : `${icon("check")} Jornada completada. El historial de los animales atendidos fue actualizado.`}</div>` : ""}
+        ${journey._pending ? '<p class="photo-sync-status" role="status">Cambios guardados en este dispositivo. El historial se actualizará cuando el servidor confirme la jornada.</p>' : ""}
+        ${finished && !journey._pending ? `<div class="journey-finish-message ${counts.pending ? "warning" : "success"}">${counts.pending ? `${icon("warning")} ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}. No recibirán el registro de esta jornada.` : `${icon("check")} Jornada completada. El historial de los animales atendidos fue actualizado.`}</div>` : ""}
         <div class="journey-roster-tools">
           <label class="search-box">${icon("search", "ui-icon search-icon")}<input id="journey-search" type="search" placeholder="Buscar arete o nombre..." value="${escapeHtml(state.journeySearch)}" autocomplete="off"></label>
           <div class="journey-filter" role="group" aria-label="Filtrar animales">
@@ -3544,7 +3726,7 @@
     }
     const counts = journeyCounts(journey);
     if (counts.pending && !confirm(`Todavía hay ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}.\n\n¿Está seguro de que desea finalizar la jornada? Solo se registrarán los animales atendidos.`)) return;
-    if(journeyUniversalEnabled()){try{if(!navigator.onLine||state.ranchContextOffline)throw Error("Finaliza con conexión tras confirmar las asistencias.");await queueJourneyChange(journey,"journey.finish",{allowIncomplete:counts.pending>0});}catch(e){showToast(e.message);}return;}
+    if(journeyUniversalEnabled()){try{await queueJourneyChange(journey,"journey.finish",{allowIncomplete:counts.pending>0});}catch(e){showToast(e.message);}return;}
     if(journeyRpcEnabled()){await remoteJourneyTransition(journey,true,counts.pending>0);return;}
     const completedAt = new Date().toISOString();
     const finishedJourney = {
@@ -4246,6 +4428,10 @@
   }
 
   function openAnimalForm(animal = null, options = {}) {
+    state.animalFormSource = animal ? structuredClone(animal) : null;
+    state.animalFormCanonical = animal ? structuredClone(state.confirmedAnimals.find(item=>item.id === animal.id) ?? null) : null;
+    state.animalFormConfigBase = displayedConfigBase();
+    state.animalFormDisplayedConfig = structuredClone(state.fieldConfig);
     if (!canManageRanch()) {
       showToast("Solo el propietario o administrador puede crear o editar fichas de animales.");
       return;
@@ -4398,7 +4584,8 @@
     }
     const label = prompt(`Nombre de la nueva opción para ${list.label.toLocaleLowerCase("es-MX")}:`)?.trim();
     if (!label) return;
-    const currentOptions = state.fieldConfig?.lists?.[fieldId] || [];
+    const displayedConfig = state.animalFormDisplayedConfig || state.fieldConfig;
+    const currentOptions = displayedConfig?.lists?.[fieldId] || [];
     const duplicate = currentOptions.find(option =>
       option.label.toLocaleLowerCase("es-MX") === label.toLocaleLowerCase("es-MX"));
     if (duplicate) {
@@ -4407,10 +4594,15 @@
     }
     const option = { value: `${fieldId}-${newId()}`, label, enabled: true };
     const config = normalizeAnimalFieldConfig({
-      ...state.fieldConfig,
-      lists: { ...state.fieldConfig.lists, [fieldId]: [...currentOptions, option] }
+      ...displayedConfig,
+      lists: { ...displayedConfig.lists, [fieldId]: [...currentOptions, option] }
     });
     try {
+      if (universalWritesEnabled()) {
+        await queueUniversal([{action:"config.update",id:state.ranchOwnerId,changes:{config:ranchAnimalFieldConfigPayload(config)},...(state.animalFormConfigBase || displayedConfigBase())}]);
+        state.animalFormConfigBase = displayedConfigBase();
+        state.animalFormDisplayedConfig = structuredClone(state.fieldConfig);
+      } else {
       const previous = await getOne("ranchSettings", "animal-fields");
       const record = {
         id: "animal-fields",
@@ -4424,6 +4616,7 @@
       await put("ranchSettings", record);
       state.fieldConfigRecord = record;
       state.fieldConfig = config;
+      }
       const select = $(`[data-animal-field="${fieldId}"]`, $("#animal-form"));
       const nativeOption = document.createElement("option");
       nativeOption.value = option.value;
@@ -4768,15 +4961,67 @@
     return input.value.trim();
   }
 
+  function animalFieldsForOperation(animal) {
+    const fields = {};
+    for (const field of ANIMAL_FIELD_CATALOG) {
+      if (field.type === "automatic" || !Object.hasOwn(animal,field.id)) continue;
+      const value = animal[field.id];
+      if (value === undefined || field.id === "birthEstimated" && typeof value !== "boolean") continue;
+      fields[field.id] = value;
+    }
+    return fields;
+  }
+  function eventCreationDescriptor(record) {
+    return {action:"event.create",id:record.id,changes:{animalId:record.animalId,type:record.type,date:record.date,
+      ...(record.type === "weight" ? {weight:record.weight} : {}),
+      ...(record.label ? {product:record.label} : {}),...(record.notes ? {notes:record.notes} : {})}};
+  }
+  function photoCreationDescriptor(photo) {
+    return {action:"photo.create",id:photo.id,blob:photo.blob,changes:{animalId:photo.animalId,name:photo.name,mime:photo.mime,primary:Boolean(photo.primary)}};
+  }
+  async function queueAnimalForm(animal,existing,events,photos) {
+    if (!String(animal.tag || "").trim()) throw Error("El arete es obligatorio para dar de alta un animal.");
+    if (photos.some(photo=>!["image/jpeg","image/png","image/webp"].includes(photo.mime) || photo.blob.size > 10*1024*1024 || photo.name.length > 120)) {
+      throw Error("Selecciona fotografías JPEG, PNG o WebP de hasta 10 MB y nombres de hasta 120 caracteres.");
+    }
+    const operations = [], fields = animalFieldsForOperation(animal);
+    if (!existing) {
+      if (!isActiveAnimal(animal) && (events.length || photos.length)) throw Error("Registra primero el historial y las fotografías con el animal activo; después podrás archivarlo.");
+      operations.push({action:"animal.create",id:animal.id,changes:{fields},expectedLastId:null});
+    } else {
+      const before = animalFieldsForOperation(existing);
+      const changed = Object.fromEntries(Object.entries(fields).filter(([key,value])=>JSON.stringify(stableValue(value)) !== JSON.stringify(stableValue(before[key]))));
+      if (Object.hasOwn(before,"estimatedAge") && !Object.hasOwn(fields,"estimatedAge")) changed.estimatedAge = null;
+      const wasActive = isActiveAnimal(existing), active = isActiveAnimal(animal);
+      if (!wasActive && !active && Object.keys(changed).length) throw Error("Reactiva el animal para editar su ficha.");
+      if (wasActive !== active) {
+        delete changed.status; delete changed.exitReason; delete changed.exitNotes;
+        const transition = {action:active?"animal.restore":"animal.archive",id:animal.id,
+          changes:{status:animal.status,...(!active ? {exitReason:animal.exitReason || "",exitNotes:animal.exitNotes || ""} : {})}};
+        if (active) operations.push(transition);
+        if (Object.keys(changed).length) operations.push({action:"animal.update",id:animal.id,changes:{fields:changed}});
+        if (!active) operations.push(transition);
+      } else if (Object.keys(changed).length) operations.push({action:"animal.update",id:animal.id,changes:{fields:changed}});
+      if (operations.length) {
+        operations[0].expectedLastId = existing._operationId ?? null;
+        if (!existing._operationId) operations[0].expectedData = state.animalFormCanonical;
+      }
+    }
+    operations.push(...events.map(eventCreationDescriptor),...photos.map(photoCreationDescriptor));
+    if (operations.length) await queueUniversal(operations);
+    return operations.length;
+  }
+  let animalSaving = false;
   async function saveAnimal(event) {
     event.preventDefault();
+    if (animalSaving) return;
     if (!canManageRanch()) {
       showToast("Solo el propietario o administrador puede crear o editar fichas de animales.");
       return;
     }
     if (!validateAnimalControls([...$("#animal-form").elements])) return;
     const id = $("#animal-id").value || newId();
-    const existing = state.animals.find(animal => animal.id === id);
+    const existing = state.animalFormSource?.id === id ? state.animalFormSource : state.animals.find(animal => animal.id === id);
     const tagInput = $("#animal-tag");
     const tag = tagInput?.value.trim() || "";
     if (!validateAnimalTag(tagInput)) return;
@@ -4895,6 +5140,21 @@
           !confirm(`${state.animalFormWeightWarning.message}\n\n¿Guardar de todas formas?`)) return;
     }
     try {
+      if (universalWritesEnabled()) {
+        animalSaving = true;
+        const count = await queueAnimalForm(animal,existing,events,photos);
+        $("#animal-dialog").close();
+        if (existing) openDetail(id,true);
+        else {
+          clearAnimalDraft();
+          if (saveAndAdd) {
+            state.quickCaptureSeed = quickCaptureSeedFromAnimal(animal);
+            openAnimalForm(null,{prefill:state.quickCaptureSeed});
+          }
+        }
+        showToast(count ? "Cambios guardados en cola; pendientes de confirmación." : "No hay cambios que guardar.");
+        return;
+      }
       await transaction(["animals", "events", "photos"], "readwrite", tx => {
         tx.objectStore("animals").put(animal);
         events.forEach(record => tx.objectStore("events").put(record));
@@ -4923,7 +5183,7 @@
       }
     } catch (error) {
       showToast(`No se pudo guardar: ${error.message}`);
-    }
+    } finally { animalSaving = false; }
   }
 
   function eventSummary(event) {
@@ -4950,6 +5210,7 @@
       : formatEstimatedAge(animal.estimatedAge);
     const animalEvents = state.events.filter(record => record.animalId === animalId)
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+    const pendingEvents = state.pendingEvents.filter(record=>record.animalId === animalId);
     const latestHealthRecord = animalEvents.find(record =>
       ["vaccine", "deworm", "injection", "medication", "review"].includes(record.type));
     const photos = state.photos.filter(photo => photo.animalId === animalId);
@@ -5012,10 +5273,11 @@
           ${manager ? `<button class="button button-outline" type="button" data-edit-animal="${escapeHtml(animal.id)}">${icon("edit")} Editar animal</button>` : ""}
           <button class="button button-outline" type="button" data-toggle-detail-view>Ficha completa</button>
           <label class="detail-empty-toggle" hidden><input type="checkbox" data-show-detail-empty> Mostrar campos vacíos</label>
-          <div class="detail-record-actions" data-detail-view="full" data-detail-has-value="true">${recordButtons}</div>
+          <div class="detail-record-actions" data-detail-view="full" data-detail-has-value="true">${recordButtons}${manager || worker ? ["injection","medication","review",...(manager ? ["other"] : [])].map(type=>`<button class="button button-outline" type="button" data-add-record="${type}">${icon("plus")} ${escapeHtml(EVENT_TYPES[type])}</button>`).join("") : ""}</div>
         </div>
       </div>
       <div class="detail-body">
+        ${animal._pending ? '<p class="photo-sync-status" role="status">La ficha muestra cambios locales pendientes de confirmación.</p>' : ""}
         <div id="detail-info-heading" class="detail-section-head detail-info-heading"><h3>${state.detailView === "summary" ? "Ficha resumida" : "Información general"}</h3></div>
         <div class="detail-basic">
           <div class="detail-fact" data-detail-field="color" data-detail-has-value="${Boolean(animal.color)}"><span data-config-label="color">Color</span><strong>${animal.color ? escapeHtml(animal.color) : "Sin registrar"}</strong></div>
@@ -5035,23 +5297,24 @@
           <div class="detail-section-head"><h3>Datos adicionales</h3></div>
           <div class="detail-basic">${renderAnimalExtendedDetail(animal)}</div>
         </section>
-        <div data-detail-view="full" data-detail-has-value="${growthPoints.length > 0}">${renderGrowthChart(animal, growthPoints)}</div>
-        <section class="detail-section" data-detail-view="full" data-detail-has-value="${animalEvents.some(record => record.type !== "note")}">
+        <div data-detail-view="full" data-detail-has-value="${growthPoints.length > 0 || manager || worker}">${renderGrowthChart(animal, growthPoints)}</div>
+        ${pendingEvents.length ? `<section class="detail-section" data-detail-view="both" data-detail-has-value="true"><h3>Cambios pendientes del historial</h3><p>Las gráficas y los indicadores usan el historial confirmado.</p><div class="history-list">${renderHistory(pendingEvents,false)}</div></section>` : ""}
+        <section class="detail-section" data-detail-view="full" data-detail-has-value="${manager || worker || animalEvents.some(record => record.type !== "note")}">
           <div class="detail-section-head"><h3>Historial sanitario y de manejo</h3>${manager || worker ? `<button class="add-link" type="button" data-add-record="bath">${icon("plus")} Añadir registro</button>` : ""}</div>
           <div class="history-list">${renderHistory(animalEvents.filter(record => record.type !== "note"), manager)}</div>
         </section>
-        <section class="detail-section" data-detail-view="full" data-detail-has-value="${animalEvents.some(record => record.type === "note")}">
+        <section class="detail-section" data-detail-view="full" data-detail-has-value="${manager || animalEvents.some(record => record.type === "note")}">
           <div class="detail-section-head"><h3>Comentarios y observaciones</h3>${manager ? `<button class="add-link" type="button" data-add-record="note">${icon("plus")} Añadir observación</button>` : ""}</div>
           <div class="history-list">${renderHistory(animalEvents.filter(record => record.type === "note"), manager)}</div>
         </section>
-        <section class="detail-section" data-detail-view="full" data-detail-has-value="${photos.length > 0}">
+        <section class="detail-section" data-detail-view="full" data-detail-has-value="${manager || photos.length > 0}">
           <div class="detail-section-head"><h3>Galería de fotografías <span class="muted">(${photos.length})</span></h3></div>
           <div class="gallery">${gallery}${manager && !photoOperation ? `<label class="photo-add" title="Añadir fotografías" aria-label="Añadir fotografías">${icon("photo")}<input id="photo-input" type="file" accept="image/*" multiple hidden></label>` : ""}</div>
         </section>
         <div class="detail-section animal-management" data-detail-view="full" data-detail-has-value="true">
           ${manager && !isActiveAnimal(animal) ? `<button class="button button-outline button-small" type="button" data-reactivate-animal="${escapeHtml(animal.id)}">${icon("active")} Reactivar animal</button>` : ""}
           ${manager && animal.status !== "Baja" ? `<button class="add-link" type="button" data-deactivate-animal="${escapeHtml(animal.id)}">Dar de baja</button>` : ""}
-            ${manager ? `<button class="danger-link" type="button" data-delete-animal="${escapeHtml(animal.id)}">${icon("trash")} Eliminar definitivamente a ${escapeHtml(animal.name || animal.tag || "este animal")}</button>` : ""}
+            ${manager && !universalWritesEnabled() ? `<button class="danger-link" type="button" data-delete-animal="${escapeHtml(animal.id)}">${icon("trash")} Eliminar definitivamente a ${escapeHtml(animal.name || animal.tag || "este animal")}</button>` : ""}
         </div>
       </div>`;
     applyAnimalFieldVisibility($("#detail-content"));
@@ -5075,7 +5338,9 @@
       const correctedBy = record.weightUpdatedBy?.label
         ? `<small class="history-audit">Peso corregido por ${escapeHtml(record.weightUpdatedBy.label)} · ${escapeHtml(formatTimestamp(record.weightUpdatedAt))}</small>` : "";
       const recordName = record.type === "weight" ? "pesaje" : EVENT_TYPES[record.type] || "registro";
-      return `<div class="history-item"><div class="history-date">${formatDate(record.date)}</div><div class="history-description">${value}${record.type === "weight" && record.notes ? ` · ${escapeHtml(record.notes)}` : ""}${journeyLink}${performedBy}${correctedBy}</div>${allowDelete ? `<button class="history-delete" data-delete-event="${escapeHtml(record.id)}" type="button" aria-label="Eliminar ${escapeHtml(recordName)} del historial" title="Eliminar ${escapeHtml(recordName)} del historial">${icon("trash")}</button>` : ""}</div>`;
+      const pending = record._pending ? `<small class="history-audit">${record._deleted ? "Eliminación" : record._replaces ? "Corrección" : "Registro"} pendiente de confirmar</small>` : "";
+      const editable = allowDelete && !record._pending && (!universalWritesEnabled() || !record.journeyId && !state.pendingEvents.some(item=>item._replaces === record.id));
+      return `<div class="history-item"><div class="history-date">${formatDate(record.date)}</div><div class="history-description">${value}${record.type === "weight" && record.notes ? ` · ${escapeHtml(record.notes)}` : ""}${pending}${journeyLink}${performedBy}${correctedBy}</div>${editable && universalWritesEnabled() ? `<button class="history-delete" data-edit-event="${escapeHtml(record.id)}" type="button" aria-label="Editar ${escapeHtml(recordName)}">${icon("edit")}</button>` : ""}${editable ? `<button class="history-delete" data-delete-event="${escapeHtml(record.id)}" type="button" aria-label="Eliminar ${escapeHtml(recordName)} del historial" title="Eliminar ${escapeHtml(recordName)} del historial">${icon("trash")}</button>` : ""}</div>`;
     }).join("");
   }
 
@@ -5086,6 +5351,7 @@
       showToast("Tu perfil no tiene permiso para registrar este tipo de información.");
       return;
     }
+    state.editingRecord = null;
     $("#record-form").reset();
     $("#record-animal-id").value = state.currentAnimalId;
     $("#record-type").value = type;
@@ -5129,12 +5395,29 @@
     if (formData.has("notes")) fields.notes = String(formData.get("notes")).trim();
     try {
       const animalId = $("#record-animal-id").value;
+      if (state.editingRecord) {
+        const original = state.editingRecord;
+        if (!canManageRanch() || !universalWritesEnabled() || original.animalId !== animalId || original.type !== type || original.journeyId) throw Error("Registro no disponible para edición.");
+        const reason = String(formData.get("reason") || "").trim();
+        if (!reason) throw Error("Escribe el motivo de la corrección.");
+        const changes = {animalId,reason};
+        if (date !== original.date) changes.date = date;
+        for (const key of ["weight","label","notes"]) if (Object.hasOwn(fields,key) && fields[key] !== (original[key] ?? "")) changes[key === "label" ? "product" : key] = fields[key];
+        if (Object.keys(changes).length === 2) { showToast("No hay cambios que guardar.");return; }
+        recordSaving = true;
+        try {
+          await queueUniversal([{action:"event.update",id:original.id,changes,expectedData:original,expectedLastId:null}]);
+          $("#record-dialog").close();state.editingRecord=null;openDetail(animalId,true);showToast("Corrección pendiente de confirmación.");
+        } finally { recordSaving=false; }
+        return;
+      }
       const record = makeEvent(animalId, type, date, fields);
-      if (eventOutboxEnabled() && RPC_EVENT_TYPES.has(type)) {
+      if (universalWritesEnabled() && RPC_EVENT_TYPES.has(type)) {
         recordSaving = true;
         try {
           await queueEventRecord(record);
           $("#record-dialog").close();
+          openDetail(animalId,true);
           scheduleSync();
           showToast("Registro guardado en la cola local. Pendiente de confirmación.");
         } finally { recordSaving = false; }
@@ -5189,9 +5472,9 @@
       delete updated.targetWeightMax;
     }
     try {
-      if(eventOutboxEnabled()){
-        await queueForecastOperation("animal.target.update",animal.id,{minimum:minValue?targetMin:null,maximum:minValue?targetMax:null},await forecastRevision("animal",animal.id,animal));
-        showToast("Rango en cola; pendiente de confirmación.");return;
+      if(universalWritesEnabled()){
+        await queueUniversal([{action:"animal.target.update",id:animal.id,changes:{minimum:minValue?targetMin:null,maximum:minValue?targetMax:null},expectedLastId:animal._operationId ?? null}]);
+        openDetail(animal.id,true);showToast("Rango en cola; pendiente de confirmación.");return;
       }
       await put("animals", updated);
       scheduleSync();
@@ -5217,6 +5500,10 @@
     const existing = state.photos.filter(photo => photo.animalId === animalId);
     try {
       if (photoOperationFor(animalId)) throw Error("Sincroniza o revisa el cambio de fotografía pendiente antes de añadir otra.");
+      if (universalWritesEnabled()) {
+        await queueUniversal(images.map((file,index)=>photoCreationDescriptor({id:newId(),animalId,name:file.name,mime:file.type,blob:file,primary:existing.length===0 && index===0})));
+        openDetail(animalId,true);showToast("Fotografías guardadas; pendientes de sincronizar.");return;
+      }
       await transaction(["photos"], "readwrite", tx => {
         const store = tx.objectStore("photos");
         images.forEach((file, index) => store.put({
@@ -5273,6 +5560,7 @@
 
   async function queuePhotoChange(action, photo, changes) {
     const scope = outboxScope();
+    assertCaptureScope(scope);
     if (!canManageRanch()) throw Error("No tienes permiso para modificar fotografías.");
     const module = await import("./sync/photo-outbox.mjs");
     if ((await scopedOutbox(scope)).some(entry => module.blocksPhotoChanges(entry) && entry.operation.changes.animalId === photo.animalId)) {
@@ -5282,7 +5570,7 @@
     const operation = {protocolVersion:1, operationId:newId(), action, entityId:photo.id, ownerId:scope.ownerId,
       deviceId:outboxDeviceId(), baseRevision:revision, capturedAt:new Date().toISOString(), changes};
     await module.enqueuePhotoOperation(scope.database, scope, operation, photo, () => {
-      assertSyncScope(scope);
+      assertCaptureScope(scope);
       if (!canManageRanch()) throw Error("Los permisos cambiaron.");
     }, isActiveAnimal);
     await refresh();
@@ -5351,11 +5639,44 @@
     }
   }
 
+  function openEventEditor(eventId) {
+    if (!canManageRanch() || !universalWritesEnabled()) return;
+    const record = state.events.find(item=>item.id === eventId);
+    if (!record) return;
+    if (record.journeyId) { showToast("Este registro pertenece a una jornada. Revísalo desde su jornada."); return; }
+    if (state.pendingEvents.some(item=>item._replaces === eventId)) { showToast("Ya existe un cambio pendiente para este registro."); return; }
+    openRecordForm(record.type);
+    state.editingRecord = structuredClone(record);
+    $("#record-dialog-title").textContent = "Editar " + (EVENT_TYPES[record.type] || "registro").toLocaleLowerCase("es-MX");
+    const form = $("#record-form");
+    for (const field of ["date","weight","label","notes"]) if (form.elements.namedItem(field)) form.elements.namedItem(field).value = record[field] ?? "";
+    const reason = document.createElement("label");
+    reason.className = "full-width";
+    reason.innerHTML = 'Motivo de la corrección<textarea name="reason" maxlength="2000" rows="2" required></textarea>';
+    $("#record-fields").append(reason);
+  }
+  async function deleteForecast(id) {
+    if (!canManageRanch() || !universalWritesEnabled()) return;
+    const forecast = state.forecasts.find(row=>row.id === id);
+    if (!forecast || !confirm("¿Eliminar esta estimación guardada?")) return;
+    try {
+      await queueUniversal([{action:"forecast.delete",id,changes:{animalId:forecast.animalId},expectedData:forecast,expectedLastId:null}]);
+      openDetail(forecast.animalId,true);showToast("Eliminación de estimación pendiente de confirmación.");
+    } catch(error) { showToast(error.message); }
+  }
   async function deleteEvent(eventId) {
     if (!canManageRanch()) return;
     const record = state.events.find(item => item.id === eventId);
     if (!record || !confirm("¿Eliminar este registro del historial?")) return;
     try {
+      if (universalWritesEnabled()) {
+        if (record.journeyId) throw Error("El registro pertenece a una jornada. Revísalo desde su jornada.");
+        const reason = prompt("Motivo de la eliminación (se conservará en la auditoría):")?.trim();
+        if (!reason) return;
+        if (reason.length > 2000) throw Error("El motivo admite hasta 2000 caracteres.");
+        await queueUniversal([{action:"event.delete",id:eventId,changes:{animalId:record.animalId,reason},expectedData:record,expectedLastId:null}]);
+        openDetail(record.animalId,true);showToast("Eliminación guardada; pendiente de confirmación.");return;
+      }
       await remove("events", eventId);
       await touchAnimal(record.animalId);
       await refresh();
@@ -5403,7 +5724,7 @@
     if (owner !== state.ranchOwnerId || user !== currentUser?.id || database !== db || !canManageRanch()) {
       showToast("La sesión cambió. Actualiza el inventario."); return null;
     }
-    const current = await getOne("animals", animal.id);
+    const current = universalWritesEnabled() ? state.animals.find(item=>item.id === animal.id) : await getOne("animals", animal.id);
     if (!current || JSON.stringify(stableValue(current)) !== JSON.stringify(stableValue(animal))) {
       showToast("La ficha cambió. Actualiza antes de continuar."); return null;
     }
@@ -5420,6 +5741,10 @@
     const status = await chooseLifecycleStatus(animal, false);
     if (!status) return;
     try {
+      if (universalWritesEnabled()) {
+        await queueUniversal([{action:"animal.archive",id:animalId,changes:{status},expectedLastId:animal._operationId ?? null}]);
+        $("#detail-dialog").close();showToast("Baja guardada; pendiente de confirmación.");return;
+      }
       await put("animals", { ...animal, status, updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label });
       scheduleSync();
       $("#detail-dialog").close();
@@ -5440,6 +5765,10 @@
     const status = await chooseLifecycleStatus(animal, true);
     if (!status) return;
     try {
+      if (universalWritesEnabled()) {
+        await queueUniversal([{action:"animal.restore",id:animalId,changes:{status},expectedLastId:animal._operationId ?? null}]);
+        $("#detail-dialog").close();state.archiveView=false;renderDashboard();showToast("Reactivación guardada; pendiente de confirmación.");return;
+      }
       await put("animals", { ...animal, status, updatedAt: nextModifiedAt(animal.updatedAt), updatedBy: journeyActor().label });
       scheduleSync();
       $("#detail-dialog").close();
@@ -5454,6 +5783,7 @@
 
   async function deleteAnimal(animalId) {
     if (!canManageRanch()) return;
+    if (universalWritesEnabled()) { await deactivateAnimal(animalId); return; }
     const animal = state.animals.find(item => item.id === animalId);
     if (!animal) return;
     const hasEvents = state.events.some(record => record.animalId === animalId);
@@ -6074,6 +6404,9 @@
       }
     });
     $("#sign-out-button").addEventListener("click", async () => {
+      const background = await import("./sync/background-universal.mjs");
+      await background.disableBackgroundDelivery();
+      void background.revokeBackgroundCapabilities();
       const { error } = await cloud.auth.signOut();
       if (error) showToast(`No se pudo cerrar la sesión: ${error.message}`);
     });
@@ -6270,6 +6603,8 @@
         if (photo) { $("#photo-large").src = photoUrl(photo); $("#photo-dialog").showModal(); }
         return;
       }
+      if (target.dataset.editEvent) { openEventEditor(target.dataset.editEvent); return; }
+      if (target.dataset.deleteForecast) { deleteForecast(target.dataset.deleteForecast); return; }
       if (target.dataset.deleteEvent) { deleteEvent(target.dataset.deleteEvent); return; }
       if (target.dataset.reactivateAnimal) { reactivateAnimal(target.dataset.reactivateAnimal); return; }
       if (target.dataset.deactivateAnimal) { deactivateAnimal(target.dataset.deactivateAnimal); return; }
@@ -6360,22 +6695,25 @@
       attachDateShortcuts(document);
       $("#calculator-price-date").value = today();
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("./service-worker.js").catch(error => {
+        navigator.serviceWorker.register("./service-worker.js", {type:"module"}).catch(error => {
           console.error("No se pudo habilitar el modo sin conexión.", error);
         });
       }
       const config = window.GANADERO_CONFIG;
       if (window.supabase?.createClient && config?.supabaseUrl && config?.supabaseAnonKey) {
         cloud = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
-        cloud.auth.onAuthStateChange((event, session) => {
+        cloud.auth.onAuthStateChange(async (event, session) => {
           if (event === "INITIAL_SESSION") return;
           const oldUser=currentUser?.id;
           currentUser = session?.user || null;
           if(oldUser!==currentUser?.id){
             sessionGeneration++;
             state.ranchReady=false; state.ranchOwnerId=null; state.ranchRole=null; state.ranchContext=null;
-            if(oldUser)try{localStorage.removeItem(`ganadero-ranch-context:${oldUser}`);}catch(_){}
             clearPrivateView();
+            const background = await import("./sync/background-universal.mjs");
+            await background.disableBackgroundDelivery();
+            void background.revokeBackgroundCapabilities();
+            if(oldUser)try{localStorage.removeItem(`ganadero-ranch-context:${oldUser}`);}catch(_){}
           }
           $("#account-button").hidden = Boolean(currentUser);
           $("#account-manage-button").hidden = !currentUser;

@@ -27,10 +27,12 @@ async function decode(db,key,store,row){
  if(value.__photo){value.blob=new Blob([Uint8Array.from(value.__photo.bytes)],{type:value.__photo.mime});delete value.__photo;}
  return value;
 }
-async function rawRead(db,names){
+async function rawRead(db,names,selections={}){
  const tx=db.transaction(names,"readonly");
  const done=complete(tx);
- const entries=await Promise.all(names.map(async name=>[name,await request(tx.objectStore(name).getAll())]));
+ const entries=await Promise.all(names.map(async name=>[name,selections[name]
+  ? (await Promise.all(selections[name].map(id=>request(tx.objectStore(name).get(id))))).filter(Boolean)
+  : await request(tx.objectStore(name).getAll())]));
  await done;return new Map(entries);
 }
 function lock(db,fn){
@@ -41,13 +43,19 @@ export async function readProtected(db,store){
  const key=await keyFor(db),rows=(await rawRead(db,[store])).get(store);
  return Promise.all(rows.filter(row=>store!=="syncMeta"||!reserved(row.id)).map(row=>decode(db,key,store,row)));
 }
+// Pending originals are read individually so draining a photo queue does not
+// decrypt every attachment into memory at once.
+export async function readProtectedRecord(db,store,id){
+ const key=await keyFor(db),rows=(await rawRead(db,[store],{[store]:[id]})).get(store);
+ return rows.length?decode(db,key,store,rows[0]):undefined;
+}
 // Existing synchronous transaction callbacks operate on an isolated snapshot.
 // All protected writes are serialized under a cross-tab Web Lock, encrypted
 // before opening the final native transaction, and committed atomically.
-export async function protectedTransaction(db,names,mode,operation,verify=()=>{}){
+export async function protectedTransaction(db,names,mode,operation,verify=()=>{},selections={}){
  return lock(db,async()=>{
   verify();
-  const key=await keyFor(db),raw=await rawRead(db,names),maps=new Map(),dirty=new Map(),jobs=[];
+  const key=await keyFor(db),raw=await rawRead(db,names,selections),maps=new Map(),dirty=new Map(),jobs=[];
   for(const name of names){
    const rows=await Promise.all(raw.get(name).filter(r=>name!=="syncMeta"||!reserved(r.id)).map(r=>decode(db,key,name,r)));
    maps.set(name,new Map(rows.map(r=>[r.id,r])));

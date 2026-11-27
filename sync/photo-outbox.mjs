@@ -1,6 +1,6 @@
 import {protectedTransaction} from "./protected-store.mjs";
 
-const actions = new Set(["photo.crop", "photo.primary", "photo.delete"]);
+const actions = new Set(["photo.crop", "photo.primary", "photo.delete", "photo.create"]);
 export const isPhotoOperation = entry => actions.has(entry?.operation?.action);
 const inScope = (entry, scope) => entry.userId === scope.userId && entry.ownerId === scope.ownerId;
 export const photoRevisionKey = id => `photo-revision:${id}`;
@@ -37,7 +37,7 @@ export function projectPhotoOperations(photos, entries, scope) {
       Object.assign(target, {cropX: c.cropX, cropY: c.cropY, cropZoom: c.cropZoom});
     } else if (op.action === "photo.primary") {
       for (const photo of result) if (photo.animalId === c.animalId) photo.primary = photo.id === target.id;
-    } else {
+    } else if (op.action === "photo.delete") {
       result = result.filter(photo => photo !== target);
       const remaining = result.filter(photo => photo.animalId === c.animalId);
       if (remaining.length && !remaining.some(photo => photo.primary)) remaining[0].primary = true;
@@ -79,7 +79,7 @@ export async function rememberPhotoRevision(database, scope, photo, remote, veri
 }
 
 export async function enqueuePhotoOperation(database, scope, operation, expectedPhoto, verify, validAnimal = () => true) {
-  if (!actions.has(operation.action) || operation.ownerId !== scope.ownerId ||
+  if (!actions.has(operation.action) || operation.action === "photo.create" || operation.ownerId !== scope.ownerId ||
       operation.entityId !== expectedPhoto.id || operation.changes.animalId !== expectedPhoto.animalId) throw Error("Fotografía inválida.");
   const c = operation.changes;
   if (operation.action === "photo.crop" && (![c.cropX, c.cropY, c.cropZoom].every(Number.isFinite) ||

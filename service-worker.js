@@ -1,4 +1,6 @@
-const CACHE_NAME = "ganadero-v64";
+import {runBackgroundDelivery} from "./sync/background-universal.mjs";
+
+const CACHE_NAME = "ganadero-v65";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -12,6 +14,8 @@ const APP_FILES = [
   "./sync/local-crypto.mjs",
   "./sync/protected-store.mjs",
   "./sync/photo-outbox.mjs",
+  "./sync/universal-outbox.mjs",
+  "./sync/background-universal.mjs",
   "./sync/conflict-resolution.mjs",
   "./login-scene.js",
   "./confirmar-correo.html",
@@ -82,8 +86,8 @@ self.addEventListener("fetch", event => {
 });
 
 
-// Keep the worker alive until an authenticated page acknowledges the wake.
- // Never transmit access tokens through messages or save them in IndexedDB.
+// A page may refresh its canonical snapshot after headless delivery. General
+// Auth tokens never cross this channel or enter the worker's IndexedDB registry.
 function wakeClient(client) {
   return new Promise(resolve=>{
     const channel=new MessageChannel();
@@ -97,10 +101,18 @@ function wakeClient(client) {
 self.addEventListener("sync", event => {
   if (event.tag !== "ganaderov-event-outbox-v1") return;
   event.waitUntil((async () => {
+    // This processor opens the encrypted universal queue itself. It does not
+    // require an open tab; its limited capability is checked by the server for
+    // every operation and can be revoked independently of an Auth access token.
+    const delivery = await runBackgroundDelivery();
     const windows = await self.clients.matchAll({type:"window"});
-    if(!windows.length)throw new Error("No authenticated page available; queue retained");
-    // One wake at a time. A deferred result can be retried by the browser.
     const statuses=await Promise.all(windows.map(wakeClient));
-    if(!statuses.includes("drained")&&!statuses.every(s=>s==="disabled"))throw new Error("Delivery deferred");
+    if(delivery.status === "retry") throw new Error("Background delivery retained for retry");
+    // Expired/revoked grants wait for a newly verified foreground session.
+    if(delivery.status === "paused") return;
+    if(windows.length && !statuses.includes("drained") &&
+       !statuses.every(s=>s==="disabled") && delivery.status !== "drained") {
+      throw new Error("Delivery deferred");
+    }
   })());
 });
