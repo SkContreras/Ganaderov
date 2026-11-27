@@ -36,7 +36,7 @@ jobs:
           PGPASSWORD: postgres
           PGDATABASE: postgres
         run: |
-          for sql in supabase-schema.sql backend/{sync_event_create_v1,entity_projection_v1,incremental_sync_v1,incremental_retention_v1,journey_transitions_v1,universal_operations_v1}.sql tests/sql/{event_rpc_audit,universal_operations,incremental_retention}.sql; do
+          for sql in supabase-schema.sql backend/{sync_event_create_v1,entity_projection_v1,incremental_sync_v1,incremental_retention_v1,journey_transitions_v1,universal_operations_v1,security_hardening_v1}.sql tests/sql/{event_rpc_audit,universal_operations,incremental_retention,security_hardening}.sql; do
             psql -X -v ON_ERROR_STOP=1 -f "$sql"
           done
       - name: Concurrent authenticated writers
