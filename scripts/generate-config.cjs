@@ -7,6 +7,7 @@ const config = {
   supabaseUrl: url,
   supabaseAnonKey: key,
   syncRpcOnlyV1: process.env.SYNC_RPC_ONLY_V1 === "true",
+  syncJourneyUniversalV1: process.env.SYNC_JOURNEY_UNIVERSAL_V1 === "true",
   syncIncrementalV1: process.env.SYNC_INCREMENTAL_V1 === "true",
   syncEventRpcV1: process.env.SYNC_EVENT_RPC_V1 === "true",
   syncBackgroundV1: process.env.SYNC_BACKGROUND_V1 === "true"

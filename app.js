@@ -1926,6 +1926,12 @@
         }
       }
       conflicts += await syncJourneys(journeys, scope, recordsOf("journey"));
+      if(journeyUniversalEnabled()){
+        for(const journey of await getAll("journeys")){
+          assertSyncScope(scope);
+          try{const revision=await forecastRevision("journey",journey.id,journey);await put("syncMeta",{id:"journey-revision:"+journey.id,revision,fingerprint:JSON.stringify(stableValue(journey))});}catch(e){assertSyncScope(scope);}
+        }
+      }
       assertSyncScope(scope);
       await flushEventOutbox(scope);
       const outboxRows = await scopedOutbox(scope);
@@ -3062,6 +3068,24 @@
     $("#journey-dose-field").hidden = !["injection", "medication", "other"].includes(type);
   }
 
+  function journeyUniversalEnabled(){return eventOutboxEnabled()&&window.GANADERO_CONFIG?.syncJourneyUniversalV1===true;}
+  async function queueJourneyChange(journey,action,changes){
+    const scope=outboxScope(),fingerprint=JSON.stringify(stableValue(journey));
+    const meta=await getOne("syncMeta","journey-revision:"+journey.id);
+    let revision;
+    if(navigator.onLine){
+      revision=await forecastRevision("journey",journey.id,journey);
+      await put("syncMeta",{id:"journey-revision:"+journey.id,revision,fingerprint});
+    }else{
+      if(!meta||meta.fingerprint!==fingerprint||!Number.isSafeInteger(meta.revision))throw Error("Descarga esta jornada con conexión antes de capturar.");
+      revision=meta.revision;
+    }
+    assertSyncScope(scope);
+    const pending=await scopedOutbox(scope);
+    if(pending.some(p=>p.operation.entityId===journey.id&&p.operation.action.startsWith("journey.")&&p.state==="pending"&&(action!=="journey.attend"||p.operation.action!=="journey.attend"||p.operation.changes.animalId===changes.animalId)))throw Error("Hay un cambio pendiente para esta jornada o animal.");
+    await queueForecastOperation(action,journey.id,changes,revision);
+    showToast("Cambio guardado en cola; pendiente de confirmación.");
+  }
   async function createJourney(event) {
     event.preventDefault();
     if (!hasRanchAccess()) {
@@ -3097,6 +3121,10 @@
     };
     if (!journey.date || (type === "other" && !journey.name)) return;
     try {
+      if(journeyUniversalEnabled()){
+        await queueForecastOperation("journey.create",journey.id,{type:journey.type,name:journey.name,date:journey.date,product:journey.product,dose:journey.dose,notes:journey.notes,animalIds:journey.roster.map(x=>x.id)});
+        $("#journey-create-dialog").close();showToast("Jornada pendiente de confirmación.");return;
+      }
       await put("journeys", journey);
       $("#journey-create-dialog").close();
       await refresh();
@@ -3259,6 +3287,7 @@
             attendedBy: journeyActor()
           }
         : animal);
+      if(journeyUniversalEnabled()){await queueJourneyChange(journey,"journey.attend",{animalId});return;}
       await put("journeys", { ...journey, roster, updatedAt: new Date().toISOString() });
       await refresh();
       renderJourneyDetail();
@@ -3291,6 +3320,7 @@
       return;
     }
     try {
+      if(journeyUniversalEnabled()){await queueJourneyChange(journey,"journey.add_animals",{animalIds:newRosterAnimals.map(x=>x.id)});return;}
       await put("journeys", {
         ...journey,
         roster: journey.roster.concat(newRosterAnimals),
@@ -3334,6 +3364,7 @@
   async function reopenJourney(journeyId) {
     const journey = state.journeys.find(item => item.id === journeyId);
     if (!hasRanchAccess() || !journey || journey.status !== "incomplete" || !journeyCounts(journey).pending) return;
+    if(journeyUniversalEnabled()){try{await queueJourneyChange(journey,"journey.resume",{});}catch(e){showToast(e.message);}return;}
     if (journeyRpcEnabled()) { await remoteJourneyTransition(journey,false); return; }
     if (isRanchWorker() && journey.type === "other") {
       showToast("El perfil de trabajador no puede reabrir actividades personalizadas.");
@@ -3392,6 +3423,7 @@
       : item);
     state.journeyUpdating.add(animalId);
     try {
+      if(journeyUniversalEnabled()){await queueJourneyChange(journey,"journey.attend",{animalId,weight});state.journeyWeightTargetId=null;renderJourneyDetail();return;}
       await transaction(["journeys", "events", "animals"], "readwrite", tx => {
         tx.objectStore("journeys").put({ ...journey, roster, updatedAt });
         const eventStore = tx.objectStore("events");
@@ -3442,6 +3474,7 @@
     }
     const counts = journeyCounts(journey);
     if (counts.pending && !confirm(`Todavía hay ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}.\n\n¿Está seguro de que desea finalizar la jornada? Solo se registrarán los animales atendidos.`)) return;
+    if(journeyUniversalEnabled()){try{if(!navigator.onLine)throw Error("Finaliza con conexión tras confirmar las asistencias.");await queueJourneyChange(journey,"journey.finish",{allowIncomplete:counts.pending>0});}catch(e){showToast(e.message);}return;}
     if(journeyRpcEnabled()){await remoteJourneyTransition(journey,true,counts.pending>0);return;}
     const completedAt = new Date().toISOString();
     const finishedJourney = {
