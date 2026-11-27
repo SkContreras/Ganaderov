@@ -271,6 +271,8 @@
   const OFFLINE_CONTEXT_TTL = 24 * 60 * 60 * 1000;
   let sessionGeneration = 0;
   let refreshGeneration = 0;
+  let ranchContextFlight = null;
+  let syncCompletion = null;
   function clearPrivateView() {
     state.ranchContextOffline = false;
     for (const url of state.photoUrls.values()) URL.revokeObjectURL(url);
@@ -328,7 +330,33 @@
     clearPrivateView();
   }
 
-  async function loadRanchContext() {
+  function loadRanchContext() {
+    const userId = currentUser?.id, generation = sessionGeneration;
+    if (ranchContextFlight && ranchContextFlight.userId === userId && ranchContextFlight.generation === generation) {
+      return ranchContextFlight.promise;
+    }
+    const flight = {userId, generation};
+    flight.promise = loadRanchContextOnce().finally(() => {
+      if (ranchContextFlight === flight) ranchContextFlight = null;
+    });
+    ranchContextFlight = flight;
+    return flight.promise;
+  }
+
+  async function reloadRanchContext() {
+    const userId = currentUser?.id, generation = sessionGeneration;
+    const verify = () => {
+      if (currentUser?.id !== userId || sessionGeneration !== generation) throw Error("La sesión cambió.");
+    };
+    // Explicit permission refreshes wait for the active transfer. New sync
+    // requests share loadRanchContext's preflight if this reload is still open.
+    while (syncCompletion) { await syncCompletion; verify(); }
+    verify();
+    await loadRanchContext();
+    verify();
+  }
+
+  async function loadRanchContextOnce() {
     state.ranchReady = false;
     const userId=currentUser?.id, generation=sessionGeneration;
     const verify=()=>{if(currentUser?.id!==userId||sessionGeneration!==generation)throw Error("La sesión cambió.");};
@@ -358,6 +386,7 @@
       state.ranchContextOffline = false;
       if (status === 401 || status === 403) {
         await (await import("./sync/background-universal.mjs")).disableBackgroundDelivery();
+        verify();
         try { localStorage.removeItem(`ganadero-ranch-context:${userId}`); } catch (_) {}
       }
       if (status === 404 && error.code === "PGRST202") {
@@ -441,7 +470,7 @@
 
   async function refreshRanchContext(showDialog = false) {
     try {
-      await loadRanchContext();
+      await reloadRanchContext();
       if (showDialog) {
         renderRanchDialog();
         if (!$("#ranch-dialog").open) $("#ranch-dialog").showModal();
@@ -461,7 +490,7 @@
     try {
       const { error } = await cloud.rpc(rpcName, parameters);
       if (error) throw error;
-      await loadRanchContext();
+      await reloadRanchContext();
       renderRanchDialog();
       scheduleSync();
       showToast(successMessage);
@@ -479,7 +508,7 @@
         p_approve: approve
       });
       if (error) throw error;
-      await loadRanchContext();
+      await reloadRanchContext();
       renderRanchDialog();
       if (approve) await syncData();
       showToast(approve ? "Solicitud aprobada; el trabajador ya puede sincronizar." : "Solicitud rechazada.");
@@ -492,7 +521,7 @@
     try {
       const { error } = await cloud.rpc("revoke_ranch_worker", { p_user_id: userId });
       if (error) throw error;
-      await loadRanchContext();
+      await reloadRanchContext();
       renderRanchDialog();
       showToast("Se retiró el acceso del trabajador.");
     } catch (error) {
@@ -1247,6 +1276,7 @@
     renderDashboard();
     renderJourneys();
     renderCalculatorAnimalOptions();
+    document.dispatchEvent(new CustomEvent("ganaderov:sync-updated"));
   }
 
   async function ensureAnimalInternalIds(animals, persist = true) {
@@ -2004,7 +2034,7 @@
           const store=tx.objectStore("operationOutbox"),req=store.get(entry.id);
           req.onsuccess=()=>{
             const old=req.result;
-            if(!old||old.userId!==scope.userId||old.ownerId!==scope.ownerId||!["conflict","rejected","archived"].includes(old.state)||old.resolvedBy||!module.same(old.operation,op))throw Error("La operación cambió.");
+            if(!old||old.userId!==scope.userId||old.ownerId!==scope.ownerId||!["conflict","rejected"].includes(old.state)||old.resolvedBy||!module.same(old.operation,op))throw Error("La operación cambió.");
             store.add({id:replacement.operationId,userId:scope.userId,ownerId:scope.ownerId,operation:replacement,state:"pending",attempts:0,nextAt:0,code:"",createdAt:replacement.capturedAt,resolves:old.id});
             store.put({...old,state:"archived",resolvedBy:replacement.operationId});
           };
@@ -2164,78 +2194,236 @@
     dialog.append(heading,content,close);dialog.addEventListener("close",()=>dialog.remove(),{once:true});document.body.append(dialog);dialog.showModal();
     await mountLegacyReview(content,scope,module.backupRecoverySource(payload,fileName));
   }
+  function outboxOperationPresentation(entry, rows = []) {
+    const operation = entry.operation || {}, changes = operation.changes || {}, action = operation.action || "";
+    const labels = {
+      "animal.create":"Añadir animal", "animal.update":"Actualizar ficha", "animal.archive":"Dar de baja al animal",
+      "animal.restore":"Reactivar animal", "animal.target.update":"Cambiar objetivo de peso",
+      "event.create":"Añadir registro", "event.update":"Corregir registro", "event.delete":"Eliminar registro",
+      "photo.create":"Añadir fotografía", "photo.crop":"Ajustar encuadre", "photo.primary":"Cambiar fotografía principal", "photo.delete":"Eliminar fotografía",
+      "journey.create":"Crear jornada", "journey.attend":"Registrar asistencia", "journey.finish":"Finalizar jornada",
+      "journey.resume":"Reabrir jornada", "journey.add_animals":"Añadir animales a la jornada",
+      "config.update":"Actualizar configuración", "forecast.create":"Crear pronóstico", "forecast.delete":"Eliminar pronóstico"
+    };
+    const updating = entry.state === "confirmed" && Boolean(entry.receipt) &&
+      (action.startsWith("photo.") ? !entry.photoSettled : !entry.settled);
+    const states = {
+      pending:{label:entry.sealed === false ? "Esperando cambio previo" : "Pendiente de envío", tone:"pending", group:"progress",
+        hint:entry.sealed === false ? "Se enviará cuando se confirme el cambio anterior." : "El cambio está guardado en este dispositivo y espera sincronizarse."},
+      confirmed:updating
+        ? {label:"Actualizando ficha", tone:"updating", group:"progress", hint:"El servidor ya recibió este cambio. Falta actualizar los datos en este dispositivo."}
+        : {label:"Confirmada", tone:"confirmed", group:"confirmed", hint:"Este cambio ya está confirmado."},
+      conflict:{label:"Requiere revisión", tone:"review", group:"review", hint:"Hay cambios que necesitan compararse con la versión del servidor."},
+      rejected:{label:"No se pudo aplicar", tone:"review", group:"review", hint:"El servidor no aceptó este cambio. La captura se conserva para revisarla."},
+      blocked:{label:"Requiere atención", tone:"review", group:"review", hint:"Revisa el cambio anterior antes de continuar. La captura sigue guardada."},
+      archived:{label:"Archivada", tone:"archived", group:"archived", hint:entry.resolvedBy ? "Se conservó el registro original y se creó una corrección." : "Se conserva para consulta. Puedes volver a revisarla."}
+    };
+    const status = {...(states[entry.state] || {label:"Por revisar", tone:"review", group:"review", hint:"Revisa el detalle de este cambio guardado."})};
+    if (["conflict","rejected","blocked"].includes(entry.state) && ["PHOTO_BYTES_CONFLICT","BACKGROUND_UPLOAD_CONFLICT"].includes(entry.code)) {
+      status.hint = "La fotografía guardada en el servidor es distinta. Descarga tu original para revisarlo.";
+    }
+    const kind = action.split(".")[0], animalId = changes.animalId || (kind === "animal" ? operation.entityId : null);
+    const animal = state.animals.find(row => row.id === animalId) || state.confirmedAnimals.find(row => row.id === animalId) ||
+      rows.find(row => row.operation?.action === "animal.create" && row.operation.entityId === animalId)?.operation.changes?.fields;
+    let subject = animal ? [animal.name, animal.tag ? `Arete ${animal.tag}` : animal.internalId].filter(Boolean).join(" · ") : "";
+    if (!subject && kind === "animal") subject = [changes.fields?.name, changes.fields?.tag ? `Arete ${changes.fields.tag}` : ""].filter(Boolean).join(" · ");
+    if (!subject && kind === "journey") {
+      const journey = state.journeys.find(row => row.id === operation.entityId);
+      subject = journey?.name || changes.name || JOURNEY_TYPES[journey?.type || changes.type] || "Jornada del rancho";
+    }
+    if (!subject) subject = kind === "config" ? "Configuración del rancho" : animalId ? "Ficha del animal" : "Registro del rancho";
+    return {title:labels[action] || "Cambio guardado", subject, status,
+      activity:kind === "event" ? EVENT_TYPES[changes.type] || "" : "",
+      icon:({animal:"inventory", event:"health", photo:"photo", journey:"journeys", config:"settings", forecast:"calculator"})[kind] || "sync"};
+  }
+
   async function showEventOutbox() {
+    let dialog;
     try {
-      const scope = outboxScope();
-      const rows = await scopedOutbox(scope);
-      const dialog = document.createElement("dialog");
-      const heading = document.createElement("h2"); heading.textContent = "Operaciones de sincronización";
-      dialog.append(heading);
-      const description = document.createElement("p");
-      description.textContent = "Los registros pendientes no forman parte del historial confirmado. No borres los datos del navegador.";
-      dialog.append(description);
-      for (const entry of rows.slice().reverse().slice(0,100)) {
-        const item = document.createElement("p");
-        const c = entry.operation.changes;
-        const labels = {"photo.crop":"Encuadre de fotografía", "photo.primary":"Fotografía principal", "photo.delete":"Eliminar fotografía"};
-        const statuses = {pending:entry.sealed === false ? "Pendiente de una operación previa" : "Pendiente", confirmed:entry.photoSettled === false || entry.settled === false ? "Confirmada; actualizando ficha" : "Confirmada", conflict:"Conflicto: requiere revisión", rejected:"Rechazada: requiere revisión", blocked:"Bloqueada: revisa la operación previa o el original de la fotografía", archived:"Archivada"};
-        item.textContent = [labels[entry.operation.action] || EVENT_TYPES[c.type] || entry.operation.action,
-          c.animalId, c.date, statuses[entry.state] || entry.state, entry.code].filter(Boolean).join(" · ");
-        dialog.append(item);
-        if (["conflict","rejected","blocked","archived"].includes(entry.state)) {
-          const details=document.createElement("details"), title=document.createElement("summary"), pre=document.createElement("pre");
-          title.textContent="Revisar operación"; pre.style.whiteSpace="pre-wrap"; pre.style.overflowWrap="anywhere";
-          pre.textContent=JSON.stringify({operation:entry.operation,resolvedBy:entry.resolvedBy},null,2); details.append(title,pre); dialog.append(details);
-          if (entry.operation.action === "photo.create") {
-            const download = document.createElement("button");download.type="button";download.textContent="Descargar el original guardado";
-            download.onclick=async()=>{
-              try {
-                const original=await (await protectedModule()).readProtectedRecord(scope.database,"photoUploads",entry.attachmentId || entry.id);
-                assertSyncScope(scope);
-                if(original?.userId!==scope.userId||original?.ownerId!==scope.ownerId||!(original.blob instanceof Blob))throw Error("No se encontró el original en este dispositivo.");
-                const url=URL.createObjectURL(original.blob),link=document.createElement("a");link.href=url;link.download=(entry.operation.changes.name||"fotografia").replace(/[\\/]/g,"_");link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-              } catch(error) { showToast(error.message); }
-            };
-            details.append(download);
-          }
-          if(!entry.resolvedBy){
-            const archive=document.createElement("button");archive.type="button";archive.textContent=entry.state==="archived"?"Recuperar para revisión":"Archivar / conservar servidor";
-            archive.onclick=async()=>{try{await setConflictArchive(scope,entry,entry.state!=="archived");await refresh();if($("#detail-dialog").open&&state.currentAnimalId)openDetail(state.currentAnimalId,true);dialog.close();await showEventOutbox();}catch(e){showToast(e.message);}};
-            details.append(archive);
-            if(entry.state!=="archived"&&["animal.update","event.update","config.update"].includes(entry.operation.action)){
-              const review=document.createElement("button");review.type="button";review.textContent="Comparar y resolver";
-              review.onclick=async()=>{review.disabled=true;try{await reviewOperation(scope,entry,dialog);}catch(e){showToast(e.message);review.disabled=false;}};
-              details.append(review);
+      const existing = $("#event-outbox-dialog");
+      if (existing?.open) { existing.querySelector("[data-close]")?.focus(); return; }
+      const scope = outboxScope(), manager = canManageRanch();
+      const ensureScope = () => {
+        assertSyncScope(scope);
+        if (canManageRanch() !== manager) throw Error("Los permisos cambiaron. Abre de nuevo la sincronización.");
+      };
+      const element = (tag, className, text) => {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      };
+      const glyph = name => {
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("class", "ui-icon"); svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("aria-hidden", "true"); svg.setAttribute("focusable", "false");
+        const use = document.createElementNS("http://www.w3.org/2000/svg", "use"); use.setAttribute("href", `#icon-${name}`); svg.append(use);
+        return svg;
+      };
+      dialog = element("dialog", "modal sync-outbox-modal"); dialog.id = "event-outbox-dialog";
+      dialog.setAttribute("aria-labelledby", "event-outbox-title"); dialog.setAttribute("aria-describedby", "event-outbox-description");
+      const header = element("div", "modal-heading sync-outbox-heading"), titleWrap = element("div"), heading = element("h2", "", "Sincronización");
+      heading.id = "event-outbox-title"; titleWrap.append(element("div", "eyebrow", "CAMBIOS DEL RANCHO"), heading);
+      const headerIcon = element("span", "sync-outbox-heading-icon"); headerIcon.append(glyph("sync"));
+      const closeIcon = element("button", "icon-button"); closeIcon.type = "button"; closeIcon.dataset.close = dialog.id;
+      closeIcon.setAttribute("aria-label", "Cerrar sincronización"); closeIcon.append(glyph("close")); closeIcon.onclick = () => dialog.close();
+      header.append(headerIcon, titleWrap, closeIcon);
+      const body = element("div", "sync-outbox-body"), description = element("p", "sync-outbox-description", "Consulta qué cambios se enviaron y cuáles necesitan atención. Las capturas pendientes se conservan en este dispositivo.");
+      description.id = "event-outbox-description";
+      const counters = element("div", "sync-outbox-counters"), counterNodes = {};
+      for (const [key, label] of Object.entries({progress:"En proceso", review:"Por revisar", confirmed:"Confirmadas", archived:"Archivadas"})) {
+        const card = element("div", `sync-outbox-counter sync-outbox-counter-${key}`), number = element("strong", "", "0");
+        card.append(number, element("span", "", label)); counters.append(card); counterNodes[key] = number;
+      }
+      const toolbar = element("div", "sync-outbox-toolbar"), listTitle = element("h3", "", "Tus cambios"), refreshButton = element("button", "button button-outline button-small", "Actualizar lista");
+      refreshButton.type = "button"; toolbar.append(listTitle, refreshButton);
+      const feedback = element("p", "sync-outbox-feedback", "Leyendo cambios guardados…"); feedback.setAttribute("role", "status");
+      const list = element("div", "sync-outbox-list"); list.setAttribute("aria-label", "Cambios de sincronización");
+      const more = element("button", "button button-outline sync-outbox-more", "Mostrar más cambios"); more.type = "button"; more.hidden = true;
+      const reviewHost = element("div", "sync-outbox-review"), legacyHost = element("div", "sync-outbox-legacy");
+      body.append(description, counters, toolbar, feedback, list, more, reviewHost, legacyHost);
+      const footer = element("div", "modal-actions sync-outbox-footer"), close = element("button", "button button-outline", "Cerrar"), sync = element("button", "button button-primary");
+      close.type = "button"; close.onclick = () => dialog.close(); sync.type = "button"; sync.append(glyph("sync"), document.createTextNode("Sincronizar ahora")); footer.append(close, sync);
+      dialog.append(header, body, footer);
+      let closed = false, reading = 0, visibleLimit = 100, currentRows = [];
+      const updateSyncButton = () => { sync.disabled = !cloud || !navigator.onLine || state.syncing; };
+      const actionButton = (entry, key, label, handler) => {
+        const button = element("button", "button button-outline button-small", label); button.type = "button";
+        button.dataset.syncControl = `${entry.id}:${key}`;
+        button.onclick = async () => {
+          button.disabled = true;
+          try { ensureScope(); await handler(); if (!closed) ensureScope(); }
+          catch (error) { if (!closed) { try { ensureScope(); } catch (_) { dialog.close(); } showToast(error.message); } }
+          finally { button.disabled = false; }
+        };
+        return button;
+      };
+      const renderRows = rows => {
+        ensureScope();
+        for (const panel of reviewHost.querySelectorAll(".sync-outbox-resolution[data-operation-id]")) {
+          const entry = rows.find(row => row.id === panel.dataset.operationId);
+          if (!entry || entry.resolvedBy || !["conflict","rejected"].includes(entry.state)) panel.remove();
+        }
+        const openDetails = new Set([...list.querySelectorAll("details[open]")].map(node => node.dataset.operationId));
+        const focused = list.contains(document.activeElement) ? document.activeElement.closest("[data-sync-control]")?.dataset.syncControl : null;
+        const counts = {progress:0, review:0, confirmed:0, archived:0};
+        const ranked = rows.map(entry => ({entry, view:outboxOperationPresentation(entry, rows)}));
+        for (const item of ranked) counts[item.view.status.group]++;
+        for (const [key, number] of Object.entries(counterNodes)) number.textContent = String(counts[key]);
+        const order = {review:0, progress:1, confirmed:2, archived:3};
+        ranked.sort((a,b) => order[a.view.status.group] - order[b.view.status.group] ||
+          String(b.entry.operation?.capturedAt || b.entry.createdAt || "").localeCompare(String(a.entry.operation?.capturedAt || a.entry.createdAt || "")));
+        const fragment = document.createDocumentFragment();
+        for (const {entry, view} of ranked.slice(0, visibleLimit)) {
+          const item = element("article", `sync-outbox-item sync-outbox-item-${view.status.tone}`); item.dataset.operationId = entry.id;
+          const top = element("div", "sync-outbox-item-heading"), image = element("span", "sync-outbox-item-icon"), copy = element("div", "sync-outbox-item-copy"); image.append(glyph(view.icon));
+          copy.append(element("h4", "", view.title), element("p", "sync-outbox-subject", view.subject));
+          top.append(image, copy, element("span", `sync-outbox-badge sync-outbox-badge-${view.status.tone}`, view.status.label));
+          const stamp = entry.operation?.capturedAt || entry.createdAt;
+          const metadata = [view.activity, stamp ? formatTimestamp(stamp) : ""].filter(Boolean).join(" · ");
+          item.append(top, element("p", "sync-outbox-hint", view.status.hint));
+          if (metadata) item.append(element("p", "sync-outbox-time", metadata));
+          const actions = element("div", "sync-outbox-item-actions");
+          if (["conflict","rejected","blocked","archived"].includes(entry.state)) {
+            if (entry.operation.action === "photo.create") actions.append(actionButton(entry, "download", "Descargar original", async () => {
+              const storage = await protectedModule(); ensureScope();
+              const original = await storage.readProtectedRecord(scope.database, "photoUploads", entry.attachmentId || entry.id); ensureScope();
+              if (original?.userId !== scope.userId || original?.ownerId !== scope.ownerId || !(original.blob instanceof Blob)) throw Error("No se encontró el original en este dispositivo.");
+              const url = URL.createObjectURL(original.blob), link = document.createElement("a");
+              link.href = url; link.download = (entry.operation.changes.name || "fotografia").replace(/[\\/]/g, "_"); link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+            }));
+            if (!entry.resolvedBy) {
+              if (["conflict","rejected"].includes(entry.state) && ["animal.update","event.update","config.update"].includes(entry.operation.action)) {
+                actions.append(actionButton(entry, "review", "Comparar y resolver", async () => {
+                  const existingPanel = [...reviewHost.querySelectorAll(".sync-outbox-resolution")].find(panel => panel.dataset.operationId === entry.id);
+                  if (existingPanel) { existingPanel.scrollIntoView({block:"nearest"}); return; }
+                  const panelHost = element("div", "sync-outbox-resolution"); panelHost.dataset.operationId = entry.id; reviewHost.append(panelHost);
+                  try {
+                    await reviewOperation(scope, entry, {append:node => panelHost.append(node), close:() => dialog.close()}); ensureScope();
+                    if (closed || !panelHost.isConnected) return;
+                    const title = panelHost.querySelector("h3"); if (title) title.textContent = `Comparar cambios: ${view.title.toLowerCase()}`;
+                    for (const button of panelHost.querySelectorAll("button")) button.className = "button button-primary";
+                    panelHost.scrollIntoView({block:"nearest"});
+                  } catch (error) { panelHost.remove(); throw error; }
+                }));
+              }
+              actions.append(actionButton(entry, "archive", entry.state === "archived" ? "Recuperar para revisión" : "Archivar / conservar servidor", async () => {
+                await setConflictArchive(scope, entry, entry.state !== "archived"); ensureScope();
+                await refresh(); ensureScope();
+                if ($("#detail-dialog").open && state.currentAnimalId) { await openDetail(state.currentAnimalId, true); ensureScope(); }
+                if (!closed) await reloadRows();
+              }));
             }
           }
+          if (actions.childElementCount) item.append(actions);
+          const details = element("details", "sync-outbox-technical"), summary = element("summary", "", "Detalles técnicos");
+          details.dataset.operationId = entry.id; details.open = openDetails.has(entry.id); summary.dataset.syncControl = `${entry.id}:details`;
+          const pre = element("pre", "", JSON.stringify({operation:entry.operation, receipt:entry.receipt, state:entry.state, code:entry.code, resolvedBy:entry.resolvedBy}, null, 2));
+          details.append(summary, pre); item.append(details); fragment.append(item);
+        }
+        if (!rows.length) {
+          const empty = element("div", "sync-outbox-empty"); empty.append(glyph("status-active"), element("h4", "", "No hay cambios guardados"), element("p", "", "Cuando registres un cambio, podrás consultar su estado aquí.")); fragment.append(empty);
+        }
+        list.replaceChildren(fragment); more.hidden = rows.length <= visibleLimit;
+        if (!more.hidden) more.textContent = `Mostrar más cambios (${rows.length - visibleLimit} restantes)`;
+        if (focused) [...list.querySelectorAll("[data-sync-control]")].find(node => node.dataset.syncControl === focused)?.focus({preventScroll:true});
+        updateSyncButton();
+      };
+      const reloadRows = async () => {
+        const version = ++reading; refreshButton.disabled = true;
+        try {
+          ensureScope(); const rows = await scopedOutbox(scope); ensureScope();
+          if (closed || version !== reading) return;
+          currentRows = rows; renderRows(rows); feedback.textContent = "";
+        } catch (error) {
+          if (closed || version !== reading) return;
+          try { ensureScope(); } catch (_) { dialog.close(); return; }
+          feedback.textContent = `No se pudo actualizar la lista: ${error.message}`;
+        } finally { if (!closed && version === reading) refreshButton.disabled = false; }
+      };
+      const onSyncUpdated = () => { if (!closed) void reloadRows(); };
+      refreshButton.onclick = () => { void reloadRows(); };
+      more.onclick = () => { try { ensureScope(); visibleLimit += 100; renderRows(currentRows); } catch (error) { dialog.close(); showToast(error.message); } };
+      sync.onclick = async () => {
+        sync.disabled = true;
+        try { ensureScope(); await syncData(); if (!closed) { ensureScope(); await reloadRows(); } }
+        catch (error) { if (!closed) { dialog.close(); showToast(error.message); } }
+        finally { if (!closed) updateSyncButton(); }
+      };
+      dialog.addEventListener("close", () => {
+        closed = true; reading++;
+        document.removeEventListener("ganaderov:sync-updated", onSyncUpdated);
+        window.removeEventListener("online", updateSyncButton); window.removeEventListener("offline", updateSyncButton);
+        dialog.remove();
+      }, {once:true});
+      document.addEventListener("ganaderov:sync-updated", onSyncUpdated);
+      window.addEventListener("online", updateSyncButton); window.addEventListener("offline", updateSyncButton);
+      document.body.append(dialog); updateSyncButton(); dialog.showModal();
+      await reloadRows(); if (closed) return; ensureScope();
+      // These panels remain mounted while the operation list changes. A refresh
+      // must never discard the fields the user selected for recovery or review.
+      if (manager) {
+        const snapshots = (await readDatabaseStore(scope.database, "syncMeta")).filter(row => row.id.startsWith("conflict:") && row.ownerId === scope.ownerId);
+        ensureScope(); if (closed) return;
+        if (snapshots.length) {
+          const conflicts = element("details", "sync-outbox-legacy-conflicts"); conflicts.append(element("summary", "", `Conflictos de versiones anteriores (${snapshots.length})`));
+          for (const snapshot of snapshots) {
+            const section = element("details"), animal = state.animals.find(row => row.id === snapshot.entityId);
+            const name = animal ? [animal.name, animal.tag && `Arete ${animal.tag}`].filter(Boolean).join(" · ") : ({animal:"Ficha de animal", journey:"Jornada", config:"Configuración del rancho"})[snapshot.kind] || "Registro guardado";
+            section.append(element("summary", "", name));
+            const comparison = compareConflict(snapshot.base, snapshot.local, snapshot.remote);
+            section.append(element("p", "", comparison.conflicts.length ? "Hay valores distintos que necesitan revisión." : "Los cambios pueden compararse. Revisa los campos antes de recuperarlos."));
+            const technical = element("details", "sync-outbox-technical"); technical.append(element("summary", "", "Detalles técnicos"), element("pre", "", JSON.stringify({kind:snapshot.kind, entityId:snapshot.entityId, conflicts:comparison.conflicts, changes:comparison.changes, base:snapshot.base, local:snapshot.local, remote:snapshot.remote, proposed:comparison.merged}, null, 2)));
+            section.append(technical); conflicts.append(section);
+          }
+          legacyHost.append(conflicts);
+        }
+        if (universalWritesEnabled()) {
+          if (navigator.onLine && !state.ranchContextOffline) { await mountLegacyReview(legacyHost, scope); ensureScope(); }
+          else legacyHost.append(element("p", "sync-outbox-offline-note", "Conéctate para revisar y recuperar capturas de versiones anteriores."));
         }
       }
-      if (!rows.length) { const p = document.createElement("p"); p.textContent = "No hay operaciones guardadas."; dialog.append(p); }
-      // Legacy conflicts belong to the ranch; only managers may inspect full snapshots.
-      if (canManageRanch()) {
-        const snapshots = (await readDatabaseStore(scope.database,"syncMeta")).filter(x=>x.id.startsWith("conflict:")&&x.ownerId===scope.ownerId);
-        assertSyncScope(scope);
-        if (!canManageRanch()) throw new Error("Permisos cambiaron.");
-        const title=document.createElement("h3"); title.textContent="Conflictos de fichas y jornadas"; dialog.append(title);
-        for (const s of snapshots) {
-          const section=document.createElement("details");
-          const summary=document.createElement("summary"); summary.textContent=`${s.kind} · ${s.entityId}`; section.append(summary);
-          const comparison=compareConflict(s.base,s.local,s.remote);
-          const hint=document.createElement("p"); hint.textContent=comparison.conflicts.length?"Requiere revisión de valores incompatibles.":"Cambios compatibles en comparación estructural; aún requieren validación de negocio.";
-          section.append(hint);
-          const pre=document.createElement("pre"); pre.style.whiteSpace="pre-wrap"; pre.style.overflowWrap="anywhere";
-          pre.textContent=JSON.stringify({conflicts:comparison.conflicts,changes:comparison.changes,base:s.base,local:s.local,remote:s.remote,proposed:comparison.merged},null,2);
-          section.append(pre); dialog.append(section);
-        }
-      }
-      if(universalWritesEnabled() && canManageRanch()) {
-        if(navigator.onLine && !state.ranchContextOffline)await mountLegacyReview(dialog,scope);
-        else {const hint=document.createElement("p");hint.textContent="Conéctate para revisar y recuperar capturas de versiones anteriores.";dialog.append(hint);}
-      }
-      const close = document.createElement("button"); close.type = "button"; close.textContent = "Cerrar"; close.onclick = () => dialog.close();
-      dialog.append(close); dialog.addEventListener("close", () => dialog.remove(), {once:true});
-      document.body.append(dialog); dialog.showModal();
-    } catch (error) { showToast(error.message); }
+    } catch (error) { if (dialog?.open) dialog.close(); else dialog?.remove(); showToast(error.message); }
   }
 
   async function syncData() {
@@ -2251,35 +2439,44 @@
       setSyncStatus("Sin conexión · cambios guardados aquí");
       return;
     }
-    // A manual retry must revalidate even after a failed cold start. Restoring
-    // cached permissions permits local work, never remote writes.
-    try {
-      await loadRanchContext();
-    } catch (error) {
-      setSyncStatus(`No se pudo comprobar el acceso: ${error.message}`);
-      return;
-    }
-    if (!state.ranchReady) {
-      setSyncStatus("Conéctate para comprobar el acceso al rancho");
-      return;
-    }
-    if (state.ranchContextOffline) {
-      setSyncStatus("Sin conexión · cambios guardados aquí");
-      return;
-    }
-    if (!state.ranchOwnerId) {
-      setSyncStatus(state.ranchContext?.status === "pending"
-        ? "Solicitud de acceso pendiente"
-        : "Crea un rancho o solicita acceso para sincronizar");
-      return;
-    }
+    // Reserve the entire cycle, including its permission check. A second
+    // trigger must not set ranchReady=false underneath a running transfer.
     if (state.syncing) {
       state.syncRequested = true;
-      return;
+      return syncCompletion;
     }
     state.syncing = true;
-    setSyncStatus("Sincronizando…");
+    let finishCycle;
+    const completion = new Promise(resolve => { finishCycle = resolve; });
+    syncCompletion = completion;
+    setSyncStatus("Comprobando acceso al rancho…");
+    const generation = sessionGeneration, userId = currentUser.id;
+    const sameSession = () => generation === sessionGeneration && currentUser?.id === userId;
     try {
+      // A manual retry must revalidate even after a failed cold start. Restoring
+      // cached permissions permits local work, never remote writes.
+      try {
+        await loadRanchContext();
+      } catch (error) {
+        if (sameSession()) setSyncStatus(`No se pudo comprobar el acceso: ${error.message}`);
+        return;
+      }
+      if (!sameSession()) return;
+      if (!state.ranchReady) {
+        setSyncStatus("Conéctate para comprobar el acceso al rancho");
+        return;
+      }
+      if (state.ranchContextOffline) {
+        setSyncStatus("Sin conexión · cambios guardados aquí");
+        return;
+      }
+      if (!state.ranchOwnerId) {
+        setSyncStatus(state.ranchContext?.status === "pending"
+          ? "Solicitud de acceso pendiente"
+          : "Crea un rancho o solicita acceso para sincronizar");
+        return;
+      }
+      setSyncStatus("Sincronizando…");
       const scope = { userId: currentUser.id, ownerId: state.ranchOwnerId, database: db };
       assertSyncScope(scope);
       // First send legacy changes and new animals; then process independent events.
@@ -2350,25 +2547,38 @@
         pendingChanges++;
       }
       await refresh();
+      if (!sameSession()) return;
+      assertSyncScope(scope);
       if ($("#detail-dialog").open && state.currentAnimalId) {
         if (state.animals.some(animal => animal.id === state.currentAnimalId)) openDetail(state.currentAnimalId, true);
         else $("#detail-dialog").close();
       }
       if ($("#journey-dialog").open && state.currentJourneyId) renderJourneyDetail();
+      assertSyncScope(scope);
+      if (!sameSession()) return;
       setSyncStatus(conflicts || pendingChanges || pendingOperations
         ? `${conflicts} conflicto(s) · ${pendingChanges} cambio(s) pendiente(s) · ${pendingOperations} operación(es) en cola · datos locales conservados`
         : fieldConfigStatus || "Sincronizado");
       if (conflicts) showToast("Hay cambios simultáneos. No se reemplazó ninguna versión en conflicto; conserva los datos locales y solicita revisión.");
     } catch (error) {
-      setSyncStatus("Error de sincronización");
-      showToast(`No se pudo sincronizar: ${error.message}`);
-    } finally {
-      state.syncing = false;
-      $("#sync-button").disabled = !cloud || !currentUser || !navigator.onLine;
-      if (state.syncRequested) {
-        state.syncRequested = false;
-        setTimeout(() => syncData(), 0);
+      // A response from a previous account cannot overwrite the current
+      // account's status or display a stale failure after a deliberate sign-out.
+      if (sameSession()) {
+        setSyncStatus("Error de sincronización");
+        showToast(`No se pudo sincronizar: ${error.message}`);
       }
+    } finally {
+      if (syncCompletion === completion) {
+        syncCompletion = null;
+        state.syncing = false;
+        $("#sync-button").disabled = !cloud || !currentUser || !navigator.onLine;
+        document.dispatchEvent(new CustomEvent("ganaderov:sync-updated"));
+        if (state.syncRequested) {
+          state.syncRequested = false;
+          setTimeout(() => syncData(), 0);
+        }
+      }
+      finishCycle();
     }
   }
 
@@ -6305,12 +6515,9 @@
         }catch(_){reply("deferred");}
       })();
     });
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible" && eventOutboxEnabled() && currentUser && state.ranchReady && navigator.onLine) void syncData();
-    });
     const outboxButton = document.createElement("button");
     outboxButton.type = "button"; outboxButton.className = "button button-outline button-small";
-    outboxButton.textContent = "Operaciones pendientes"; outboxButton.addEventListener("click", showEventOutbox);
+    outboxButton.textContent = "Estado de cambios"; outboxButton.addEventListener("click", showEventOutbox);
     $("#sync-button").insertAdjacentElement("afterend", outboxButton);
     setInterval(() => { if (eventOutboxEnabled() && currentUser && state.ranchReady && state.ranchOwnerId && navigator.onLine && !state.syncing) syncData(); }, 30000);
     $("#account-button").addEventListener("click", () => {
@@ -6901,14 +7108,19 @@
           if (event === "INITIAL_SESSION") return;
           const oldUser=currentUser?.id;
           currentUser = session?.user || null;
-          if(oldUser!==currentUser?.id){
-            sessionGeneration++;
+          const changedUser = oldUser !== currentUser?.id;
+          if (changedUser) sessionGeneration++;
+          const userId = currentUser?.id, generation = sessionGeneration;
+          const isCurrentSession = () => currentUser?.id === userId && sessionGeneration === generation;
+          if (changedUser) {
             state.ranchReady=false; state.ranchOwnerId=null; state.ranchRole=null; state.ranchContext=null;
             clearPrivateView();
-            const background = await import("./sync/background-universal.mjs");
-            await background.disableBackgroundDelivery();
-            void background.revokeBackgroundCapabilities();
             if(oldUser)try{localStorage.removeItem(`ganadero-ranch-context:${oldUser}`);}catch(_){}
+            const background = await import("./sync/background-universal.mjs");
+            if (!isCurrentSession()) return;
+            await background.disableBackgroundDelivery();
+            if (!isCurrentSession()) return;
+            void background.revokeBackgroundCapabilities();
           }
           $("#account-button").hidden = Boolean(currentUser);
           $("#account-manage-button").hidden = !currentUser;
@@ -6929,33 +7141,40 @@
             renderDashboard();
             renderJourneys();
             renderCalculatorAnimalOptions();
-            setTimeout(() => switchGuestDatabase().catch(error =>
-              showToast(`No se pudo separar el almacenamiento de la sesión: ${error.message}`)
-            ), 0);
+            setTimeout(() => {
+              if (!isCurrentSession() || currentUser) return;
+              switchGuestDatabase().catch(error => {
+                if (isCurrentSession()) showToast(`No se pudo separar el almacenamiento de la sesión: ${error.message}`);
+              });
+            }, 0);
           }
           setSyncStatus(currentUser ? "Comprobando acceso al rancho…" : "Inicia sesión para sincronizar");
           if (event === "PASSWORD_RECOVERY") {
             showAccountView("reset-password");
             if (!$("#account-dialog").open) $("#account-dialog").showModal();
           }
-          if (currentUser) setTimeout(async () => {
-            if (await refreshRanchContext()) {
-              if (["unassigned", "pending"].includes(state.ranchContext?.status)) {
-                renderRanchDialog();
-                if (!$("#ranch-dialog").open) $("#ranch-dialog").showModal();
-              }
-              await syncData();
+          if (userId) setTimeout(async () => {
+            if (currentUser?.id !== userId || sessionGeneration !== generation) return;
+            // syncData owns revalidation. Auth refreshes of the same account
+            // join its cycle instead of invalidating an in-flight transfer.
+            await syncData();
+            if (currentUser?.id !== userId || sessionGeneration !== generation) return;
+            if (["unassigned", "pending"].includes(state.ranchContext?.status)) {
+              renderRanchDialog();
+              if (!$("#ranch-dialog").open) $("#ranch-dialog").showModal();
             }
           }, 0);
         });
+        const initialGeneration = sessionGeneration;
         const { data, error } = await cloud.auth.getSession();
         if (error) throw error;
-        currentUser = data.session?.user || null;
+        if (sessionGeneration === initialGeneration) currentUser = data.session?.user || null;
         $("#account-button").hidden = Boolean(currentUser);
         $("#account-manage-button").hidden = !currentUser;
         $("#sign-out-button").hidden = !currentUser;
         if (currentUser) {
-          await refreshRanchContext();
+          if (navigator.onLine) await syncData();
+          else await refreshRanchContext();
           if (["unassigned", "pending"].includes(state.ranchContext?.status)) {
             renderRanchDialog();
             if (!$("#ranch-dialog").open) $("#ranch-dialog").showModal();
@@ -6966,8 +7185,8 @@
           state.ranchRole = null;
           $("#ranch-button").hidden = true;
         }
-        setSyncStatus(currentUser ? state.ranchContextOffline ? "Sin conexión · cambios guardados aquí" : "Sesión lista" : "Inicia sesión para sincronizar");
-        if (currentUser && navigator.onLine) await syncData();
+        if (!currentUser) setSyncStatus("Inicia sesión para sincronizar");
+        else if (!navigator.onLine || state.ranchContextOffline) setSyncStatus("Sin conexión · cambios guardados aquí");
       } else {
         setSyncStatus("Solo en este dispositivo · configura Supabase");
         $("#sync-button").disabled = true;

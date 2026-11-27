@@ -40,10 +40,14 @@ jobs:
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/d4-browser/node_modules/playwright" node tests/browser/universal-completion.cjs
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/d4-browser/node_modules/playwright" node tests/browser/background-universal.cjs
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/d4-browser/node_modules/playwright" node tests/browser/legacy-recovery.cjs
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/d4-browser/node_modules/playwright" node tests/browser/sync-lifecycle.cjs
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/d4-browser/node_modules/playwright" node tests/browser/sync-dialog.cjs
         env:
           UNIVERSAL_BROWSER_ARTIFACTS: ${{ runner.temp }}/universal-browser-results
           BACKGROUND_BROWSER_ARTIFACTS: ${{ runner.temp }}/background-browser-results
           LEGACY_BROWSER_ARTIFACTS: ${{ runner.temp }}/legacy-browser-results
+          SYNC_LIFECYCLE_ARTIFACTS: ${{ runner.temp }}/sync-lifecycle-results
+          SYNC_DIALOG_ARTIFACTS: ${{ runner.temp }}/sync-dialog-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -53,6 +57,8 @@ jobs:
             ${{ runner.temp }}/universal-browser-results
             ${{ runner.temp }}/background-browser-results
             ${{ runner.temp }}/legacy-browser-results
+            ${{ runner.temp }}/sync-lifecycle-results
+            ${{ runner.temp }}/sync-dialog-results
           if-no-files-found: ignore
 
   protocol:
