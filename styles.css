@@ -626,8 +626,6 @@ td { height: 54px; }
 .animal-advanced-fields > summary { color: #416c48; cursor: pointer; font-size: 11px; font-weight: 700; }
 .animal-advanced-fields[open] > .form-grid { margin-top: 13px; }
 .animal-age-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
-.table-extra-values { display: grid; gap: 3px; color: #596459; font-size: 9px; line-height: 1.35; }
-.table-extra-values strong { color: #7b8679; font-weight: 600; }
 .settings-table-wrap { overflow-x: auto; }
 .settings-table { min-width: 800px; }
 .settings-table th { height: 39px; background: #f8f9f6; white-space: nowrap; }
@@ -656,8 +654,7 @@ td { height: 54px; }
   .stats-grid { gap: 8px; }
   .table-wrap table { min-width: 560px; }
   .table-wrap th, .table-wrap td { padding-right: 9px; padding-left: 9px; }
-  .table-wrap th:nth-child(3), .table-wrap td:nth-child(3),
-  .table-wrap th:nth-child(5), .table-wrap td:nth-child(5) { display: none; }
+  .table-wrap :is([data-config-field="color"], .inventory-last-weight) { display: none; }
   .main-content { padding-right: 21px; padding-left: 21px; }
   .detail-modal[open] { width: min(410px, 100%); }
 }

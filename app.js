@@ -25,6 +25,7 @@
     { value: "Baja", label: "Baja (legado)", enabled: true, active: false },
     { value: "Otros", label: "Otro (legado)", enabled: true, active: false }
   ];
+  const INVENTORY_TABLE_FIELDS = new Set(["tag", "name", "sex", "color", "status"]);
   const ANIMAL_FIELD_CATALOG = [
     { id: "tag", label: "Número de arete", description: "Identificador impreso del animal.", type: "text", module: "identification", form: true, detail: true, table: true, requiredAllowed: true, core: true },
     { id: "name", label: "Nombre", description: "Nombre o apodo del animal.", type: "text", module: "identification", form: true, detail: true, table: true, requiredAllowed: true, core: true },
@@ -1072,7 +1073,7 @@
           <option value="full" ${setting.detailVisibility === "full" ? "selected" : ""}>Solo ficha completa</option>
           <option value="summary" ${setting.detailVisibility === "summary" ? "selected" : ""}>Resumida y completa</option>
         </select>` : '<span class="settings-not-applicable">—</span>'}</td>
-        <td data-mobile-label="Tabla">${field.type !== "automatic" ? checkbox("table", `Mostrar ${field.label} en la tabla`) : '<span class="settings-not-applicable">—</span>'}</td>
+        <td data-mobile-label="Tabla">${INVENTORY_TABLE_FIELDS.has(field.id) ? checkbox("table", `Mostrar ${field.label} en la tabla`) : '<span class="settings-not-applicable">—</span>'}</td>
         <td data-mobile-label="Obligatorio">${field.form && field.type !== "automatic" ? checkbox("required", `Hacer ${field.label} obligatorio`) : '<span class="settings-not-applicable">—</span>'}</td>
       </tr>`;
     }).join("");
@@ -3578,14 +3579,6 @@
       const second = sortValue(b, state.sort);
       return String(first).localeCompare(String(second), "es-MX", { numeric: true }) * state.direction;
     });
-    const baseTableFields = new Set(["tag", "name", "sex", "color", "status", "estimatedAge"]);
-    const extraTableFields = ANIMAL_FIELD_CATALOG.filter(field =>
-      field.type !== "automatic" && !baseTableFields.has(field.id) &&
-      animalFieldActive(field.id) && animalFieldConfig(field.id).table
-    );
-    $("#animal-extra-headers").textContent = extraTableFields.length ? "Otros datos" : "";
-    $("#animal-extra-headers").hidden = extraTableFields.length === 0;
-
     $("#inventory-heading-title").textContent = state.archiveView ? "Archivo de animales" : "Inventario activo";
     $("#inventory-count").textContent = state.archiveView
       ? `${filtered.length} de ${archivedAnimals.length} ${archivedAnimals.length === 1 ? "animal archivado" : "animales archivados"}`
@@ -3605,10 +3598,6 @@
       const avatar = primaryPhoto
         ? `<img src="${photoUrl(primaryPhoto)}" alt="" loading="lazy" decoding="async" style="object-position:${photoCrop(primaryPhoto).x}% ${photoCrop(primaryPhoto).y}%;transform:scale(${photoCrop(primaryPhoto).zoom});transform-origin:${photoCrop(primaryPhoto).x}% ${photoCrop(primaryPhoto).y}%;">`
         : escapeHtml(initials(animal));
-      const extraValues = extraTableFields.map(field => {
-        const value = animalFieldDisplayValue(field, animal);
-        return value ? `<span><strong>${escapeHtml(animalFieldConfig(field.id).label)}:</strong> ${escapeHtml(value)}</span>` : "";
-      }).filter(Boolean).join(" · ");
       return `<tr>
         <td><div class="animal-cell"><div class="animal-avatar">${avatar}</div><div>
           <button class="animal-link" data-config-field="name" data-config-surface="table" data-open-animal="${escapeHtml(animal.id)}" type="button">${escapeHtml(animal.name || "Sin nombre")}</button>
@@ -3617,8 +3606,7 @@
         </div></div></td>
         <td data-config-field="sex" data-config-surface="table">${display(animal.sex)}</td>
         <td data-config-field="color" data-config-surface="table">${display(animal.color)}</td>
-        <td ${extraTableFields.length ? "" : "hidden"}><div class="table-extra-values">${extraValues || "—"}</div></td>
-        <td>${weight ? `${escapeHtml(weight.weight)} kg` : "No registrado"}</td>
+        <td class="inventory-last-weight">${weight ? `${escapeHtml(weight.weight)} kg` : "No registrado"}</td>
         <td>${weight ? formatDate(weight.date) : "No registrado"}</td>
         <td data-config-field="status" data-config-surface="table">${statusMarkup(animal.status)}</td>
         <td><button class="row-menu" data-open-animal="${escapeHtml(animal.id)}" type="button" aria-label="Abrir ficha">${icon("chevron")}</button></td>
