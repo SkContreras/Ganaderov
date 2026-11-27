@@ -83,6 +83,7 @@ jobs:
           python tests/concurrency_staging.py
           python tests/photo_concurrency_staging.py
       - name: Real Auth, PostgREST and Storage integration
+        id: real_http
         env:
           GANADEROV_DISPOSABLE_DB: 'YES'
           GANADEROV_SUPABASE_STATUS: ${{ runner.temp }}/supabase-status.private.json
@@ -99,6 +100,7 @@ jobs:
             --output "$RUNNER_TEMP/supabase-2.49.8.js"
           printf '%s  %s\n' 'cf78f9ba72300e729e517e0f6b974a3bd282b600ba57fd59de448d50b1aab46f' "$RUNNER_TEMP/supabase-2.49.8.js" | sha256sum --check
       - name: Web UI with real Auth, RPC and Storage while offline and reconnecting
+        id: web_ui
         env:
           GANADEROV_DISPOSABLE_HTTP: 'YES'
           GANADEROV_FIXTURES: ${{ runner.temp }}/d234/fixtures.private.json
@@ -107,6 +109,33 @@ jobs:
           PLAYWRIGHT_MODULE: ${{ runner.temp }}/d234-browser/node_modules/playwright
           SUPABASE_JS_UMD: ${{ runner.temp }}/supabase-2.49.8.js
         run: node tests/integration/browser/run.cjs
+      - name: Check out the exact Mobile consumer
+        if: always() && steps.real_http.outcome == 'success'
+        uses: actions/checkout@v4
+        with:
+          repository: SkContreras/Ganaderov-Mobile
+          ref: b566d7c11d5620f4411a2e7ea1da428706e8ccbd
+          path: integration-mobile
+          persist-credentials: false
+      - name: Install Flutter for the real Mobile repository integration
+        if: always() && steps.real_http.outcome == 'success'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.1'
+          channel: stable
+      - name: Flutter repository with the same Auth, RPC and Storage fixtures
+        if: always() && steps.real_http.outcome == 'success'
+        working-directory: integration-mobile
+        env:
+          GANADEROV_DISPOSABLE_HTTP: 'YES'
+          GANADEROV_FIXTURES: ${{ runner.temp }}/d234/fixtures.private.json
+          GANADEROV_WEB_BROWSER_REPORT: ${{ steps.web_ui.outcome == 'success' && format('{0}/d234/browser-artifacts/report.json', runner.temp) || '' }}
+          GANADEROV_MOBILE_ARTIFACTS: ${{ runner.temp }}/d234/mobile-artifacts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev
+          flutter pub get --enforce-lockfile
+          flutter test --no-pub "$GITHUB_WORKSPACE/tests/integration/mobile/d4_repository_real_test.dart" --reporter expanded
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -114,6 +143,7 @@ jobs:
           path: |
             ${{ runner.temp }}/d234/http-report.json
             ${{ runner.temp }}/d234/browser-artifacts
+            ${{ runner.temp }}/d234/mobile-artifacts
             ${{ runner.temp }}/backend-audit.json
           if-no-files-found: ignore
       - name: Remove temporary credentials and discard test services

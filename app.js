@@ -129,7 +129,7 @@
     return `<span class="journey-status ${journey.status}">${icon(iconName)}${escapeHtml(journeyStatus(journey))}</span>`;
   }
   const hasRanchAccess = () => !currentUser || state.legacyAccount || ["owner", "admin", "worker"].includes(state.ranchRole);
-  const state = { animals: [], events: [], photos: [], photoOperations: [], journeys: [], forecasts: [], photoUrls: new Map(), fieldConfig: null, fieldConfigRecord: null, fieldSettingsDirty: false, mainView: "inventory", sort: "tag", direction: 1, archiveView: false, currentAnimalId: null, detailView: "summary", detailShowEmpty: false, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyWeightWarning: null, journeyUpdating: new Set(), animalFormSnapshot: "", animalFormStep: 0, animalFormMode: "create", animalFormWeightWarning: null, recordFormWeightWarning: null, quickCaptureSeed: null, pendingUndo: null, undoTimer: null, toastAction: null, scannerStream: null, scannerFrame: null, calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, accountIdentities: [], toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
+  const state = { animals: [], events: [], photos: [], photoOperations: [], journeys: [], forecasts: [], photoUrls: new Map(), fieldConfig: null, fieldConfigRecord: null, fieldSettingsDirty: false, mainView: "inventory", sort: "tag", direction: 1, archiveView: false, currentAnimalId: null, detailView: "summary", detailShowEmpty: false, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyWeightWarning: null, journeyUpdating: new Set(), animalFormSnapshot: "", animalFormStep: 0, animalFormMode: "create", animalFormWeightWarning: null, recordFormWeightWarning: null, quickCaptureSeed: null, pendingUndo: null, undoTimer: null, toastAction: null, scannerStream: null, scannerFrame: null, calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, ranchContextOffline: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, accountIdentities: [], toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
   let cloud;
   let currentUser;
@@ -253,6 +253,7 @@
   let sessionGeneration = 0;
   let refreshGeneration = 0;
   function clearPrivateView() {
+    state.ranchContextOffline = false;
     for (const url of state.photoUrls.values()) URL.revokeObjectURL(url);
     state.photoUrls.clear();
     state.animals=[]; state.events=[]; state.photos=[]; state.journeys=[]; state.forecasts=[];
@@ -266,6 +267,7 @@
   }
   function setRanchContext(context, verifiedOnline = true) {
     state.ranchContext = context;
+    state.ranchContextOffline = Boolean(currentUser && context?.status === "active" && !verifiedOnline);
     state.ranchOwnerId = context?.status === "active" ? context.owner_id : null;
     state.ranchRole = context?.status === "active" ? context.role : null;
     state.ranchReady = true;
@@ -284,6 +286,26 @@
     }
   }
 
+  async function restoreOfflineRanchContext(userId, verify) {
+    verify();
+    state.legacyAccount = false;
+    let envelope;
+    try { envelope = JSON.parse(localStorage.getItem(`ganadero-ranch-context:${userId}`)); } catch (_) { envelope = null; }
+    const context = envelope?.context, age = Date.now() - envelope?.verifiedAt;
+    if (envelope?.userId === userId && Number.isFinite(age) && age >= 0 && age <= OFFLINE_CONTEXT_TTL &&
+        context?.status === "active" && context.owner_id && ["owner", "admin", "worker"].includes(context.role)) {
+      state.legacyAccount = false;
+      verify(); setRanchContext(context, false);
+      await switchRanchDatabase(context.owner_id);
+      verify();
+      return;
+    }
+    state.ranchReady = false;
+    state.ranchContextOffline = false;
+    state.ranchOwnerId = null; state.ranchRole = null; state.ranchContext = null;
+    clearPrivateView();
+  }
+
   async function loadRanchContext() {
     state.ranchReady = false;
     const userId=currentUser?.id, generation=sessionGeneration;
@@ -297,30 +319,25 @@
     }
 
     if (!navigator.onLine) {
-      const cached = localStorage.getItem(`ganadero-ranch-context:${currentUser.id}`);
-      if (cached) {
-        let envelope;
-        try { envelope=JSON.parse(cached); } catch (_) { envelope=null; }
-        const context=envelope?.context, age=Date.now()-envelope?.verifiedAt;
-        if (envelope?.userId===userId && Number.isFinite(age) && age>=0 && age<=OFFLINE_CONTEXT_TTL && context?.status==="active" && context.owner_id && ["owner","admin","worker"].includes(context.role)) {
-          state.legacyAccount = false;
-          verify(); setRanchContext(context,false);
-          await switchRanchDatabase(context.owner_id);
-          verify();
-          return;
-        }
-      }
-      state.ranchReady = false;
-      state.ranchOwnerId=null; state.ranchRole=null; state.ranchContext=null;
-      clearPrivateView();
+      await restoreOfflineRanchContext(userId, verify);
       return;
     }
 
-    const { data, error } = await cloud.rpc("get_my_ranch_context");
+    const { data, error, status } = await cloud.rpc("get_my_ranch_context");
     verify();
     if (error) {
-      if (!navigator.onLine) return loadRanchContext();
-      if (error.code === "PGRST202" || /get_my_ranch_context|schema cache|could not find the function/i.test(error.message || "")) {
+      state.legacyAccount = false;
+      // onLine is only a network hint. PostgREST status 0 means no HTTP
+      // response was received; HTTP/auth/schema errors must not use this cache.
+      if (status === 0) {
+        await restoreOfflineRanchContext(userId, verify);
+        return;
+      }
+      state.ranchContextOffline = false;
+      if (status === 401 || status === 403) {
+        try { localStorage.removeItem(`ganadero-ranch-context:${userId}`); } catch (_) {}
+      }
+      if (status === 404 && error.code === "PGRST202") {
         state.legacyAccount = true;
         setRanchContext({
           status: "legacy",
@@ -331,6 +348,8 @@
         return;
       }
       state.ranchReady = false;
+      state.ranchOwnerId = null; state.ranchRole = null; state.ranchContext = null;
+      clearPrivateView();
       setSyncStatus(`No se pudieron comprobar los permisos: ${error.message}`);
       throw error;
     }
@@ -341,15 +360,8 @@
     if (context.status === "active" && context.owner_id) {
       await switchRanchDatabase(context.owner_id);
     } else {
+      clearPrivateView();
       if (db.name !== DB_NAME) await switchGuestDatabase();
-      state.animals = [];
-      state.events = [];
-      state.photos = [];
-      state.journeys = [];
-      state.forecasts = [];
-      renderDashboard();
-      renderJourneys();
-      renderCalculatorAnimalOptions();
     }
   }
 
@@ -574,7 +586,7 @@
 
   function scheduleSync() {
     void requestBackgroundWake();
-    setSyncStatus(navigator.onLine ? "Cambios guardados · pendientes de sincronizar" : "Sin conexión · cambios guardados aquí");
+    setSyncStatus(navigator.onLine && !state.ranchContextOffline ? "Cambios guardados · pendientes de sincronizar" : "Sin conexión · cambios guardados aquí");
     if (state.syncing) {
       state.syncRequested = true;
       return;
@@ -1315,6 +1327,11 @@
     }
   }
 
+  function assertRemoteSyncScope(scope) {
+    assertSyncScope(scope);
+    if (state.ranchContextOffline) throw new Error("Sin conexión: los cambios se conservan en este dispositivo.");
+  }
+
   // Pure three-way comparison. Missing values are distinct from null.
   function compareConflict(base, local, remote) {
     const same = (x,y) => JSON.stringify(stableValue(x)) === JSON.stringify(stableValue(y));
@@ -1390,7 +1407,7 @@
       }
       if (l && !r && meta) { pending++; continue; }
       if (l && (!r || lc)) {
-        assertSyncScope(scope);
+        assertRemoteSyncScope(scope);
         if(strictRpcWrites()){await rememberSyncConflict(scope,"journey",journeyId,meta?.fingerprint?JSON.parse(meta.fingerprint):null,l,r?.payload??null,r?.updated_at??null);pending++;continue;}
         const query = r
           ? cloud.from("journey_sync_records").update({ payload: l }).eq("owner_id", scope.ownerId).eq("journey_id", journeyId).eq("updated_at", r.updated_at)
@@ -1485,7 +1502,7 @@
   }
 
   async function writeRemoteRecord(animalId, bundle, remoteRecord, scope) {
-    assertSyncScope(scope);
+    assertRemoteSyncScope(scope);
     const deletedAt = bundle.deletedAt || null;
     if (isRanchWorker() && (deletedAt || !remoteRecord)) throw new Error("Los trabajadores no pueden crear ni eliminar fichas.");
     let payload = null;
@@ -1493,7 +1510,7 @@
       const existingPhotos = new Map((remoteRecord?.payload?.photos || []).map(p => [p.id, p]));
       const photos = [];
       for (const photo of bundle.photos) {
-        assertSyncScope(scope);
+        assertRemoteSyncScope(scope);
         const storagePath = `${scope.ownerId}/${animalId}/${photo.id}`;
         if (!existingPhotos.has(photo.id)) {
           if (isRanchWorker()) throw new Error("No tienes permiso para subir fotografías.");
@@ -1514,7 +1531,7 @@
       }
       payload = { ...(remoteRecord?.payload || {}), animal: bundle.animal, events: bundle.events, forecasts: bundle.forecasts || [], photos };
     }
-    assertSyncScope(scope);
+    assertRemoteSyncScope(scope);
     const values = isRanchWorker() ? { payload } : { payload, deleted_at: deletedAt };
     const query = remoteRecord
       ? cloud.from("animal_sync_records").update(values).eq("owner_id", scope.ownerId).eq("animal_id", animalId).eq("modified_at", remoteRecord.modified_at)
@@ -1528,6 +1545,7 @@
   }
 
   async function syncAnimalFieldConfig(downloaded) {
+    const scope = outboxScope();
     const local = await getOne("ranchSettings", "animal-fields");
     const { data: remote, error: fetchError } = downloaded ?? await cloud.from("ranch_animal_configs")
       .select("owner_id, config, revision, updated_at")
@@ -1591,6 +1609,7 @@
       if (remoteRevision !== local.baseRevision) {
         return "Configuración en conflicto · cambios locales conservados";
       }
+      assertRemoteSyncScope(scope);
       const { data, error } = await cloud.rpc("save_ranch_animal_config", {
         p_owner_id: state.ranchOwnerId,
         p_expected_revision: remoteRevision,
@@ -1701,7 +1720,7 @@
     },()=>assertSyncScope(scope));
   }
   async function flushEventOutbox(scope) {
-    if (!eventOutboxEnabled()) return;
+    if (!eventOutboxEnabled() || state.ranchContextOffline) return;
     if (navigator.locks?.request) {
       return navigator.locks.request(`ganaderov-outbox:${scope.ownerId}:${scope.userId}`, {ifAvailable:true}, async lock => {
         if (lock) { assertSyncScope(scope); await flushEventOutboxUnlocked(scope); }
@@ -1714,6 +1733,7 @@
     const rows = (await scopedOutbox(scope)).sort((a,b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
     for (const entry of rows) {
       assertSyncScope(scope);
+      if (state.ranchContextOffline) return;
       if (entry.state !== "pending" || entry.nextAt > Date.now()) continue;
       const attempts = entry.attempts + 1;
       let result;
@@ -1867,24 +1887,30 @@
       setSyncStatus("Inicia sesión para sincronizar");
       return;
     }
+    if (!navigator.onLine) {
+      setSyncStatus("Sin conexión · cambios guardados aquí");
+      return;
+    }
+    // A manual retry must revalidate even after a failed cold start. Restoring
+    // cached permissions permits local work, never remote writes.
+    try {
+      await loadRanchContext();
+    } catch (error) {
+      setSyncStatus(`No se pudo comprobar el acceso: ${error.message}`);
+      return;
+    }
     if (!state.ranchReady) {
-      setSyncStatus("Comprobando acceso al rancho…");
+      setSyncStatus("Conéctate para comprobar el acceso al rancho");
+      return;
+    }
+    if (state.ranchContextOffline) {
+      setSyncStatus("Sin conexión · cambios guardados aquí");
       return;
     }
     if (!state.ranchOwnerId) {
       setSyncStatus(state.ranchContext?.status === "pending"
         ? "Solicitud de acceso pendiente"
         : "Crea un rancho o solicita acceso para sincronizar");
-      return;
-    }
-    if (!navigator.onLine) {
-      setSyncStatus("Sin conexión · cambios guardados aquí");
-      return;
-    }
-    try {
-      await loadRanchContext();
-    } catch (error) {
-      setSyncStatus(`No se pudo comprobar el acceso: ${error.message}`);
       return;
     }
     if (state.syncing) {
@@ -3105,7 +3131,7 @@
     const scope=outboxScope(),fingerprint=JSON.stringify(stableValue(journey));
     const meta=await getOne("syncMeta","journey-revision:"+journey.id);
     let revision;
-    if(navigator.onLine){
+    if(navigator.onLine && !state.ranchContextOffline){
       revision=await forecastRevision("journey",journey.id,journey);
       await put("syncMeta",{id:"journey-revision:"+journey.id,revision,fingerprint});
     }else{
@@ -3371,7 +3397,7 @@
   function journeyRpcEnabled(){return window.GANADERO_CONFIG?.syncJourneyRpcV1===true;}
   async function remoteJourneyTransition(journey,finish,allowIncomplete=false){
     if(journeyTransitionBusy)return;
-    if(!canManageRanch()||!navigator.onLine){showToast("Se requiere conexión y un administrador para esta operación.");return;}
+    if(!canManageRanch()||!navigator.onLine||state.ranchContextOffline){showToast("Se requiere conexión y un administrador para esta operación.");return;}
     journeyTransitionBusy=true;
     try{
       const scope=outboxScope();
@@ -3383,6 +3409,7 @@
       if(!local||JSON.stringify(stableValue(local))!==fingerprint||meta?.fingerprint!==fingerprint||!meta.remoteVersion)throw Error("Sincroniza y revisa los cambios de la jornada antes de continuar.");
       const params={p_owner_id:scope.ownerId,p_journey_id:journey.id,p_expected_version:meta.remoteVersion};
       if(finish)params.p_allow_incomplete=allowIncomplete;
+      assertRemoteSyncScope(scope);
       const {error}=await cloud.rpc(finish?"finish_ranch_journey_v1":"resume_ranch_journey_v1",params);
       assertSyncScope(scope);
       if(error)throw error;
@@ -3506,7 +3533,7 @@
     }
     const counts = journeyCounts(journey);
     if (counts.pending && !confirm(`Todavía hay ${counts.pending} ${counts.pending === 1 ? "animal pendiente" : "animales pendientes"}.\n\n¿Está seguro de que desea finalizar la jornada? Solo se registrarán los animales atendidos.`)) return;
-    if(journeyUniversalEnabled()){try{if(!navigator.onLine)throw Error("Finaliza con conexión tras confirmar las asistencias.");await queueJourneyChange(journey,"journey.finish",{allowIncomplete:counts.pending>0});}catch(e){showToast(e.message);}return;}
+    if(journeyUniversalEnabled()){try{if(!navigator.onLine||state.ranchContextOffline)throw Error("Finaliza con conexión tras confirmar las asistencias.");await queueJourneyChange(journey,"journey.finish",{allowIncomplete:counts.pending>0});}catch(e){showToast(e.message);}return;}
     if(journeyRpcEnabled()){await remoteJourneyTransition(journey,true,counts.pending>0);return;}
     const completedAt = new Date().toISOString();
     const finishedJourney = {
@@ -5225,7 +5252,7 @@
     assertSyncScope(scope);
     const cached = module.cachedPhotoRevision(cache, photo, scope);
     if (cached !== null) return cached;
-    if (!navigator.onLine) throw Error("Sincroniza esta fotografía una vez para poder editarla sin conexión.");
+    if (!navigator.onLine || state.ranchContextOffline) throw Error("Sincroniza esta fotografía una vez para poder editarla sin conexión.");
     const {data, error} = await cloud.rpc("sync_read_entity", {p_owner:scope.ownerId, p_kind:"photo", p_id:photo.id});
     assertSyncScope(scope);
     if (error) throw error;
@@ -6395,7 +6422,7 @@
           state.ranchRole = null;
           $("#ranch-button").hidden = true;
         }
-        setSyncStatus(currentUser ? "Sesión lista" : "Inicia sesión para sincronizar");
+        setSyncStatus(currentUser ? state.ranchContextOffline ? "Sin conexión · cambios guardados aquí" : "Sesión lista" : "Inicia sesión para sincronizar");
         if (currentUser && navigator.onLine) await syncData();
       } else {
         setSyncStatus("Solo en este dispositivo · configura Supabase");

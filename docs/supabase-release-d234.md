@@ -114,6 +114,14 @@ siguen los controles de la interfaz y las RPC reales. Su informe y capturas se
 guardan junto al informe HTTP. Esta prueba de navegador no sustituye una prueba
 en un teléfono Android físico.
 
+El job también fija un commit de Ganaderov-Mobile y ejecuta
+`tests/integration/mobile/d4_repository_real_test.dart` desde ese checkout.
+Utiliza el repositorio Flutter, SQLite en un archivo y AES-GCM reales con los
+mismos usuarios de Supabase. Interrumpe el transporte para probar la cola,
+reabre la base y confirma los cambios al reconectar. Cuando la web pasa, exige
+además que Flutter lea su encuadre y su principal. No ejercita la interfaz
+Android, Android Keystore ni un reinicio físico del teléfono.
+
 ## Configuración de la primera prueba conjunta
 
 Asignar una URL y una clave publicable del mismo Supabase desechable. Para una

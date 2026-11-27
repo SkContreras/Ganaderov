@@ -202,10 +202,7 @@ async function login(p) {
   await p.locator('#account-password').fill(fixture.accounts.ownerA.password);
   await p.locator('#sign-in-form button[type="submit"]').click();
   await until(p, `state.ready && state.userId === ${JSON.stringify(fixture.accounts.ownerA.id)} && state.animal && !state.syncing && state.canonicalPhotos.length >= 2 && state.canonicalPhotos.every(photo => state.revisions.some(rev => rev.id === 'photo-revision:'+photo.id))`, 45000);
-  await p.evaluate(async () => {
-    await navigator.serviceWorker.ready;
-    if (!navigator.serviceWorker.controller) await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, {once:true}));
-  });
+  await p.waitForFunction(() => Boolean(navigator.serviceWorker.controller), {}, {timeout:30000});
 }
 
 async function showAnimal(p) {
@@ -297,13 +294,15 @@ async function main() {
   });
   await check('D4 literal offline reload restores Auth, encrypted photos and the same queued UUID', async () => {
     await page.reload({waitUntil:'domcontentloaded'});
-    const s = await until(page, `state.ready && !state.online && state.serviceWorker && state.displayPhotos.some(photo => photo.id === ${JSON.stringify(firstPhoto)} && photo.cropX === 17 && photo.cropZoom === 2.2)`);
+    const s = await until(page, `state.ready && state.ranchContextOffline && state.serviceWorker && state.displayPhotos.some(photo => photo.id === ${JSON.stringify(firstPhoto)} && photo.cropX === 17 && photo.cropZoom === 2.2)`);
     assert.equal(s.outbox.find(op => op.action === 'photo.crop' && op.state === 'pending')?.id, cropOperation.id);
+    if (s.online) assert(network.some(entry => entry.phase === phase && entry.failure === 'net::ERR_INTERNET_DISCONNECTED'), 'A misleading online indicator needs evidence of interrupted transport');
     await showAnimal(page); await screenshot('02-crop-restored-offline');
-    return {operationId:cropOperation.id, scope:s.scope, originals:await assertOriginals(page)};
+    return {operationId:cropOperation.id, scope:s.scope, browserReportedOnline:s.online, verifiedCachedAccess:true, originals:await assertOriginals(page)};
   });
-  await check('D4 reconnect applies real RPC and retires the confirmed overlay', async () => {
+  await check('D4 reconnect and the Sync button apply real RPC and retire the confirmed overlay', async () => {
     offline = false; await context.setOffline(false);
+    await page.locator('#sync-button').click();
     const op = await confirmed(page, cropOperation.id, true);
     const s = await snap(page);
     assert.equal(s.canonicalPhotos.find(photo => photo.id === firstPhoto).cropX, 17);
@@ -400,6 +399,7 @@ async function main() {
     const operations = network.filter(entry => entry.operation);
     assert(operations.length >= 2);
     assert(operations.every(entry => !entry.offline), 'Mutation attempted while browser was offline');
+    assert(!network.some(entry => entry.offline && ['PATCH','PUT','DELETE'].includes(entry.method)), 'A legacy mutation was attempted while the backend was unreachable');
     assert(operations.every(entry => entry.status === 200 && ['applied','duplicate'].includes(entry.receipt?.status)), 'Real RPC did not confirm every UI operation');
     return {authRequests:network.filter(item => item.path.startsWith('/auth/')).length,
       restRequests:network.filter(item => item.path.startsWith('/rest/')).length,

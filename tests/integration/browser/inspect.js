@@ -22,6 +22,7 @@ Object.defineProperty(window, '__ganaderovIntegration', {
         ready: Boolean(currentUser && state.ranchReady),
         userId: currentUser?.id ?? null, ownerId: state.ranchOwnerId,
         role: state.ranchRole, scope: database.name, online: navigator.onLine,
+        ranchContextOffline: Boolean(state.ranchContextOffline),
         syncing: state.syncing, serviceWorker: Boolean(navigator.serviceWorker.controller),
         animal: animals.find(item => item.id === animalId) ? {id: animalId} : null,
         canonicalPhotos: photos.filter(item => item.animalId === animalId).map(photo),
