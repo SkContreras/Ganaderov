@@ -30,7 +30,9 @@
         "forecast.create",
         "forecast.delete",
         "animal.target.update",
-        "journey.add_animals"
+        "journey.add_animals",
+        "photo.crop",
+        "photo.primary"
       ]
     },
     "entityId": {
@@ -897,6 +899,107 @@
                 }
               }
             }
+          },
+          "baseRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "photo.crop"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "changes": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "animalId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "cropX": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "cropY": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "cropZoom": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 3
+              }
+            },
+            "required": [
+              "animalId",
+              "cropX",
+              "cropY",
+              "cropZoom"
+            ]
+          },
+          "baseRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "photo.primary"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "changes": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "animalId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "previousPrimaryId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "animalId",
+              "previousPrimaryId"
+            ]
           },
           "baseRevision": {
             "type": "integer",

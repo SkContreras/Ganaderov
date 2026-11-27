@@ -14,7 +14,31 @@ jobs:
           node-version: '22'
       - run: node --check app.js && node --check service-worker.js
       - run: node --test tests/*.test.cjs tests/*.test.mjs
-      - run: python3 -m py_compile tests/concurrency_staging.py
+      - run: python3 -m py_compile tests/concurrency_staging.py tests/photo_concurrency_staging.py
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated browser test tools
+        run: |
+          npm install --prefix "$RUNNER_TEMP/d4-browser" --no-save --package-lock=false playwright@1.62.1
+          "$RUNNER_TEMP/d4-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Offline photo lifecycle in a real browser
+        run: |
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/d4-browser/node_modules/playwright" node tests/browser/photo-d4.cjs
+        env:
+          D4_BROWSER_ARTIFACTS: ${{ runner.temp }}/d4-browser-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: d4-browser-results
+          path: ${{ runner.temp }}/d4-browser-results
+          if-no-files-found: ignore
 
   protocol:
     runs-on: ubuntu-latest
@@ -36,7 +60,7 @@ jobs:
           PGPASSWORD: postgres
           PGDATABASE: postgres
         run: |
-          for sql in supabase-schema.sql backend/{sync_event_create_v1,entity_projection_v1,incremental_sync_v1,incremental_retention_v1,journey_transitions_v1,universal_operations_v1,security_hardening_v1,forecast_operations_v1,journey_operations_d3}.sql tests/sql/{event_rpc_audit,universal_operations,incremental_retention,security_hardening}.sql; do
+          for sql in supabase-schema.sql backend/{sync_event_create_v1,entity_projection_v1,incremental_sync_v1,incremental_retention_v1,journey_transitions_v1,universal_operations_v1,security_hardening_v1,forecast_operations_v1,journey_operations_d3,photo_operations_d4}.sql tests/sql/{event_rpc_audit,universal_operations,incremental_retention,security_hardening,photo_operations_d4}.sql; do
             psql -X -v ON_ERROR_STOP=1 -f "$sql"
           done
       - name: Concurrent authenticated writers
@@ -46,3 +70,4 @@ jobs:
         run: |
           python -m pip install 'psycopg[binary]>=3.2,<4'
           python tests/concurrency_staging.py
+          python tests/photo_concurrency_staging.py

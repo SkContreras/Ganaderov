@@ -51,6 +51,8 @@ Ganaderov reúne el inventario, los expedientes individuales, las jornadas de ma
 
 Las estimaciones de peso y rentabilidad son escenarios matemáticos con datos de entrada y no garantías de producción ni de precios de mercado.
 
+El encuadre conserva la fotografía original y permite elegir la principal, ajustar posición y acercamiento, previsualizar y guardar explícitamente. La ruta RPC guarda cambios pendientes sin conexión después de sincronizar la foto una vez; mantiene una operación de fotografía por animal hasta su confirmación o revisión. Consulta [D4: fotografías, encuadre y trabajo offline](./docs/photo-d4.md) para configuración, límites y pruebas.
+
 ## Interfaz
 
 La interfaz está diseñada alrededor de cuatro áreas: inventario, jornadas, análisis y configuración. Usa iconografía SVG, estados textuales y una identidad visual inspirada en el campo.
