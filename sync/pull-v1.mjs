@@ -1,4 +1,5 @@
 import {applyChangePage} from "./incremental-v1.mjs";
+import {localKey,seal,unseal} from "./local-crypto.mjs";
 
 const empty = ownerId => ({ownerId, epoch: null, cursor: 0, records: []});
 
@@ -37,15 +38,24 @@ export async function pullSnapshot(ownerId, {read, commit, fetchPage, verify}) {
 export async function pullFromIndexedDB(scope, cloud, verify) {
   const key = JSON.stringify(["incremental-v1",cloud.supabaseUrl,scope.userId,scope.ownerId]);
   const database = scope.database;
+  const cipher=await localKey(database,key);
+  verify();
   return pullSnapshot(scope.ownerId,{
     verify,
-    read: () => new Promise((resolve,reject) => {
+    read: async () => {
+      const stored=await new Promise((resolve,reject) => {
       verify();
       const req = database.transaction("syncMeta").objectStore("syncMeta").get(key);
-      req.onsuccess = () => resolve(req.result?.snapshot ?? null);
+      req.onsuccess = () => resolve(req.result ?? null);
       req.onerror = () => reject(req.error);
-    }),
-    commit: (expected, next) => new Promise((resolve,reject) => {
+      });
+      verify();
+      if(!stored)return null;
+      return stored.encrypted?unseal(cipher,key,stored.encrypted):stored.snapshot??null;
+    },
+    commit: async (expected, next) => {
+      const encrypted=await seal(cipher,key,next);
+      return new Promise((resolve,reject) => {
       verify();
       const tx = database.transaction("syncMeta","readwrite");
       const store = tx.objectStore("syncMeta");
@@ -54,15 +64,16 @@ export async function pullFromIndexedDB(scope, cloud, verify) {
       req.onsuccess = () => {
         try {
           verify();
-          const current = req.result?.snapshot;
+          const current = req.result?.encrypted?req.result:req.result?.snapshot;
           if (current?.epoch !== expected?.epoch || current?.cursor !== expected?.cursor) return;
-          store.put({id:key,snapshot:next});
+          store.put({id:key,epoch:next.epoch,cursor:next.cursor,encrypted});
           written = true;
         } catch { tx.abort(); }
       };
       tx.oncomplete = () => resolve(written);
       tx.onabort = () => reject(tx.error ?? Error("Descarga cancelada"));
-    }),
+      });
+    },
     fetchPage: async (after,epoch) => {
       const {data,error} = await cloud.rpc("sync_pull_changes",{p_owner:scope.ownerId,p_after:after,p_epoch:epoch,p_limit:50});
       if (error) throw error;
