@@ -37,7 +37,21 @@ let sourceSha256;
 async function test(name,fn) {
   const start=Date.now();
   try {const detail=await fn();tests.push({name,status:'passed',milliseconds:Date.now()-start,detail});console.log('PASS',name);}
-  catch(error){tests.push({name,status:'failed',milliseconds:Date.now()-start,error:error.stack});console.error('FAIL',name,error.message);}
+  catch(error){
+    tests.push({name,status:'failed',milliseconds:Date.now()-start,error:error.stack});console.error('FAIL',name,error.stack);
+    const pages=browser?.contexts().flatMap(context=>context.pages())||[];
+    const current=pages.at(-1);
+    if(current&&!current.isClosed()){
+      await current.screenshot({path:path.join(OUT,`failure-${tests.length}.png`),timeout:3000}).catch(()=>{});
+      const state=await current.evaluate(()=>({
+        active:document.activeElement?.outerHTML,
+        dialogs:Array.from(document.querySelectorAll('dialog[open]'),dialog=>dialog.id),
+        framing:document.querySelector('#photo-crop-frame')?.dataset,
+        toast:document.querySelector('#toast')?.textContent
+      })).catch(()=>null);
+      if(state)await fs.writeFile(path.join(OUT,`failure-${tests.length}.json`),JSON.stringify(state,null,2));
+    }
+  }
 }
 async function waitForAsync(page,predicate,arg,timeout=4000){
   const deadline=Date.now()+timeout;
@@ -46,6 +60,255 @@ async function waitForAsync(page,predicate,arg,timeout=4000){
     await new Promise(resolve=>setTimeout(resolve,50));
   }
   throw Error('Timed out awaiting the actual asynchronous browser condition');
+}
+async function framingState(page){
+  return page.locator('#photo-crop-frame').evaluate(frame=>{
+    const image=frame.querySelector('img'),box=frame.getBoundingClientRect();
+    const crop={x:Number(frame.dataset.cropX),y:Number(frame.dataset.cropY),zoom:Number(frame.dataset.cropZoom)};
+    const scale=Math.max(frame.clientWidth/image.naturalWidth,frame.clientHeight/image.naturalHeight)*crop.zoom;
+    const width=image.naturalWidth*scale,height=image.naturalHeight*scale;
+    return {...crop,width:frame.clientWidth,height:frame.clientHeight,imageWidth:image.naturalWidth,imageHeight:image.naturalHeight,
+      renderedWidth:width,renderedHeight:height,overflowX:width-frame.clientWidth,overflowY:height-frame.clientHeight,
+      left:(frame.clientWidth-width)*crop.x/100,top:(frame.clientHeight-height)*crop.y/100,
+      box:{x:box.x,y:box.y,width:box.width,height:box.height}};
+  });
+}
+async function openFraming(page){
+  if(!await page.locator('#photo-crop-dialog[open]').count())await page.locator('[data-edit-photo-crop]').click();
+  await page.locator('#photo-crop-dialog').waitFor({state:'visible'});
+  await page.waitForFunction(()=>{
+    const image=document.querySelector('#photo-crop-frame img');
+    return image?.complete&&image.naturalWidth>0&&Number.isFinite(Number(image.closest('#photo-crop-frame').dataset.cropZoom));
+  });
+  await page.locator('#photo-crop-dialog').evaluate(async dialog=>{
+    await Promise.all(dialog.getAnimations().map(animation=>animation.finished.catch(()=>{})));
+  });
+}
+async function setFraming(page,{x=50,y=50,zoom=1}={}){
+  const frame=page.locator('#photo-crop-frame');
+  await frame.focus();await page.keyboard.press('Home');
+  for(let i=0;i<Math.round((zoom-1)*10);i++)await page.locator('[data-photo-zoom="in"]').click();
+  await frame.focus();
+  // Clamp first to an exact endpoint. Center-preserving floating-point zoom can
+  // otherwise leave 49.99999999999998, which is valid UI metadata but unsuitable
+  // for the established exact 17/81 persistence/interoperability fixture.
+  const geometry=await framingState(page);
+  for(const [wanted,overflow,decrease,increase] of [[x,geometry.overflowX,'ArrowRight','ArrowLeft'],[y,geometry.overflowY,'ArrowDown','ArrowUp']]){
+    if(overflow<=0.001)continue;
+    const fromLow=wanted<=50,edge=fromLow?decrease:increase,move=fromLow?increase:decrease;
+    for(let i=0;i<10;i++)await page.keyboard.press('Shift+'+edge);
+    const distance=fromLow?wanted:100-wanted;
+    for(let i=0;i<Math.floor(distance/10);i++)await page.keyboard.press('Shift+'+move);
+    for(let i=0;i<distance%10;i++)await page.keyboard.press(move);
+  }
+  const actual=await framingState(page);
+  assert.equal(actual.x,x);assert.equal(actual.y,y);assert.equal(actual.zoom,zoom);
+}
+async function closeFraming(page){
+  if(await page.locator('#photo-crop-dialog[open]').count())await page.keyboard.press('Escape');
+  await page.locator('#photo-crop-dialog').waitFor({state:'hidden'});
+}
+function closeNumber(actual,expected,message,tolerance=0.15){
+  assert(Math.abs(actual-expected)<=tolerance,`${message}: ${actual} != ${expected}`);
+}
+async function pickerRegression(page,bytes){
+  await test('Decorated photo selectors are keyboard buttons and show removable original previews',async()=>{
+    const before=await page.evaluate(()=>window.__d4.inspect());
+    try{
+    await page.locator('#detail-dialog [data-close="detail-dialog"]').click();
+    await page.locator('#add-animal-button').click();
+    await page.locator('#animal-dialog').evaluate(async dialog=>{
+      await Promise.all(dialog.getAnimations().map(animation=>animation.finished.catch(()=>{})));
+    });
+    const picker=page.locator('button[data-select-photos="initial-photos"]');
+    assert.equal(await picker.getAttribute('type'),'button');
+    assert.match(await picker.innerText(),/Seleccionar fotografías/);
+    await picker.scrollIntoViewIfNeeded();await picker.focus();
+    assert.equal(await picker.evaluate(el=>document.activeElement===el),true);
+    const selected=page.waitForEvent('filechooser',{timeout:10000});await picker.press('Enter');
+    const chooser=await selected;
+    assert.equal(chooser.isMultiple(),true);
+    await chooser.setFiles([
+      {name:'synthetic-one.png',mimeType:'image/png',buffer:Buffer.from(bytes)},
+      {name:'synthetic-two.png',mimeType:'image/png',buffer:Buffer.from(bytes)}
+    ]);
+    assert.equal(await page.locator('#initial-photos-preview img').count(),2);
+    assert.match(await picker.innerText(),/Cambiar selección/);
+    assert.deepEqual(await page.locator('#initial-photos').evaluate(input=>Array.from(input.files,file=>file.name)),['synthetic-one.png','synthetic-two.png']);
+    await page.screenshot({path:path.join(OUT,'photo-picker-desktop.png'),fullPage:false});
+    await page.locator('[data-remove-initial-photo="0"]').click();
+    assert.equal(await page.locator('#initial-photos-preview img').count(),1);
+    assert.deepEqual(await page.locator('#initial-photos').evaluate(input=>Array.from(input.files,file=>file.name)),['synthetic-two.png']);
+    // The native picker can issue cancel without changing its FileList. This
+    // event must not clear already selected originals or the preview count.
+    await page.locator('#initial-photos').dispatchEvent('cancel');
+    assert.equal(await page.locator('#initial-photos-preview img').count(),1);
+    assert.deepEqual(await page.locator('#initial-photos').evaluate(input=>Array.from(input.files,file=>file.name)),['synthetic-two.png']);
+    await page.keyboard.press('Escape');
+    await page.locator('#animal-dialog').waitFor({state:'hidden'});
+    await page.evaluate(id=>window.__d4.show(id),ANIMAL);
+    const galleryPicker=page.locator('button[data-select-photos="photo-input"]');
+    assert.match(await galleryPicker.innerText(),/Añadir fotos/);
+    await galleryPicker.focus();
+    const rejected=page.waitForEvent('filechooser',{timeout:10000});await galleryPicker.press('Space');
+    await (await rejected).setFiles({name:'unsupported.gif',mimeType:'image/gif',buffer:Buffer.from('GIF89a')});
+    await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('JPEG'));
+    const after=await page.evaluate(()=>window.__d4.inspect());
+    assert.deepEqual(after.outbox,before.outbox);assert.deepEqual(after.photos,before.photos);
+    return {selected:2,removed:1,nativeChooserOpenedByKeyboard:true};
+    }finally{
+      if(await page.locator('#animal-dialog[open]').count())await page.keyboard.press('Escape');
+      await page.evaluate(id=>window.__d4.show(id),ANIMAL);
+    }
+  });
+}
+async function framingGestureRegression(page,bytes){
+  await test('Mouse drag moves the framing, captures outside the frame and preserves original bytes',async()=>{
+    try{
+      await openFraming(page);await setFraming(page,{zoom:2});
+      const before=await framingState(page),box=before.box;
+      const start={x:box.x+box.width/2,y:box.y+box.height/2};
+      await page.mouse.move(start.x,start.y);await page.mouse.down();
+      await page.mouse.move(start.x+40,start.y-15,{steps:6});await page.mouse.up();
+      const after=await framingState(page);
+      closeNumber(after.x,50-4000/before.overflowX,'drag x');
+      closeNumber(after.y,50+1500/before.overflowY,'drag y');
+      assert.equal(await page.locator('#photo-dialog[open]').count(),0,'Dragging opened the original-image viewer');
+      await page.screenshot({path:path.join(OUT,'framing-desktop.png'),fullPage:false});
+      await page.mouse.move(start.x,start.y);await page.mouse.down();
+      await page.mouse.move(box.x+box.width+300,box.y-200,{steps:6});await page.mouse.up();
+      const clamped=await framingState(page);
+      assert.equal(clamped.x,0);assert.equal(clamped.y,100);
+      const stored=await page.evaluate(()=>window.__d4.inspect());
+      assert.equal(stored.outbox.length,0);
+      assert.equal(stored.photos.find(photo=>photo.id===P1).cropX,50);
+      assert.deepEqual(stored.photos.find(photo=>photo.id===P1).blob.bytes,bytes);
+      return {drag:{x:after.x,y:after.y},clamped:{x:clamped.x,y:clamped.y}};
+    }finally{await closeFraming(page);}
+  });
+  await test('Wheel zoom preserves the focal point, clamps at 1–3 and only handles the editor frame',async()=>{
+    try{
+      await openFraming(page);await setFraming(page,{zoom:1.6});
+      const before=await framingState(page),anchor={x:before.width*0.37,y:before.height*0.48};
+      const source={x:(anchor.x-before.left)/before.renderedWidth,y:(anchor.y-before.top)/before.renderedHeight};
+      await page.mouse.move(before.box.x+anchor.x,before.box.y+anchor.y);
+      await page.mouse.wheel(0,-120);
+      await page.waitForFunction(zoom=>Number(document.querySelector('#photo-crop-frame').dataset.cropZoom)>zoom,before.zoom);
+      const after=await framingState(page);
+      closeNumber((anchor.x-after.left)/after.renderedWidth,source.x,'wheel source x',0.005);
+      closeNumber((anchor.y-after.top)/after.renderedHeight,source.y,'wheel source y',0.005);
+      for(let i=0;i<6;i++)await page.mouse.wheel(0,-100000);
+      await page.waitForFunction(()=>Number(document.querySelector('#photo-crop-frame').dataset.cropZoom)===3);
+      for(let i=0;i<6;i++)await page.mouse.wheel(0,100000);
+      await page.waitForFunction(()=>Number(document.querySelector('#photo-crop-frame').dataset.cropZoom)===1);
+      await page.locator('#photo-crop-dialog h2').hover();await page.mouse.wheel(0,-120);
+      await page.waitForFunction(()=>Number(document.querySelector('#photo-crop-frame').dataset.cropZoom)===1);
+      assert.equal((await page.evaluate(()=>window.__d4.inspect())).outbox.length,0);
+      return {zoom:after.zoom,focalPoint:source};
+    }finally{await closeFraming(page);}
+  });
+  await test('Keyboard controls, Reset, Cancel and Escape keep previews separate from saved framing',async()=>{
+    const original=await page.evaluate(()=>window.__d4.inspect());
+    await openFraming(page);await setFraming(page,{x:17,y:81,zoom:2.2});
+    await page.locator('[data-reset-photo-crop]').click();
+    let crop=await framingState(page);
+    assert.deepEqual({x:crop.x,y:crop.y,zoom:crop.zoom},{x:50,y:50,zoom:1});
+    await setFraming(page,{x:31,y:64,zoom:1.7});
+    await page.locator('#photo-crop-dialog').getByRole('button',{name:'Cancelar',exact:true}).click();
+    await page.locator('#photo-crop-dialog').waitFor({state:'hidden'});
+    assert.equal(await page.locator('[data-edit-photo-crop]').evaluate(el=>el===document.activeElement),true,'Cancel did not restore editor-button focus');
+    await openFraming(page);crop=await framingState(page);
+    assert.deepEqual({x:crop.x,y:crop.y,zoom:crop.zoom},{x:50,y:50,zoom:1});
+    await setFraming(page,{x:45,y:55,zoom:1.8});await closeFraming(page);
+    const after=await page.evaluate(()=>window.__d4.inspect());
+    assert.deepEqual(after.outbox,original.outbox);assert.deepEqual(after.photos,original.photos);
+    assert.equal(await page.locator('[data-edit-photo-crop]').evaluate(el=>el===document.activeElement),true,'Escape did not restore editor-button focus');
+  });
+}
+async function touchFramingRegression(origin,animal,photos){
+  const touchContext=await browser.newContext({viewport:{width:390,height:844},hasTouch:true,isMobile:true,deviceScaleFactor:1});
+  await touchContext.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
+  await touchContext.exposeBinding('__d4rpc',(_,name,args)=>stubRpc(name,args));
+  await touchContext.exposeBinding('__d4storage',()=>{throw Error('Touch framing must never access Storage');});
+  const touchPage=await touchContext.newPage();
+  touchPage.on('pageerror',error=>pageErrors.push(error.message));
+  const cdp=await touchContext.newCDPSession(touchPage);
+  const dispatch=async(type,touchPoints=[])=>{
+    await cdp.send('Input.dispatchTouchEvent',{type,touchPoints});
+    // Touch moves may be coalesced until the next rendering frame. Observe the
+    // controller after browser delivery, not immediately after the CDP ACK.
+    await touchPage.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  };
+  try{
+    await touchPage.goto(origin);await touchPage.waitForFunction(()=>!!window.__d4);
+    await touchPage.evaluate(({userId,ownerId})=>window.__d4.setup({userId,ownerId}),{userId:USER,ownerId:OWNER});
+    await touchPage.evaluate(seed=>window.__d4.seed(seed),{animal,photos});
+    await touchPage.evaluate(id=>window.__d4.show(id),ANIMAL);
+    await test('Real browser touch pinch continues as a one-finger drag and cancels without a stuck pointer',async()=>{
+      await openFraming(touchPage);await setFraming(touchPage,{zoom:1.5});
+      const before=await framingState(touchPage),box=before.box;
+      const center={x:box.x+box.width/2,y:box.y+box.height/2};
+      const distance=box.width*0.12;
+      const initial=[{id:1,x:center.x-distance,y:center.y},{id:2,x:center.x+distance,y:center.y}];
+      await dispatch('touchStart',initial);
+      const widened=initial.map((point,index)=>({...point,x:center.x+(index===0?-1:1)*distance*1.35+6,y:point.y+2}));
+      await dispatch('touchMove',widened);
+      const pinched=await framingState(touchPage);
+      assert(pinched.zoom>before.zoom&&pinched.zoom<=3,'Pinch did not zoom');
+      closeNumber(pinched.zoom,1.5*1.35,'pinch scale',0.08);
+      // Chromium ends the contacts explicitly listed in touchEnd. Omitting a
+      // contact from touchMove does not lift it; ending an empty list lifts all.
+      await dispatch('touchEnd',[widened[1]]);
+      const released=await framingState(touchPage);
+      closeNumber(released.zoom,pinched.zoom,'lifting one finger changed zoom',0.001);
+      closeNumber(released.x,pinched.x,'lifting one finger jumped x',0.1);
+      const dragged={...widened[0],x:widened[0].x+10};
+      await dispatch('touchMove',[dragged]);
+      const afterDrag=await framingState(touchPage);
+      closeNumber(afterDrag.zoom,released.zoom,'one-finger drag changed zoom',0.001);
+      closeNumber(afterDrag.x,released.x-1000/released.overflowX,'one-finger drag x',0.7);
+      await dispatch('touchCancel');
+      const cancelled=await framingState(touchPage);
+      const fresh={id:7,x:center.x,y:center.y};
+      await dispatch('touchStart',[fresh]);
+      await dispatch('touchMove',[{...fresh,x:fresh.x-8}]);await dispatch('touchEnd');
+      const restarted=await framingState(touchPage);
+      closeNumber(restarted.zoom,cancelled.zoom,'cancelled pointer corrupted next gesture',0.001);
+      assert(restarted.x>cancelled.x,'A fresh drag did not work after pointercancel');
+      assert.equal(await touchPage.locator('#photo-dialog[open]').count(),0);
+      const snapshot=await touchPage.evaluate(()=>window.__d4.inspect());
+      assert.equal(snapshot.outbox.length,0);assert.deepEqual(snapshot.photos[0].blob.bytes,photos[0].bytes);
+      await touchPage.screenshot({path:path.join(OUT,'framing-mobile.png'),fullPage:false});
+      await closeFraming(touchPage);
+      return {pinchZoom:pinched.zoom,oneFingerX:afterDrag.x,originalBytes:photos[0].bytes.length};
+    });
+  }finally{await dispatch('touchCancel').catch(()=>{});await touchContext.close();}
+}
+async function staleFramingRegression(page,animal,photos){
+  await test('A changed confirmed photograph blocks an older preview until Cancel and reopen',async()=>{
+    try{
+      await openFraming(page);await setFraming(page,{x:17,y:81,zoom:2.2});
+      const changed=photos.map(photo=>photo.id===P1?{...photo,cropX:64,cropY:20,cropZoom:1.5}:photo);
+      await page.evaluate(seed=>window.__d4.seed(seed),{animal,photos:changed});
+      await page.evaluate(id=>window.__d4.show(id),ANIMAL);
+      assert.equal(await page.locator('#photo-crop-dialog').isVisible(),true,'A refresh silently discarded the active preview');
+      const preview=await framingState(page);
+      assert.deepEqual({x:preview.x,y:preview.y,zoom:preview.zoom},{x:17,y:81,zoom:2.2});
+      assert.equal(await page.locator('[data-save-photo-crop]').isDisabled(),true,'A stale preview could overwrite a newer confirmed photo');
+      assert.match(await page.locator('#photo-crop-message').innerText(),/cambió mientras editabas/);
+      assert.equal((await page.evaluate(()=>window.__d4.inspect())).outbox.length,0);
+      await page.locator('#photo-crop-dialog').getByRole('button',{name:'Cancelar',exact:true}).click();
+      await openFraming(page);
+      const current=await framingState(page);
+      assert.deepEqual({x:current.x,y:current.y,zoom:current.zoom},{x:64,y:20,zoom:1.5});
+      assert.equal(await page.locator('[data-save-photo-crop]').isDisabled(),false);
+      assert.equal((await page.evaluate(()=>window.__d4.inspect())).outbox.length,0);
+    }finally{
+      await closeFraming(page);
+      await page.evaluate(seed=>window.__d4.seed(seed),{animal,photos});
+      await page.evaluate(id=>window.__d4.show(id),ANIMAL);
+    }
+  });
 }
 const config="window.GANADERO_CONFIG={supabaseUrl:'https://d4-synthetic.invalid',supabaseAnonKey:'synthetic',syncEventRpcV1:true,syncRpcOnlyV1:false,syncBackgroundV1:false};";
 async function serve(req,res) {
@@ -420,22 +683,31 @@ async function main(){
     assert.equal(revision,7);
     return {revision};
   });
+  await pickerRegression(page,bytes);
+  await framingGestureRegression(page,bytes);
+  await touchFramingRegression(origin,animal,remotePhotos);
+  await staleFramingRegression(page,animal,remotePhotos);
   await test('Framing preview/reset do not enqueue until explicit Save; zoom enables both axes',async()=>{
-    await page.locator('.detail-crop summary').click();
-    await page.locator('[data-photo-crop="zoom"]').evaluate(el=>{el.value='2.2';el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));});
-    assert.equal(await page.locator('[data-photo-crop="x"]').isDisabled(),false);
-    assert.equal(await page.locator('[data-photo-crop="y"]').isDisabled(),false);
+    await openFraming(page);await setFraming(page,{x:49,y:51,zoom:2.2});
+    const zoomed=await framingState(page);
+    assert(zoomed.overflowX>0&&zoomed.overflowY>0);
     assert.equal((await page.evaluate(()=>window.__d4.inspect())).outbox.length,0);
     await page.locator('[data-reset-photo-crop]').click();
-    assert.equal(await page.locator('[data-photo-crop="zoom"]').inputValue(),'1');
+    const reset=await framingState(page);
+    assert.deepEqual({x:reset.x,y:reset.y,zoom:reset.zoom},{x:50,y:50,zoom:1});
+    assert(reset.overflowX<0.001||reset.overflowY<0.001,'Cover must have a fitting axis at zoom 1');
+    await page.locator('#photo-crop-frame').focus();
+    if(reset.overflowX<0.001){await page.keyboard.press('ArrowRight');assert.equal((await framingState(page)).x,50);}
+    if(reset.overflowY<0.001){await page.keyboard.press('ArrowDown');assert.equal((await framingState(page)).y,50);}
     assert.equal((await page.evaluate(()=>window.__d4.inspect())).outbox.length,0);
   });
   online=false;await context.setOffline(true);
   const callCount=rpcCalls.length;
   await page.evaluate(()=>window.__d4.holdOldRefresh());
   await test('Offline framing queues without network and keeps source bytes',async()=>{
-    for(const [axis,value] of [['zoom','2.2'],['x','17'],['y','81']])await page.locator(`[data-photo-crop="${axis}"]`).evaluate((el,value)=>{el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));},value);
+    await setFraming(page,{x:17,y:81,zoom:2.2});
     await page.locator('[data-save-photo-crop]').click();
+    await page.locator('#photo-crop-dialog').waitFor({state:'hidden'});
     await waitForAsync(page,async id=>{const s=await window.__d4.inspect();return s.outbox.some(r=>r.state==='pending')&&s.display.find(p=>p.id===id)?.cropX===17;},P1);
     const inspect=await page.evaluate(()=>window.__d4.inspect());
     assert.equal(rpcCalls.length,callCount,'offline save attempted a server read');
@@ -445,6 +717,7 @@ async function main(){
     assert.equal(inspect.display.find(p=>p.id===P1).cropX,17);
     assert.equal(inspect.photos.find(p=>p.id===P1).cropX,50,'unconfirmed crop leaked into confirmed legacy photo');
     assert.deepEqual(inspect.photos.find(p=>p.id===P1).blob.bytes,bytes);
+    assert.equal(await page.locator('[data-edit-photo-crop]').isDisabled(),true,'Pending Save must block reopening the editor');
     return {operationId:pending[0].id};
   });
   await test('A slower old refresh cannot replace the newly queued photo overlay',async()=>{
@@ -495,7 +768,7 @@ async function main(){
     await page.evaluate(()=>window.__d4.cacheRevisions());
     const inspect=await page.evaluate(()=>window.__d4.inspect());
     assert.equal(inspect.outbox.find(r=>r.operation.action==='photo.crop').photoSettled,true);
-    assert.equal(await page.locator('[data-save-photo-crop]').isDisabled(),false);
+    assert.equal(await page.locator('[data-edit-photo-crop]').isDisabled(),false);
     const rev=await page.evaluate(id=>window.__d4.call('photoPresentationRevision',window.__d4.state.photos.find(p=>p.id===id)),P1);
     assert.equal(rev,8);
     assert.equal(storageCalls.length,0,'Metadata-only pull downloaded already cached original');
@@ -539,7 +812,7 @@ async function main(){
     assert.equal(entry.state,'conflict');assert.equal(entry.code,'REVISION_CONFLICT');
     assert.equal(inspect.display.some(p=>p.id===P2),true);
     assert.equal(remotePhotos.find(p=>p.id===P2).cropX,88);
-    assert.equal(await page.locator('[data-save-photo-crop]').isDisabled(),true);
+    assert.equal(await page.locator('[data-edit-photo-crop]').isDisabled(),true);
     assert(!storageCalls.some(r=>r.kind!=='download'));
     return {conflictId:entry.id};
   });
@@ -550,7 +823,7 @@ async function main(){
     const entry=inspect.outbox.find(r=>r.operation.action==='photo.delete');
     assert.equal(entry.state,'archived');assert.equal(entry.archivedFrom,'conflict');assert.equal(entry.operation.changes.animalId,ANIMAL);
     assert.equal(inspect.display.length,2);
-    assert.equal(await page.locator('[data-save-photo-crop]').isDisabled(),false);
+    assert.equal(await page.locator('[data-edit-photo-crop]').isDisabled(),false);
   });
   await page.evaluate(record=>window.__d4.importRemote(record),{animal_id:ANIMAL,modified_at:new Date().toISOString(),payload:{animal,events:[],photos:remotePhotos.map(photoData),forecasts:[]},deleted_at:null});
   await page.evaluate(()=>window.__d4.cacheRevisions());

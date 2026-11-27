@@ -353,7 +353,15 @@
           <label>Desparasitación<input id="initial-dewormer" maxlength="120" placeholder="Producto utilizado"></label>
           <label>Fecha de desparasitación<input id="initial-deworm-date" type="date" inputmode="numeric"></label>
           <label class="full-width">Observaciones<textarea id="initial-observation" rows="2" maxlength="2000" placeholder="Información importante... Usa el dictado del teclado para hablar"></textarea></label>
-          <label class="full-width">Fotografías <span class="optional">Opcional · Puedes seleccionar varias</span><input id="initial-photos" type="file" accept="image/*" capture="environment" multiple></label>
+          <div class="full-width photo-upload-field">
+            <div class="photo-upload-heading"><span>Fotografías</span><span class="optional">Opcional</span></div>
+            <div class="photo-upload-card">
+              <span class="photo-upload-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" focusable="false"><use href="#icon-photo"></use></svg></span>
+              <div class="photo-upload-copy"><strong>Completa su ficha con una foto</strong><p id="initial-photos-status" aria-live="polite">Puedes elegir varias imágenes de tu dispositivo.</p></div>
+              <button class="button photo-upload-button" type="button" data-select-photos="initial-photos" aria-describedby="initial-photos-status"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-add"></use></svg><span id="initial-photos-label">Seleccionar fotografías</span></button>
+              <input id="initial-photos" type="file" accept="image/*" multiple hidden aria-label="Seleccionar fotografías">
+            </div>
+          </div>
           <div id="initial-photos-preview" class="photo-preview-grid full-width" hidden></div>
         </div>
       </div>
@@ -394,6 +402,35 @@
       <div id="record-fields" class="form-grid"></div>
       <div class="modal-actions"><button class="button button-outline" type="button" data-close="record-dialog">Cancelar</button><button class="button button-primary" type="submit">Guardar registro</button></div>
     </form>
+  </dialog>
+
+  <dialog id="photo-crop-dialog" class="modal photo-crop-modal" aria-labelledby="photo-crop-title" aria-describedby="photo-crop-description">
+    <div class="photo-crop-heading">
+      <div><div class="eyebrow">FOTOGRAFÍA PRINCIPAL</div><h2 id="photo-crop-title">Ajustar encuadre</h2><p id="photo-crop-description">Coloca al animal donde mejor se vea.</p></div>
+      <button class="icon-button" type="button" data-close="photo-crop-dialog" aria-label="Cerrar editor"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg></button>
+    </div>
+    <div class="photo-crop-stage">
+      <div id="photo-crop-frame" class="photo-crop-frame" tabindex="0" role="group" aria-label="Encuadre de la fotografía" aria-describedby="photo-crop-message photo-crop-keyboard">
+        <img id="photo-crop-image" alt="Vista previa del encuadre" draggable="false">
+        <div class="photo-crop-grid" aria-hidden="true"></div>
+        <div class="photo-crop-corners" aria-hidden="true"></div>
+      </div>
+      <span class="photo-crop-preview-label" aria-hidden="true">VISTA PREVIA</span>
+    </div>
+    <p id="photo-crop-message" class="photo-crop-help" aria-live="polite">Arrastra para mover · Pellizca o usa la rueda para acercar</p>
+    <div class="photo-crop-toolbar">
+      <button class="photo-crop-reset" type="button" data-reset-photo-crop="pending"><svg viewBox="0 0 24 24" class="ui-icon" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10a8 8 0 1 1 1 8M4 4v6h6"/></svg>Restablecer</button>
+      <div class="photo-crop-zoom-controls" role="group" aria-label="Acercamiento">
+        <button type="button" data-photo-zoom="out" aria-label="Alejar" title="Alejar">−</button>
+        <output id="photo-crop-zoom" aria-live="polite" aria-label="Acercamiento actual">100%</output>
+        <button type="button" data-photo-zoom="in" aria-label="Acercar" title="Acercar">+</button>
+      </div>
+    </div>
+    <p id="photo-crop-keyboard" class="photo-crop-keyboard">También puedes usar las flechas para mover y las teclas + / − para acercar.</p>
+    <div class="photo-crop-footer">
+      <button class="button button-outline" type="button" data-close="photo-crop-dialog">Cancelar</button>
+      <button class="button button-primary" type="button" data-save-photo-crop="pending">Guardar encuadre</button>
+    </div>
   </dialog>
 
   <dialog id="photo-dialog" class="modal photo-modal">

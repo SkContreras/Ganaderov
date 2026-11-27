@@ -1,6 +1,6 @@
 import {runBackgroundDelivery} from "./sync/background-universal.mjs";
 
-const CACHE_NAME = "ganadero-v65";
+const CACHE_NAME = "ganadero-v66";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -9,6 +9,7 @@ const APP_FILES = [
   "./ranch-cover.svg",
   "./config.js",
   "./app.js",
+  "./ui/photo-framing.mjs",
   "./sync/incremental-v1.mjs",
   "./sync/pull-v1.mjs",
   "./sync/local-crypto.mjs",
