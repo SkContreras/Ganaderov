@@ -1626,6 +1626,21 @@
     if (!scope.ownerId || db.name !== localScopeName(scope.ownerId,scope.userId)) throw new Error("Rancho local no disponible.");
     return scope;
   }
+  async function queueForecastOperation(action,id,changes,revision=null){
+    if(!eventOutboxEnabled())throw Error("Activa el motor RPC para guardar pronósticos.");
+    const scope=outboxScope(),stamp=new Date().toISOString();
+    const operation={protocolVersion:1,operationId:newId(),action,entityId:id,ownerId:scope.ownerId,deviceId:outboxDeviceId(),baseRevision:revision,capturedAt:stamp,changes};
+    await transaction(["operationOutbox"],"readwrite",tx=>tx.objectStore("operationOutbox").add({id:operation.operationId,userId:scope.userId,ownerId:scope.ownerId,operation,state:"pending",attempts:0,nextAt:0,code:"",createdAt:stamp}));
+    assertSyncScope(scope);scheduleSync();
+  }
+  async function forecastRevision(kind,id,expected){
+    const scope=outboxScope();
+    const {data,error}=await cloud.rpc("sync_read_entity",{p_owner:scope.ownerId,p_kind:kind,p_id:id});
+    assertSyncScope(scope);
+    if(error)throw error;
+    if(!Number.isSafeInteger(data?.revision)||JSON.stringify(stableValue(data.data))!==JSON.stringify(stableValue(expected)))throw Error("La entidad cambió; sincroniza antes de editar.");
+    return data.revision;
+  }
   async function queueEventRecord(record) {
     const scope = outboxScope();
     if (!RPC_EVENT_TYPES.has(record.type) || !state.animals.some(a => a.id === record.animalId && isActiveAnimal(a))) throw new Error("Animal o actividad no disponible.");
@@ -2650,6 +2665,11 @@
       createdAt: new Date().toISOString()
     };
     try {
+      if(eventOutboxEnabled()){
+        await queueForecastOperation("forecast.create",forecast.id,{animalId,baselineWeight:projection.baselineWeight,baselineDate:projection.baselineDate,gainKgPerDay:projection.gainKgPerDay,days:projection.days});
+        $("#calculator-save-forecast").disabled=true;
+        showToast("Pronóstico en cola; pendiente de confirmación.");return;
+      }
       await put("growthForecasts", forecast);
       await touchAnimal(animalId);
       await refresh();
@@ -5057,6 +5077,10 @@
       delete updated.targetWeightMax;
     }
     try {
+      if(eventOutboxEnabled()){
+        await queueForecastOperation("animal.target.update",animal.id,{minimum:minValue?targetMin:null,maximum:minValue?targetMax:null},await forecastRevision("animal",animal.id,animal));
+        showToast("Rango en cola; pendiente de confirmación.");return;
+      }
       await put("animals", updated);
       scheduleSync();
       await refresh();

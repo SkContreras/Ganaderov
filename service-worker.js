@@ -1,4 +1,4 @@
-const CACHE_NAME = "ganadero-v57";
+const CACHE_NAME = "ganadero-v58";
 const APP_FILES = [
   "./",
   "./index.html",
