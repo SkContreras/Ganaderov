@@ -1,0 +1,50 @@
+{
+  "formatVersion": 1,
+  "sourceCommit": "d19da276339ddb46f40f4d102c3e3abb8f7ffad2",
+  "baseSchema": {
+    "path": "supabase-schema.sql",
+    "sha256": "a416452d8c9b59a2a39372a22a06d555b9b99eaf528afa45ea2abc7c91628345"
+  },
+  "migrations": [
+    {
+      "path": "backend/sync_event_create_v1.sql",
+      "sha256": "fdf64610eaf0b512482fb6813426c1b0e1ca5e659c1b7d4a64e1216e02f1f38f"
+    },
+    {
+      "path": "backend/entity_projection_v1.sql",
+      "sha256": "243fa7cd6524ada8685d4d36376e4d9ad07a1bd293a79d7b36cd71d9c09e1a08"
+    },
+    {
+      "path": "backend/incremental_sync_v1.sql",
+      "sha256": "5a57ad8c9d02d218a2fa011bd552ed5e534931239649b7f8c80a4d8ff70810f4"
+    },
+    {
+      "path": "backend/incremental_retention_v1.sql",
+      "sha256": "510ad1c0ab6b02e67cb24f8470e06547872833c6f6aa42191f873f4570ba1ab9"
+    },
+    {
+      "path": "backend/journey_transitions_v1.sql",
+      "sha256": "9c513c4dd771f89445667d6436fc344c250e2cfec72163e3dcb8e988723638f9"
+    },
+    {
+      "path": "backend/universal_operations_v1.sql",
+      "sha256": "47a235e0fbb34b94060b116ae79ca94f3b4e6e8de7c3e88cf4da3a9d0f5aa16d"
+    },
+    {
+      "path": "backend/security_hardening_v1.sql",
+      "sha256": "ea40127866852eb9dc58d738b3323d4ab128b3a38d88f1e7b266be8483e9e400"
+    },
+    {
+      "path": "backend/forecast_operations_v1.sql",
+      "sha256": "fcd702f966f645a6b14a8fdd0ca0bce8616f06f323dda8a3c001605a8781a2e7"
+    },
+    {
+      "path": "backend/journey_operations_d3.sql",
+      "sha256": "d7245fb260f3030d0572991807df0122b49b4db88351fa9cc37019c71281f5b5"
+    },
+    {
+      "path": "backend/photo_operations_d4.sql",
+      "sha256": "a295cc58c9a3a5153f4a35262d744988f03a53787831b9fe0d7ced5015e47704"
+    }
+  ]
+}

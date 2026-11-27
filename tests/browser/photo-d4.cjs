@@ -3,12 +3,15 @@
 // are blocked, and neither user accounts nor production services are accessed.
 // Run: node tests/browser/photo-d4.cjs
 // Optional: PLAYWRIGHT_MODULE, CHROMIUM_EXECUTABLE_PATH, D4_BROWSER_ARTIFACTS.
+// D4_APP_SOURCE and D4_LEGACY_REGRESSION_ONLY support a before/after regression
+// against an unchanged published source file without reverting the checkout.
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const http = require('node:http');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const os = require('node:os');
+const {isDeepStrictEqual}=require('node:util');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
 const ROOT=path.resolve(__dirname,'../..');
@@ -36,6 +39,14 @@ async function test(name,fn) {
   try {const detail=await fn();tests.push({name,status:'passed',milliseconds:Date.now()-start,detail});console.log('PASS',name);}
   catch(error){tests.push({name,status:'failed',milliseconds:Date.now()-start,error:error.stack});console.error('FAIL',name,error.message);}
 }
+async function waitForAsync(page,predicate,arg,timeout=4000){
+  const deadline=Date.now()+timeout;
+  while(Date.now()<deadline){
+    if(await page.evaluate(predicate,arg))return;
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  throw Error('Timed out awaiting the actual asynchronous browser condition');
+}
 const config="window.GANADERO_CONFIG={supabaseUrl:'https://d4-synthetic.invalid',supabaseAnonKey:'synthetic',syncEventRpcV1:true,syncRpcOnlyV1:false,syncBackgroundV1:false};";
 async function serve(req,res) {
   try{
@@ -50,7 +61,7 @@ async function serve(req,res) {
     if(rel==='index.html')body=Buffer.from(body.toString().replace(/<script src="https:\/\/cdn\.jsdelivr\.net[^>]*><\/script>/,''));
     if(rel==='app.js'){
       const hooks=await fs.readFile(path.join(__dirname,'photo-d4-hooks.js'),'utf8');
-      const source=body.toString();
+      const source=process.env.D4_APP_SOURCE?await fs.readFile(process.env.D4_APP_SOURCE,'utf8'):body.toString();
       sourceSha256=crypto.createHash('sha256').update(source).digest('hex');
       assert(source.match(/\s+initialize\(\);\s*\}\)\(\);?\s*$/),'App initialization hook not found');
       body=Buffer.from(source.replace(/\s+initialize\(\);(?=\s*\}\)\(\);?\s*$)/,'\n'+hooks+'\n'));
@@ -60,9 +71,10 @@ async function serve(req,res) {
   }catch(error){res.writeHead(404);res.end('Local test asset unavailable');}
 }
 function photoData(photo){const {bytes,...data}=photo;return data;}
-async function stubRpc(name,args) {
-  rpcCalls.push({name,args:structuredClone(args),online});
+async function stubRpc(name,args,{ranchResponse,probe}={}) {
+  rpcCalls.push({name,args:structuredClone(args),online,...(probe?{probe}:{})});
   if(!online)throw Error('Synthetic offline: RPC prohibited');
+  if(name==='get_my_ranch_context'&&ranchResponse!==undefined)return structuredClone(ranchResponse);
   if(name==='sync_read_entity'){
     const photo=remotePhotos.find(p=>p.id===args.p_id);
     return {error:null,data:photo?{revision:revisions.get(photo.id),parentId:ANIMAL,data:photoData(photo)}:{revision:revisions.get(args.p_id)??1,parentId:ANIMAL,data:null}};
@@ -93,6 +105,267 @@ async function stubRpc(name,args) {
     return {error:null,data:receipt};
   }
   throw Error('Unexpected RPC: '+name);
+}
+async function ranchCacheRegression(origin,animal) {
+  // A distinct browser profile keeps its actual localStorage/IndexedDB isolated
+  // from the photo concurrency suite above. Only server responses are synthetic.
+  const authContext=await browser.newContext({viewport:{width:1280,height:960},serviceWorkers:'allow'});
+  await authContext.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
+  const verifiedResponse={status:200,error:null,data:{status:'active',owner_id:OWNER,role:'owner',display_name:'D4 authorization fixture',ranch_name:'Offline authorization'}};
+  const transportResponse={status:0,data:null,error:{message:'TypeError: Failed to fetch',code:''}};
+  let response=verifiedResponse;
+  await authContext.exposeBinding('__d4rpc',(_,name,args)=>stubRpc(name,args,{ranchResponse:response,probe:'ranch-cache'}));
+  await authContext.exposeBinding('__d4storage',(_,kind,bucket,name)=>{
+    storageCalls.push({kind,bucket,path:name,probe:'ranch-cache'});
+    throw Error('Authorization-cache tests must not access Storage');
+  });
+  const authPage=await authContext.newPage();
+  authPage.on('pageerror',error=>pageErrors.push(error.message));
+  authPage.on('dialog',dialog=>dialog.dismiss());
+  const inspect=()=>authPage.evaluate(()=>window.__d4.authorization());
+  const refreshContext=()=>authPage.evaluate(()=>window.__d4.call('refreshRanchContext'));
+  const assertClosed=(value,{ready=false}={})=>{
+    assert.equal(value.ready,ready);assert.equal(value.offline,false);assert.equal(value.legacy,false);
+    assert.equal(value.ownerId,null);assert.equal(value.role,null);
+    assert.equal(value.access,false);assert.equal(value.manage,false);
+    assert.deepEqual(value.displayPhotoIds,[]);assert.deepEqual(value.animalIds,[]);
+    assert.equal(value.detailOpen,false);assert.equal(value.photoUrls,0);
+  };
+  let verifiedCache,scopedName,pendingId;
+  const coldStart=async(cache,userId=USER)=>{
+    await authPage.reload();await authPage.waitForFunction(()=>!!window.__d4);
+    await authPage.evaluate(({userId,ownerId,cacheOwner,cache})=>{
+      const key=`ganadero-ranch-context:${cacheOwner}`;
+      if(cache===null)localStorage.removeItem(key);else localStorage.setItem(key,JSON.stringify(cache));
+      if(userId!==cacheOwner)localStorage.removeItem(`ganadero-ranch-context:${userId}`);
+      return window.__d4.setup({userId,ownerId,coldStart:true});
+    },{userId,ownerId:OWNER,cacheOwner:USER,cache});
+    const initial=await inspect();
+    assertClosed(initial);assert.equal(initial.scope,'ganadero-local');
+    assert.deepEqual(initial.storedPhotoIds,[]);
+  };
+  try{
+    await authPage.goto(origin);await authPage.waitForFunction(()=>!!window.__d4);
+    await authPage.evaluate(({userId,ownerId})=>window.__d4.setup({userId,ownerId}),{userId:USER,ownerId:OWNER});
+    await authPage.evaluate(()=>window.__d4.call('loadRanchContext'));
+    await authPage.evaluate(seed=>window.__d4.seed(seed),{animal,photos:remotePhotos});
+    await authPage.evaluate(()=>window.__d4.cacheRevisions());
+    const verified=await inspect();
+    verifiedCache=JSON.parse(verified.cache);scopedName=verified.scope;
+    assert.equal(verifiedCache.userId,USER);assert.equal(verifiedCache.context.owner_id,OWNER);
+    assert.equal(verified.offline,false);assert(verifiedCache.verifiedAt>0);
+
+    await test('Transport status 0 restores verified ranch cache with onLine true without extending its age',async()=>{
+      response=transportResponse;await coldStart(verifiedCache);
+      assert.equal(await refreshContext(),true);
+      const restored=await inspect();
+      assert.equal(restored.online,true);assert.equal(restored.ready,true);assert.equal(restored.offline,true);
+      assert.equal(restored.ownerId,OWNER);assert.equal(restored.role,'owner');assert.equal(restored.access,true);
+      assert.equal(restored.scope,scopedName);assert.deepEqual(restored.storedPhotoIds.sort(),[P1,P2].sort());
+      assert.deepEqual(restored.displayPhotoIds.sort(),restored.storedPhotoIds.sort());
+      assert.equal(restored.cache,JSON.stringify(verifiedCache));
+      assert.equal(await authPage.evaluate(()=>Date.now()>JSON.parse(localStorage.getItem(`ganadero-ranch-context:${window.__d4.scope().userId}`)).verifiedAt),true);
+      await authPage.evaluate(id=>window.__d4.show(id),ANIMAL);
+      await authPage.screenshot({path:path.join(OUT,'ranch-cache-restored.png')});
+      return {status:0,navigatorOnline:restored.online,verifiedAt:verifiedCache.verifiedAt,scope:restored.scope,photoCount:restored.storedPhotoIds.length};
+    });
+    await test('Cached authorization permits durable local crop but blocks syncData and outbox network delivery',async()=>{
+      const callsBefore=rpcCalls.length,storageBefore=storageCalls.length;
+      await authPage.evaluate(id=>window.__d4.call('savePhotoCrop',id,64,27,2.1),P1);
+      let saved=await authPage.evaluate(()=>window.__d4.inspect());
+      const pending=saved.outbox.filter(entry=>entry.state==='pending');
+      assert.equal(pending.length,1);pendingId=pending[0].id;
+      assert.equal(saved.display.find(photo=>photo.id===P1).cropX,64);
+      assert.equal(rpcCalls.length,callsBefore,'Cached crop attempted a remote revision read');
+      await authPage.evaluate(()=>window.__d4.call('syncData'));
+      await authPage.evaluate(()=>window.__d4.flush());
+      const calls=rpcCalls.slice(callsBefore);
+      assert(calls.length>=1&&calls.every(call=>call.name==='get_my_ranch_context'));
+      assert.equal(storageCalls.length,storageBefore);
+      const authorization=await inspect();
+      assert.deepEqual(authorization.tableAccesses,[],'Cache-authorized sync accessed remote tables');
+      assert.equal(authorization.offline,true);assert.equal(authorization.cache,JSON.stringify(verifiedCache));
+      saved=await authPage.evaluate(()=>window.__d4.inspect());
+      const retained=saved.outbox.find(entry=>entry.id===pendingId);
+      assert.equal(retained.state,'pending');assert.equal(retained.attempts,0);
+      assert.deepEqual(saved.photos.find(photo=>photo.id===P1).blob.bytes,remotePhotos.find(photo=>photo.id===P1).bytes);
+      return {operationId:pendingId,attempts:retained.attempts,allowedCalls:calls.map(call=>call.name),tableAccesses:0,storageAccesses:0};
+    });
+    await test('Fresh successful membership verification clears cache-only mode and releases the same queued UUID',async()=>{
+      response=verifiedResponse;assert.equal(await refreshContext(),true);
+      const authorized=await inspect();
+      assert.equal(authorized.ready,true);assert.equal(authorized.offline,false);
+      const renewed=JSON.parse(authorized.cache);assert(renewed.verifiedAt>verifiedCache.verifiedAt);
+      const callsBefore=rpcCalls.length;
+      await authPage.evaluate(()=>window.__d4.flush());
+      const sent=rpcCalls.slice(callsBefore).filter(call=>call.name==='sync_apply_operation');
+      assert.equal(sent.length,1);assert.equal(sent[0].args.p_operation.operationId,pendingId);
+      const saved=await authPage.evaluate(()=>window.__d4.inspect());
+      assert.equal(saved.outbox.find(entry=>entry.id===pendingId).state,'confirmed');
+      verifiedCache=renewed;
+      return {operationId:pendingId,verifiedAt:renewed.verifiedAt,cacheOnly:false};
+    });
+
+    for(const {status,code,message} of [
+      {status:401,code:'PGRST301',message:'JWT authorization rejected'},
+      {status:403,code:'42501',message:'Permission denied'},
+      {status:500,code:'PGRST202',message:'Could not find get_my_ranch_context in schema cache'},
+      {status:502,code:'XX000',message:'Gateway response failed'},
+      {status:503,code:'503',message:'Service unavailable'}
+    ])await test(`HTTP ${status} never restores cached authorization or legacy access`,async()=>{
+      response=transportResponse;await coldStart(verifiedCache);
+      assert.equal(await refreshContext(),true);
+      await authPage.evaluate(id=>window.__d4.show(id),ANIMAL);
+      assert.equal((await inspect()).detailOpen,true);
+      response={status,data:null,error:{code,message}};
+      assert.equal(await refreshContext(),false);
+      const denied=await inspect();assertClosed(denied);
+      if(status===401||status===403){
+        assert.equal(denied.cache,null,'Authorization rejection retained permission cache');
+        response=transportResponse;await refreshContext();
+        const retry=await inspect();assertClosed(retry);assert.equal(retry.cache,null);
+      }else assert.equal(denied.cache,JSON.stringify(verifiedCache),'Server failure extended or changed cached verification');
+      return {httpStatus:status,cacheRemoved:denied.cache===null,access:denied.access,legacy:denied.legacy,closedDetail:!denied.detailOpen};
+    });
+    await test('Unassigned membership clears cached authorization, closes the detail and cannot recover on later status 0',async()=>{
+      response=transportResponse;await coldStart(verifiedCache);await refreshContext();
+      await authPage.evaluate(id=>window.__d4.show(id),ANIMAL);
+      assert.equal((await inspect()).detailOpen,true);
+      response={status:200,error:null,data:{status:'unassigned'}};
+      assert.equal(await refreshContext(),true);
+      const denied=await inspect();assertClosed(denied,{ready:true});
+      assert.equal(denied.context.status,'unassigned');assert.equal(denied.cache,null);
+      assert.equal(denied.scope,'ganadero-local');assert.deepEqual(denied.storedPhotoIds,[]);
+      response=transportResponse;await refreshContext();
+      assertClosed(await inspect());
+      await authPage.screenshot({path:path.join(OUT,'ranch-cache-revoked.png')});
+      return {cacheRemoved:true,scope:denied.scope,closedDetail:true,access:false};
+    });
+    for(const {name,cache} of [
+      {name:'expired over 24 hours',cache:{...verifiedCache,verifiedAt:Date.now()-25*60*60*1000}},
+      {name:'dated in the future',cache:{...verifiedCache,verifiedAt:Date.now()+60*60*1000}},
+      {name:'owned by another user',cache:{...verifiedCache,userId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}}
+    ])await test(`Transport status 0 rejects authorization cache ${name}`,async()=>{
+      response=transportResponse;await coldStart(cache);await refreshContext();
+      const rejected=await inspect();assertClosed(rejected);
+      assert.equal(rejected.scope,'ganadero-local');assert.deepEqual(rejected.storedPhotoIds,[]);
+      assert.equal(rejected.cache,JSON.stringify(cache),'Rejected fallback renewed or rewrote the cached verification');
+      return {reason:name,access:false,storedPhotoCount:rejected.storedPhotoIds.length};
+    });
+    await test('Another signed-in user cannot select the previous user permission cache or scoped IndexedDB',async()=>{
+      response=transportResponse;
+      await coldStart(verifiedCache,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');await refreshContext();
+      const rejected=await inspect();assertClosed(rejected);
+      assert.equal(rejected.cache,null);assert.equal(rejected.scope,'ganadero-local');assert.deepEqual(rejected.storedPhotoIds,[]);
+      return {userId:rejected.userId,scope:rejected.scope,access:false};
+    });
+  }finally{await authContext.close();}
+}
+
+async function legacyBundlePhotoRegression(origin,animal,bytes) {
+  const legacyContext=await browser.newContext({viewport:{width:1280,height:960},serviceWorkers:'allow'});
+  await legacyContext.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
+  const rawPhotos=[P1,P2].map((id,i)=>({id,...(i===0?{animalId:ANIMAL}:{}),name:'omit-defaults-'+(i+1)+'.png',
+    mime:'image/png',primary:i===0,createdAt:stamp,storagePath:`${OWNER}/${ANIMAL}/${id}`}));
+  const remoteAnimal={...animal};delete remoteAnimal.internalId;
+  let record={animal_id:ANIMAL,modified_at:stamp,deleted_at:null,
+    payload:{animal:remoteAnimal,events:[],forecasts:[],photos:structuredClone(rawPhotos)}};
+  const writes=[];
+  remotePhotos=rawPhotos.map(photo=>({...photo,bytes}));
+  revisions.set(P1,1);revisions.set(P2,1);online=true;receiptMode='applied';
+  await legacyContext.exposeBinding('__d4rpc',(_,name,args)=>stubRpc(name,args,{probe:'legacy-bundle'}));
+  await legacyContext.exposeBinding('__d4storage',(_,kind,bucket,name)=>{
+    storageCalls.push({kind,bucket,path:name,probe:'legacy-bundle'});
+    assert.equal(kind,'download','Updating animal metadata must not rewrite originals');
+    const photo=remotePhotos.find(item=>item.storagePath===name);
+    assert(photo);return {bytes:photo.bytes,mime:photo.mime};
+  });
+  await legacyContext.exposeBinding('__d4legacyWrite',(_,request)=>{
+    assert.equal(request.table,'animal_sync_records');assert.equal(request.action,'update');
+    assert.deepEqual(request.filters,[['owner_id',OWNER],['animal_id',ANIMAL],['modified_at',record.modified_at]]);
+    assert.equal(request.columns,'modified_at');
+    writes.push(structuredClone(request));
+    // Model the server's JSONB child history rule: any raw metadata change gets
+    // a new revision, even when its rendered crop still looks like the default.
+    for(const photo of request.values.payload.photos){
+      const previous=record.payload.photos.find(item=>item.id===photo.id);
+      if(!isDeepStrictEqual(previous,photo))revisions.set(photo.id,(revisions.get(photo.id)||0)+1);
+    }
+    record={...record,...structuredClone(request.values),modified_at:new Date(Date.parse(stamp)+writes.length*1000).toISOString()};
+    remotePhotos=record.payload.photos.map(photo=>({...photo,bytes}));
+    return {error:null,data:{modified_at:record.modified_at}};
+  });
+  const legacyPage=await legacyContext.newPage();
+  legacyPage.on('pageerror',error=>pageErrors.push(error.message));
+  legacyPage.on('dialog',dialog=>dialog.dismiss());
+  try{
+    await legacyPage.goto(origin);await legacyPage.waitForFunction(()=>!!window.__d4);
+    await legacyPage.evaluate(({userId,ownerId})=>window.__d4.setup({userId,ownerId}),{userId:USER,ownerId:OWNER});
+    await legacyPage.evaluate(async record=>{
+      await window.__d4.call('applyRemoteRecord',record,null,window.__d4.scope());
+      await window.__d4.call('refresh');
+    },record);
+    await legacyPage.evaluate(()=>window.__d4.cacheRevisions());
+    await legacyPage.evaluate(async({animalId,record})=>{
+      const animal=await window.__d4.call('getOne','animals',animalId);
+      await window.__d4.call('put','animals',{...animal,name:'Animal metadata changed; photograph unchanged'});
+      const bundle=await window.__d4.call('getLocalBundle',animalId);
+      return window.__d4.call('writeRemoteRecord',animalId,bundle,record,window.__d4.scope());
+    },{animalId:ANIMAL,record});
+    await test('Legacy animal upload preserves exact photo JSON without crop defaults or parent insertion',async()=>{
+      assert.equal(writes.length,1);
+      assert.equal(writes[0].values.payload.animal.name,'Animal metadata changed; photograph unchanged');
+      assert.match(writes[0].values.payload.animal.internalId,/^ANM-\d{5,}$/);
+      assert.deepEqual(writes[0].values.payload.photos,rawPhotos,'An animal-only change rewrote otherwise identical photo metadata');
+      assert.equal(revisions.get(P1),1);assert.equal(revisions.get(P2),1);
+      assert.equal(storageCalls.filter(call=>call.probe==='legacy-bundle'&&call.kind!=='download').length,0);
+      return {animalUpdated:true,rawPhotosPreserved:true,photoRevisions:[revisions.get(P1),revisions.get(P2)]};
+    });
+    await test('Crop using revision 1 confirms after a legacy animal-only upload',async()=>{
+      online=false;await legacyContext.setOffline(true);
+      await legacyPage.evaluate(id=>window.__d4.call('savePhotoCrop',id,17,81,2.2),P1);
+      let snapshot=await legacyPage.evaluate(()=>window.__d4.inspect());
+      const pending=snapshot.outbox.find(row=>row.operation.action==='photo.crop'&&row.state==='pending');
+      assert(pending);assert.equal(pending.operation.baseRevision,1);
+      assert.deepEqual(snapshot.photos.find(photo=>photo.id===P1).blob.bytes,bytes);
+      online=true;await legacyContext.setOffline(false);
+      await legacyPage.evaluate(()=>window.__d4.flush());
+      snapshot=await legacyPage.evaluate(()=>window.__d4.inspect());
+      const confirmed=snapshot.outbox.find(row=>row.id===pending.id);
+      assert.equal(confirmed.state,'confirmed','An animal-only upload invalidated a cached photo revision');
+      assert.equal(confirmed.receipt.status,'applied');assert.equal(confirmed.receipt.revision,2);
+      assert.equal(remotePhotos.find(photo=>photo.id===P1).cropX,17);
+      assert.deepEqual(snapshot.photos.find(photo=>photo.id===P1).blob.bytes,bytes);
+      return {operationId:pending.id,baseRevision:1,receiptRevision:confirmed.receipt.revision,originalBytesPreserved:true};
+    });
+    await test('Legacy serialization still publishes a real crop reset and primary change with its version filter',async()=>{
+      // Independent positive control: preserving unchanged rows must not discard
+      // an intentional reset to the default crop or a changed primary image.
+      record={...record,payload:{...record.payload,photos:remotePhotos.map(photo=>photo.id===P1?
+        {...photoData(photo),cropX:17,cropY:81,cropZoom:2.2}:photoData(photo))}};
+      remotePhotos=record.payload.photos.map(photo=>({...photo,bytes}));
+      await legacyPage.evaluate(async({record,animalId,first,second})=>{
+        for(const id of [first,second]){
+          const photo=await window.__d4.call('getOne','photos',id);
+          await window.__d4.call('put','photos',{...photo,primary:id===second,...(id===first?{cropX:50,cropY:50,cropZoom:1}:{})});
+        }
+        const bundle=await window.__d4.call('getLocalBundle',animalId);
+        await window.__d4.call('writeRemoteRecord',animalId,bundle,record,window.__d4.scope());
+      },{record,animalId:ANIMAL,first:P1,second:P2});
+      const payload=writes[writes.length-1].values.payload;
+      const first=payload.photos.find(photo=>photo.id===P1),second=payload.photos.find(photo=>photo.id===P2);
+      assert.equal(first.cropX,50);assert.equal(first.cropY,50);assert.equal(first.cropZoom,1);
+      assert.equal(first.primary,false);assert.equal(second.primary,true);
+      assert.equal(writes.length,2);
+      return {defaultResetPublished:true,primaryChanged:true,modifiedAtFilterChecked:true};
+    });
+  }finally{online=true;await legacyContext.close();}
+}
+
+async function writeReport(){
+  await fs.writeFile(path.join(OUT,'report.json'),JSON.stringify({browserVersion:browser.version(),sourceSha256,tests,pageErrors,rpcCalls,storageCalls},null,2));
+  console.log(JSON.stringify({passed:tests.filter(t=>t.status==='passed').length,failed:tests.filter(t=>t.status==='failed').length,pageErrors,report:path.join(OUT,'report.json')}));
+  if(tests.some(t=>t.status==='failed')||pageErrors.length)process.exitCode=1;
 }
 async function main(){
   await fs.mkdir(OUT,{recursive:true});
@@ -127,6 +400,9 @@ async function main(){
     return Array.from(new Uint8Array(await(await new Promise(resolve=>canvas.toBlob(resolve,'image/png'))).arrayBuffer()));
   });
   const animal={id:ANIMAL,internalId:'ANM-00001',tag:'D4-001',name:'Foto sintética D4',sex:'Hembra',status:'Activo',createdAt:stamp,updatedAt:stamp};
+  if(process.env.D4_LEGACY_REGRESSION_ONLY==='1'){
+    await legacyBundlePhotoRegression(origin,animal,bytes);await writeReport();return;
+  }
   remotePhotos=[P1,P2].map((id,i)=>({id,animalId:ANIMAL,name:'synthetic-'+(i+1)+'.png',mime:'image/png',primary:i===0,createdAt:stamp,cropX:50,cropY:50,cropZoom:1,storagePath:`${OWNER}/${ANIMAL}/${id}`,bytes}));
   await page.evaluate(seed=>window.__d4.seed(seed),{animal,photos:remotePhotos});
   await page.evaluate(id=>window.__d4.show(id),ANIMAL);
@@ -154,10 +430,11 @@ async function main(){
   });
   online=false;await context.setOffline(true);
   const callCount=rpcCalls.length;
+  await page.evaluate(()=>window.__d4.holdOldRefresh());
   await test('Offline framing queues without network and keeps source bytes',async()=>{
     for(const [axis,value] of [['zoom','2.2'],['x','17'],['y','81']])await page.locator(`[data-photo-crop="${axis}"]`).evaluate((el,value)=>{el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));},value);
     await page.locator('[data-save-photo-crop]').click();
-    await page.waitForFunction(async id=>{const s=await window.__d4.inspect();return s.outbox.some(r=>r.state==='pending')&&s.display.find(p=>p.id===id)?.cropX===17;},P1,{timeout:4000});
+    await waitForAsync(page,async id=>{const s=await window.__d4.inspect();return s.outbox.some(r=>r.state==='pending')&&s.display.find(p=>p.id===id)?.cropX===17;},P1);
     const inspect=await page.evaluate(()=>window.__d4.inspect());
     assert.equal(rpcCalls.length,callCount,'offline save attempted a server read');
     const pending=inspect.outbox.filter(r=>r.state==='pending'&&r.operation.action==='photo.crop');
@@ -167,6 +444,14 @@ async function main(){
     assert.equal(inspect.photos.find(p=>p.id===P1).cropX,50,'unconfirmed crop leaked into confirmed legacy photo');
     assert.deepEqual(inspect.photos.find(p=>p.id===P1).blob.bytes,bytes);
     return {operationId:pending[0].id};
+  });
+  await test('A slower old refresh cannot replace the newly queued photo overlay',async()=>{
+    await page.evaluate(()=>window.__d4.finishOldRefresh());
+    const inspect=await page.evaluate(()=>window.__d4.inspect());
+    assert.equal(inspect.display.find(p=>p.id===P1).cropX,17);
+    assert.equal(inspect.display.find(p=>p.id===P1).cropZoom,2.2);
+    assert.equal(inspect.outbox.filter(r=>r.state==='pending').length,1);
+    assert.equal(await page.locator(`[data-primary-photo="${P2}"]`).isDisabled(),true);
   });
   // Real offline navigation is fulfilled by the production service worker's
   // CacheStorage strategy. Its SDK URL alone points to our local synthetic SDK.
@@ -343,15 +628,15 @@ async function main(){
         const animal=await window.__d4.call('getOne','animals',id);
         await window.__d4.call('put','animals',{...animal,name:'Concurrent local edit must survive',updatedAt:new Date().toISOString()});
       },ANIMAL);
-      await page.waitForFunction(async()=>{
+      await waitForAsync(page,async()=>{
         const locks=await navigator.locks.query();
         return locks.pending.filter(lock=>lock.name==='ganaderov-protected:'+window.__d4.scope().database.name).length>=1;
-      },{},{timeout:4000});
+      });
       remoteInstall=page.evaluate(record=>window.__d4.importRemote(record),{animal_id:ANIMAL,modified_at:new Date().toISOString(),payload:{animal:{...animal,name:'Remote snapshot'},events:[],photos:remotePhotos.map(photoData),forecasts:[]},deleted_at:null});
-      await page.waitForFunction(async()=>{
+      await waitForAsync(page,async()=>{
         const locks=await navigator.locks.query();
         return locks.pending.filter(lock=>lock.name==='ganaderov-protected:'+window.__d4.scope().database.name).length>=2;
-      },{},{timeout:4000});
+      });
       await other.evaluate(()=>window.__d4.unblockWrites());
       await localWrite;
       assert.equal(await remoteInstall,false,'Remote snapshot overwrote a local edit committed while it waited');
@@ -363,8 +648,8 @@ async function main(){
       await other.close();
     }
   });
-  await fs.writeFile(path.join(OUT,'report.json'),JSON.stringify({browserVersion:browser.version(),sourceSha256,tests,pageErrors,rpcCalls,storageCalls},null,2));
-  console.log(JSON.stringify({passed:tests.filter(t=>t.status==='passed').length,failed:tests.filter(t=>t.status==='failed').length,pageErrors,report:path.join(OUT,'report.json')}));
-  if(tests.some(t=>t.status==='failed')||pageErrors.length)process.exitCode=1;
+  await ranchCacheRegression(origin,animal);
+  await legacyBundlePhotoRegression(origin,animal,bytes);
+  await writeReport();
 }
 main().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{await browser?.close();server?.close();});
