@@ -38,7 +38,19 @@ window.__d4 = {
         },
         async remove(paths) {throw Error('Physical deletion prohibited in D4 test');}
       };}},
-      from(table){window.__d4.tableAccesses.push(table);throw Error('Unexpected table access in isolated D4 test: '+table);}
+      from(table){
+        window.__d4.tableAccesses.push(table);
+        if(typeof window.__d4legacyWrite!=='function')throw Error('Unexpected table access in isolated D4 test: '+table);
+        const request={table,filters:[]};
+        const query={
+          update(values){request.action='update';request.values=values;return query;},
+          insert(values){request.action='insert';request.values=values;return query;},
+          eq(key,value){request.filters.push([key,value]);return query;},
+          select(columns){request.columns=columns;return query;},
+          maybeSingle(){return window.__d4legacyWrite(request);}
+        };
+        return query;
+      }
     };
     if(!this.eventsRegistered){registerEvents();this.eventsRegistered=true;}
     await refresh();

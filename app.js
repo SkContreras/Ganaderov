@@ -1526,6 +1526,17 @@
             if (expected.length !== actual.length || !expected.every((byte, i) => byte === actual[i])) throw new Error("Conflicto de contenido de fotografía.");
           }
         }
+        const previous = existingPhotos.get(photo.id);
+        // Animal edits must not rewrite untouched photo metadata. Adding
+        // default crop fields to an older photo changes its server revision
+        // and would conflict with an offline operation captured beforehand.
+        const unchangedPhoto = previous && previous.storagePath === storagePath &&
+          JSON.stringify(stableValue(photoFingerprint({...previous, animalId: previous.animalId ?? animalId}))) ===
+          JSON.stringify(stableValue(photoFingerprint({...photo, animalId: photo.animalId ?? animalId})));
+        if (unchangedPhoto) {
+          photos.push(previous);
+          continue;
+        }
         photos.push({ id: photo.id, animalId: photo.animalId, name: photo.name, mime: photo.mime,
           primary: Boolean(photo.primary), createdAt: photo.createdAt, cropX: photoCrop(photo).x, cropY: photoCrop(photo).y, cropZoom: photoCrop(photo).zoom, storagePath });
       }

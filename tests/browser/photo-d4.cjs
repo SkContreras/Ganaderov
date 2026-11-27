@@ -3,12 +3,15 @@
 // are blocked, and neither user accounts nor production services are accessed.
 // Run: node tests/browser/photo-d4.cjs
 // Optional: PLAYWRIGHT_MODULE, CHROMIUM_EXECUTABLE_PATH, D4_BROWSER_ARTIFACTS.
+// D4_APP_SOURCE and D4_LEGACY_REGRESSION_ONLY support a before/after regression
+// against an unchanged published source file without reverting the checkout.
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const http = require('node:http');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const os = require('node:os');
+const {isDeepStrictEqual}=require('node:util');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
 const ROOT=path.resolve(__dirname,'../..');
@@ -58,7 +61,7 @@ async function serve(req,res) {
     if(rel==='index.html')body=Buffer.from(body.toString().replace(/<script src="https:\/\/cdn\.jsdelivr\.net[^>]*><\/script>/,''));
     if(rel==='app.js'){
       const hooks=await fs.readFile(path.join(__dirname,'photo-d4-hooks.js'),'utf8');
-      const source=body.toString();
+      const source=process.env.D4_APP_SOURCE?await fs.readFile(process.env.D4_APP_SOURCE,'utf8'):body.toString();
       sourceSha256=crypto.createHash('sha256').update(source).digest('hex');
       assert(source.match(/\s+initialize\(\);\s*\}\)\(\);?\s*$/),'App initialization hook not found');
       body=Buffer.from(source.replace(/\s+initialize\(\);(?=\s*\}\)\(\);?\s*$)/,'\n'+hooks+'\n'));
@@ -258,6 +261,112 @@ async function ranchCacheRegression(origin,animal) {
     });
   }finally{await authContext.close();}
 }
+
+async function legacyBundlePhotoRegression(origin,animal,bytes) {
+  const legacyContext=await browser.newContext({viewport:{width:1280,height:960},serviceWorkers:'allow'});
+  await legacyContext.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
+  const rawPhotos=[P1,P2].map((id,i)=>({id,...(i===0?{animalId:ANIMAL}:{}),name:'omit-defaults-'+(i+1)+'.png',
+    mime:'image/png',primary:i===0,createdAt:stamp,storagePath:`${OWNER}/${ANIMAL}/${id}`}));
+  const remoteAnimal={...animal};delete remoteAnimal.internalId;
+  let record={animal_id:ANIMAL,modified_at:stamp,deleted_at:null,
+    payload:{animal:remoteAnimal,events:[],forecasts:[],photos:structuredClone(rawPhotos)}};
+  const writes=[];
+  remotePhotos=rawPhotos.map(photo=>({...photo,bytes}));
+  revisions.set(P1,1);revisions.set(P2,1);online=true;receiptMode='applied';
+  await legacyContext.exposeBinding('__d4rpc',(_,name,args)=>stubRpc(name,args,{probe:'legacy-bundle'}));
+  await legacyContext.exposeBinding('__d4storage',(_,kind,bucket,name)=>{
+    storageCalls.push({kind,bucket,path:name,probe:'legacy-bundle'});
+    assert.equal(kind,'download','Updating animal metadata must not rewrite originals');
+    const photo=remotePhotos.find(item=>item.storagePath===name);
+    assert(photo);return {bytes:photo.bytes,mime:photo.mime};
+  });
+  await legacyContext.exposeBinding('__d4legacyWrite',(_,request)=>{
+    assert.equal(request.table,'animal_sync_records');assert.equal(request.action,'update');
+    assert.deepEqual(request.filters,[['owner_id',OWNER],['animal_id',ANIMAL],['modified_at',record.modified_at]]);
+    assert.equal(request.columns,'modified_at');
+    writes.push(structuredClone(request));
+    // Model the server's JSONB child history rule: any raw metadata change gets
+    // a new revision, even when its rendered crop still looks like the default.
+    for(const photo of request.values.payload.photos){
+      const previous=record.payload.photos.find(item=>item.id===photo.id);
+      if(!isDeepStrictEqual(previous,photo))revisions.set(photo.id,(revisions.get(photo.id)||0)+1);
+    }
+    record={...record,...structuredClone(request.values),modified_at:new Date(Date.parse(stamp)+writes.length*1000).toISOString()};
+    remotePhotos=record.payload.photos.map(photo=>({...photo,bytes}));
+    return {error:null,data:{modified_at:record.modified_at}};
+  });
+  const legacyPage=await legacyContext.newPage();
+  legacyPage.on('pageerror',error=>pageErrors.push(error.message));
+  legacyPage.on('dialog',dialog=>dialog.dismiss());
+  try{
+    await legacyPage.goto(origin);await legacyPage.waitForFunction(()=>!!window.__d4);
+    await legacyPage.evaluate(({userId,ownerId})=>window.__d4.setup({userId,ownerId}),{userId:USER,ownerId:OWNER});
+    await legacyPage.evaluate(async record=>{
+      await window.__d4.call('applyRemoteRecord',record,null,window.__d4.scope());
+      await window.__d4.call('refresh');
+    },record);
+    await legacyPage.evaluate(()=>window.__d4.cacheRevisions());
+    await legacyPage.evaluate(async({animalId,record})=>{
+      const animal=await window.__d4.call('getOne','animals',animalId);
+      await window.__d4.call('put','animals',{...animal,name:'Animal metadata changed; photograph unchanged'});
+      const bundle=await window.__d4.call('getLocalBundle',animalId);
+      return window.__d4.call('writeRemoteRecord',animalId,bundle,record,window.__d4.scope());
+    },{animalId:ANIMAL,record});
+    await test('Legacy animal upload preserves exact photo JSON without crop defaults or parent insertion',async()=>{
+      assert.equal(writes.length,1);
+      assert.equal(writes[0].values.payload.animal.name,'Animal metadata changed; photograph unchanged');
+      assert.match(writes[0].values.payload.animal.internalId,/^ANM-\d{5,}$/);
+      assert.deepEqual(writes[0].values.payload.photos,rawPhotos,'An animal-only change rewrote otherwise identical photo metadata');
+      assert.equal(revisions.get(P1),1);assert.equal(revisions.get(P2),1);
+      assert.equal(storageCalls.filter(call=>call.probe==='legacy-bundle'&&call.kind!=='download').length,0);
+      return {animalUpdated:true,rawPhotosPreserved:true,photoRevisions:[revisions.get(P1),revisions.get(P2)]};
+    });
+    await test('Crop using revision 1 confirms after a legacy animal-only upload',async()=>{
+      online=false;await legacyContext.setOffline(true);
+      await legacyPage.evaluate(id=>window.__d4.call('savePhotoCrop',id,17,81,2.2),P1);
+      let snapshot=await legacyPage.evaluate(()=>window.__d4.inspect());
+      const pending=snapshot.outbox.find(row=>row.operation.action==='photo.crop'&&row.state==='pending');
+      assert(pending);assert.equal(pending.operation.baseRevision,1);
+      assert.deepEqual(snapshot.photos.find(photo=>photo.id===P1).blob.bytes,bytes);
+      online=true;await legacyContext.setOffline(false);
+      await legacyPage.evaluate(()=>window.__d4.flush());
+      snapshot=await legacyPage.evaluate(()=>window.__d4.inspect());
+      const confirmed=snapshot.outbox.find(row=>row.id===pending.id);
+      assert.equal(confirmed.state,'confirmed','An animal-only upload invalidated a cached photo revision');
+      assert.equal(confirmed.receipt.status,'applied');assert.equal(confirmed.receipt.revision,2);
+      assert.equal(remotePhotos.find(photo=>photo.id===P1).cropX,17);
+      assert.deepEqual(snapshot.photos.find(photo=>photo.id===P1).blob.bytes,bytes);
+      return {operationId:pending.id,baseRevision:1,receiptRevision:confirmed.receipt.revision,originalBytesPreserved:true};
+    });
+    await test('Legacy serialization still publishes a real crop reset and primary change with its version filter',async()=>{
+      // Independent positive control: preserving unchanged rows must not discard
+      // an intentional reset to the default crop or a changed primary image.
+      record={...record,payload:{...record.payload,photos:remotePhotos.map(photo=>photo.id===P1?
+        {...photoData(photo),cropX:17,cropY:81,cropZoom:2.2}:photoData(photo))}};
+      remotePhotos=record.payload.photos.map(photo=>({...photo,bytes}));
+      await legacyPage.evaluate(async({record,animalId,first,second})=>{
+        for(const id of [first,second]){
+          const photo=await window.__d4.call('getOne','photos',id);
+          await window.__d4.call('put','photos',{...photo,primary:id===second,...(id===first?{cropX:50,cropY:50,cropZoom:1}:{})});
+        }
+        const bundle=await window.__d4.call('getLocalBundle',animalId);
+        await window.__d4.call('writeRemoteRecord',animalId,bundle,record,window.__d4.scope());
+      },{record,animalId:ANIMAL,first:P1,second:P2});
+      const payload=writes[writes.length-1].values.payload;
+      const first=payload.photos.find(photo=>photo.id===P1),second=payload.photos.find(photo=>photo.id===P2);
+      assert.equal(first.cropX,50);assert.equal(first.cropY,50);assert.equal(first.cropZoom,1);
+      assert.equal(first.primary,false);assert.equal(second.primary,true);
+      assert.equal(writes.length,2);
+      return {defaultResetPublished:true,primaryChanged:true,modifiedAtFilterChecked:true};
+    });
+  }finally{online=true;await legacyContext.close();}
+}
+
+async function writeReport(){
+  await fs.writeFile(path.join(OUT,'report.json'),JSON.stringify({browserVersion:browser.version(),sourceSha256,tests,pageErrors,rpcCalls,storageCalls},null,2));
+  console.log(JSON.stringify({passed:tests.filter(t=>t.status==='passed').length,failed:tests.filter(t=>t.status==='failed').length,pageErrors,report:path.join(OUT,'report.json')}));
+  if(tests.some(t=>t.status==='failed')||pageErrors.length)process.exitCode=1;
+}
 async function main(){
   await fs.mkdir(OUT,{recursive:true});
   server=http.createServer((req,res)=>void serve(req,res));
@@ -291,6 +400,9 @@ async function main(){
     return Array.from(new Uint8Array(await(await new Promise(resolve=>canvas.toBlob(resolve,'image/png'))).arrayBuffer()));
   });
   const animal={id:ANIMAL,internalId:'ANM-00001',tag:'D4-001',name:'Foto sintética D4',sex:'Hembra',status:'Activo',createdAt:stamp,updatedAt:stamp};
+  if(process.env.D4_LEGACY_REGRESSION_ONLY==='1'){
+    await legacyBundlePhotoRegression(origin,animal,bytes);await writeReport();return;
+  }
   remotePhotos=[P1,P2].map((id,i)=>({id,animalId:ANIMAL,name:'synthetic-'+(i+1)+'.png',mime:'image/png',primary:i===0,createdAt:stamp,cropX:50,cropY:50,cropZoom:1,storagePath:`${OWNER}/${ANIMAL}/${id}`,bytes}));
   await page.evaluate(seed=>window.__d4.seed(seed),{animal,photos:remotePhotos});
   await page.evaluate(id=>window.__d4.show(id),ANIMAL);
@@ -537,8 +649,7 @@ async function main(){
     }
   });
   await ranchCacheRegression(origin,animal);
-  await fs.writeFile(path.join(OUT,'report.json'),JSON.stringify({browserVersion:browser.version(),sourceSha256,tests,pageErrors,rpcCalls,storageCalls},null,2));
-  console.log(JSON.stringify({passed:tests.filter(t=>t.status==='passed').length,failed:tests.filter(t=>t.status==='failed').length,pageErrors,report:path.join(OUT,'report.json')}));
-  if(tests.some(t=>t.status==='failed')||pageErrors.length)process.exitCode=1;
+  await legacyBundlePhotoRegression(origin,animal,bytes);
+  await writeReport();
 }
 main().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{await browser?.close();server?.close();});

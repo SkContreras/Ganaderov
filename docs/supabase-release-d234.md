@@ -122,6 +122,13 @@ reabre la base y confirma los cambios al reconectar. Cuando la web pasa, exige
 además que Flutter lea su encuadre y su principal. No ejercita la interfaz
 Android, Android Keystore ni un reinicio físico del teléfono.
 
+Al escribir un cambio de la ficha por la ruta de bundles, la web conserva el
+JSON remoto de las fotos cuya presentación no cambió. Esto evita añadir campos
+predeterminados a fotos antiguas y avanzar su revisión sin una edición de foto,
+lo que convertiría una operación offline válida en un conflicto del propio
+cliente. Las ediciones reales y los conflictos entre clientes siguen usando
+las revisiones originales y la comprobación CAS del servidor.
+
 ## Configuración de la primera prueba conjunta
 
 Asignar una URL y una clave publicable del mismo Supabase desechable. Para una
@@ -147,6 +154,18 @@ los caminos RPC antiguos de evento/jornada permanecen desactivados en ese
 perfil nuevo. Las opciones Dart se incorporan al compilar; cambiar variables
 del servidor no altera un APK ya construido. Consultar las instrucciones del
 flavor `d4test` en Ganaderov-Mobile para recrear y comprobar su backend exacto.
+
+El commit de backend que aparece en el APK fija los archivos SQL que se deben
+instalar. Para probar la interfaz web, usar el commit cliente validado de este
+release con esos mismos archivos SQL, no una copia antigua de `app.js` tomada
+únicamente por coincidir con el pin de instalación del backend.
+
+En un teléfono conectado mediante `adb reverse tcp:54321 tcp:54321`, apagar
+Wi-Fi o datos móviles no interrumpe por sí solo el túnel USB. Para la prueba
+manual offline, retirar ese túnel con `adb reverse --remove tcp:54321`,
+comprobar que el cambio queda pendiente y reiniciar la aplicación. Restaurarlo
+con `adb reverse tcp:54321 tcp:54321` antes de sincronizar y comprobar el
+resultado desde el segundo cliente. Mantener en ejecución el backend local.
 
 ## Paso a producción: propuesta para ejecutar después de la validación
 
