@@ -1,4 +1,4 @@
-const CACHE_NAME = "ganadero-v55";
+const CACHE_NAME = "ganadero-v56";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -10,6 +10,7 @@ const APP_FILES = [
   "./sync/incremental-v1.mjs",
   "./sync/pull-v1.mjs",
   "./sync/local-crypto.mjs",
+  "./sync/protected-store.mjs",
   "./login-scene.js",
   "./confirmar-correo.html",
   "./confirmar-correo.css",

@@ -2,7 +2,7 @@
   "use strict";
 
   const DB_NAME = "ganadero-local";
-  const DB_VERSION = 6;
+  const DB_VERSION = 7;
   const ANIMAL_MODULES = [
     { id: "identification", label: "Identificación básica", description: "Datos esenciales para reconocer al animal.", locked: true },
     { id: "dates", label: "Fechas y procedencia", description: "Nacimiento, ingreso, origen, progenitores y destete." },
@@ -173,97 +173,61 @@
     });
   }
 
-  function transaction(storeNames, mode, operation) {
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(storeNames, mode);
-      let result;
-      try {
-        result = operation(tx);
-      } catch (error) {
-        tx.abort();
-        reject(error);
-        return;
-      }
-      tx.oncomplete = () => resolve(result);
-      tx.onerror = () => reject(tx.error || new Error("No se pudo guardar la información."));
-      tx.onabort = () => reject(tx.error || new Error("La operación fue cancelada."));
-    });
+  const protectedStores=["animals","events","photos","syncMeta","deletedAnimals","journeys","growthForecasts","ranchSettings","operationOutbox"];
+  const protectedModule=()=>import("./sync/protected-store.mjs");
+  function localScopeName(ownerId,userId=currentUser?.id){
+    return `${DB_NAME}-account-${encodeURIComponent(window.GANADERO_CONFIG?.supabaseUrl||"local")}-${userId}-ranch-${ownerId}`;
   }
-
-  const getAll = store => new Promise((resolve, reject) => {
-    const request = db.transaction(store, "readonly").objectStore(store).getAll();
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-  const getOne = (store, key) => new Promise((resolve, reject) => {
-    const request = db.transaction(store, "readonly").objectStore(store).get(key);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-  const getAllByIndex = (store, index, key) => new Promise((resolve, reject) => {
-    const request = db.transaction(store, "readonly").objectStore(store).index(index).getAll(IDBKeyRange.only(key));
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-  const put = (store, value) => transaction([store], "readwrite", tx => tx.objectStore(store).put(value));
-  const remove = (store, key) => transaction([store], "readwrite", tx => tx.objectStore(store).delete(key));
-
-  function readDatabaseStore(database, storeName) {
-    return new Promise((resolve, reject) => {
-      const request = database.transaction(storeName, "readonly").objectStore(storeName).getAll();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+  async function transaction(storeNames,mode,operation){
+    const database=db,generation=sessionGeneration;
+    const verify=()=>{if(db!==database||generation!==sessionGeneration)throw Error("La sesión cambió.");};
+    const module=await protectedModule();
+    return module.protectedTransaction(database,storeNames,mode,operation,verify);
   }
-
-  async function switchRanchDatabase(ownerId) {
-    const scopedName = `${DB_NAME}-ranch-${ownerId}`;
-    if (db.name === scopedName) return false;
-    const previous = db, generation=sessionGeneration, userId=currentUser?.id;
-    const target = await openDatabase(scopedName);
-    const verify=()=>{if(generation!==sessionGeneration||currentUser?.id!==userId||state.ranchOwnerId!==ownerId||db!==previous){target.close();throw Error("El ámbito de almacenamiento cambió.");}};
-    verify();
-    const stores = ["animals", "events", "photos", "syncMeta", "deletedAnimals", "journeys", "growthForecasts", "ranchSettings"];
-    const targetRows = await Promise.all(stores.map(store => readDatabaseStore(target, store)));
-    verify();
-    const targetEmpty = targetRows.every(rows => rows.length === 0);
-    const scopeMarker = targetRows[stores.indexOf("syncMeta")].find(item => item.id === "local-ranch-scope");
-    if (!scopeMarker && targetEmpty) {
-      let sourceRows = null;
-      // Never adopt unscoped guest data into an authenticated ranch silently.
-      const tx = target.transaction(stores, "readwrite");
-      if (sourceRows) {
-        stores.forEach((store, index) => sourceRows[index].forEach(item => tx.objectStore(store).put(item)));
-      }
-      tx.objectStore("syncMeta").put({ id: "local-ranch-scope", ownerId });
-      await new Promise((resolve, reject) => {
-        tx.oncomplete = resolve;
-        tx.onerror = () => reject(tx.error || new Error("No se pudo aislar el almacenamiento de este rancho."));
-        tx.onabort = () => reject(tx.error || new Error("Se canceló el aislamiento del almacenamiento local."));
-      });
-      if (sourceRows) {
-        const sourceTx = previous.transaction(stores, "readwrite");
-        stores.forEach(store => sourceTx.objectStore(store).clear());
-        await new Promise((resolve, reject) => {
-          sourceTx.oncomplete = resolve;
-          sourceTx.onerror = () => reject(sourceTx.error || new Error("No se pudo separar el almacenamiento anterior."));
-          sourceTx.onabort = () => reject(sourceTx.error || new Error("Se canceló la separación del almacenamiento anterior."));
-        });
-      }
-    } else if (!scopeMarker) {
-      await new Promise((resolve, reject) => {
-        const tx = target.transaction("syncMeta", "readwrite");
-        tx.objectStore("syncMeta").put({ id: "local-ranch-scope", ownerId });
-        tx.oncomplete = resolve;
-        tx.onerror = () => reject(tx.error || new Error("No se pudo registrar el ámbito del almacenamiento local."));
-        tx.onabort = () => reject(tx.error || new Error("Se canceló el registro del ámbito local."));
-      });
-    }
-    verify();
-    db = target;
-    if (previous !== target) previous.close();
-    await refresh();
-    return true;
+  async function readDatabaseStore(database,storeName){
+    return (await protectedModule()).readProtected(database,storeName);
+  }
+  const getAll=store=>readDatabaseStore(db,store);
+  const getOne=async(store,key)=>(await getAll(store)).find(row=>row.id===key);
+  const getAllByIndex=async(store,index,key)=>(await getAll(store)).filter(row=>row[index]===key);
+  const put=(store,value)=>transaction([store],"readwrite",tx=>tx.objectStore(store).put(value));
+  const remove=(store,key)=>transaction([store],"readwrite",tx=>tx.objectStore(store).delete(key));
+  
+  async function switchRanchDatabase(ownerId){
+    const userId=currentUser?.id;
+    if(!userId)throw Error("Sesión requerida.");
+    const scopedName=localScopeName(ownerId,userId);
+    if(db.name===scopedName)return false;
+    const previous=db,generation=sessionGeneration;
+    const target=await openDatabase(scopedName);
+    const verify=()=>{if(generation!==sessionGeneration||currentUser?.id!==userId||state.ranchOwnerId!==ownerId||db!==previous)throw Error("La sesión cambió.");};
+    try{
+      verify();
+      const module=await protectedModule();
+      await module.migrateProtected(target,protectedStores,verify);
+      // Preserve the old shared database. Import only operations explicitly
+      // attributed to this user; never silently assign legacy animal edits.
+      const oldName=`${DB_NAME}-ranch-${ownerId}`;
+      const legacy=await openDatabase(oldName);
+      try{
+        const rows=await readDatabaseStore(legacy,"operationOutbox");
+        verify();
+        await module.protectedTransaction(target,["operationOutbox","syncMeta"],"readwrite",tx=>{
+          const meta=tx.objectStore("syncMeta"),marker=meta.get("legacy-outbox-imported");
+          marker.onsuccess=()=>{
+            if(marker.result)return;
+            const store=tx.objectStore("operationOutbox");
+            for(const row of rows.filter(p=>p.userId===userId&&p.ownerId===ownerId)){
+              const existing=store.get(row.id);
+              existing.onsuccess=()=>{if(!existing.result)store.add(row);};
+            }
+            meta.put({id:"legacy-outbox-imported",ownerId,userId});
+          };
+        },verify);
+      }finally{legacy.close();}
+      verify();db=target;previous.close();
+      await refresh();return true;
+    }catch(error){if(db!==target)target.close();throw error;}
   }
 
   async function switchGuestDatabase() {
@@ -271,6 +235,7 @@
     const previous = db, generation=sessionGeneration;
     const target=await openDatabase(DB_NAME);
     if(generation!==sessionGeneration||db!==previous){target.close();return;}
+    await (await protectedModule()).migrateProtected(target,protectedStores,()=>{if(generation!==sessionGeneration||db!==previous)throw Error('La sesión cambió.');});
     db=target;
     previous.close();
     await refresh();
@@ -1156,7 +1121,7 @@
 
   async function refresh() {
     const generation=sessionGeneration, database=db;
-    const valid=()=>generation===sessionGeneration&&database===db&&(!currentUser||state.ranchReady&&state.ranchOwnerId&&db.name===`${DB_NAME}-ranch-${state.ranchOwnerId}`);
+    const valid=()=>generation===sessionGeneration&&database===db&&(!currentUser||state.ranchReady&&state.ranchOwnerId&&db.name===localScopeName(state.ranchOwnerId));
     if(!valid())return;
     const [animals, events, photos, journeys, forecasts, fieldConfigRecord] = await Promise.all([
       getAll("animals"), getAll("events"), getAll("photos"), getAll("journeys"), getAll("growthForecasts"),
@@ -1656,7 +1621,7 @@
   function outboxScope() {
     const scope = { userId: currentUser?.id, ownerId: state.ranchOwnerId, database: db };
     assertSyncScope(scope);
-    if (!scope.ownerId || db.name !== `${DB_NAME}-ranch-${scope.ownerId}`) throw new Error("Rancho local no disponible.");
+    if (!scope.ownerId || db.name !== localScopeName(scope.ownerId,scope.userId)) throw new Error("Rancho local no disponible.");
     return scope;
   }
   async function queueEventRecord(record) {
@@ -1685,24 +1650,17 @@
     assertSyncScope(scope);
     return rows.filter(p => p.userId === scope.userId && p.ownerId === scope.ownerId);
   }
-  async function updateOutbox(scope, entry, patch) {
+  async function updateOutbox(scope,entry,patch){
     assertSyncScope(scope);
-    // Read/update atomically; never regress a terminal state due to a late
-    // response from another tab. RPC idempotency handles simultaneous sends.
-    await new Promise((resolve, reject) => {
-      const tx = scope.database.transaction("operationOutbox", "readwrite");
-      const store = tx.objectStore("operationOutbox");
-      const request = store.get(entry.id);
-      request.onsuccess = () => {
-        const current = request.result;
-        if (!current || current.userId !== scope.userId || current.ownerId !== scope.ownerId) return;
-        if (["confirmed","conflict","rejected"].includes(current.state)) return;
-        store.put({ ...current, ...patch });
+    const module=await protectedModule();
+    await module.protectedTransaction(scope.database,["operationOutbox"],"readwrite",tx=>{
+      const store=tx.objectStore("operationOutbox"),req=store.get(entry.id);
+      req.onsuccess=()=>{
+        const current=req.result;
+        if(!current||current.userId!==scope.userId||current.ownerId!==scope.ownerId||["confirmed","conflict","rejected"].includes(current.state))return;
+        store.put({...current,...patch});
       };
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error || new Error("Operación local cancelada."));
-    });
+    },()=>assertSyncScope(scope));
   }
   async function flushEventOutbox(scope) {
     if (!eventOutboxEnabled()) return;
@@ -6114,6 +6072,7 @@
       const oauthReturnError = readOAuthReturnError(location.href);
       if (oauthReturnError) history.replaceState(history.state, "", oauthReturnError.url);
       db = await openDatabase();
+      await (await protectedModule()).migrateProtected(db,protectedStores,()=>{});
       registerEvents();
       window.addEventListener("pageshow", event => {
         if (!event.persisted) return;
