@@ -1384,6 +1384,7 @@
       if (l && !r && meta) { pending++; continue; }
       if (l && (!r || lc)) {
         assertSyncScope(scope);
+        if(strictRpcWrites()){await rememberSyncConflict(scope,"journey",journeyId,meta?.fingerprint?JSON.parse(meta.fingerprint):null,l,r?.payload??null,r?.updated_at??null);pending++;continue;}
         const query = r
           ? cloud.from("journey_sync_records").update({ payload: l }).eq("owner_id", scope.ownerId).eq("journey_id", journeyId).eq("updated_at", r.updated_at)
           : cloud.from("journey_sync_records").insert({ owner_id: scope.ownerId, journey_id: journeyId, payload: l });
@@ -1548,6 +1549,7 @@
 
     const remoteRevision = remote?.revision || 0;
     if (local.dirty) {
+      if(strictRpcWrites()){await rememberSyncConflict(outboxScope(),"config",state.ranchOwnerId,null,local.config,remote?.config??null,remote?.revision??null);return "Configuración local conservada · requiere revisión RPC";}
       if (!canManageRanch()) {
         state.fieldSettingsDirty = false;
         const downloaded = {
@@ -1703,6 +1705,64 @@
       }
     }
   }
+  const strictRpcWrites=()=>window.GANADERO_CONFIG?.syncRpcOnlyV1===true;
+  async function reviewOperation(scope,entry,dialog){
+    assertSyncScope(scope);
+    const module=await import("./sync/conflict-resolution.mjs");
+    const op=entry.operation,kind=op.action.split(".")[0];
+    const fetchEntity=async()=>{
+      assertSyncScope(scope);
+      const {data,error}=await cloud.rpc("sync_read_entity",{p_owner:scope.ownerId,p_kind:kind,p_id:op.entityId});
+      assertSyncScope(scope);
+      if(error)throw error;
+      return data;
+    };
+    const remote=await fetchEntity();
+    const fields=module.resolutionFields(op,remote);
+    const panel=document.createElement("section"),heading=document.createElement("h3");
+    heading.textContent="Revisión "+op.action+" · revisión "+remote.revision;panel.append(heading);
+    const choices=[];
+    for(const field of fields){
+      const label=document.createElement("label"),input=document.createElement("input"),pre=document.createElement("pre");
+      input.type="checkbox";input.value=field.key;
+      pre.textContent=field.key+"\nServidor: "+JSON.stringify(field.remote)+"\nLocal: "+JSON.stringify(field.local);
+      pre.style.whiteSpace="pre-wrap";pre.style.overflowWrap="anywhere";
+      label.append(input,document.createTextNode(" Conservar mi cambio"),pre);panel.append(label);choices.push(input);
+    }
+    const save=document.createElement("button");save.type="button";save.textContent="Crear operación de resolución";
+    save.onclick=async()=>{
+      save.disabled=true;
+      try{
+        const selected=choices.filter(x=>x.checked).map(x=>x.value);
+        const current=await fetchEntity();
+        const replacement=module.replacement(op,remote,current,selected,newId(),new Date().toISOString());
+        const storage=await protectedModule();
+        await storage.protectedTransaction(scope.database,["operationOutbox"],"readwrite",tx=>{
+          const store=tx.objectStore("operationOutbox"),req=store.get(entry.id);
+          req.onsuccess=()=>{
+            const old=req.result;
+            if(!old||old.userId!==scope.userId||old.ownerId!==scope.ownerId||!["conflict","rejected","archived"].includes(old.state)||old.resolvedBy||!module.same(old.operation,op))throw Error("La operación cambió.");
+            store.add({id:replacement.operationId,userId:scope.userId,ownerId:scope.ownerId,operation:replacement,state:"pending",attempts:0,nextAt:0,code:"",createdAt:replacement.capturedAt,resolves:old.id});
+            store.put({...old,state:"archived",resolvedBy:replacement.operationId});
+          };
+        },()=>assertSyncScope(scope));
+        dialog.close();scheduleSync();showToast("Resolución guardada con un nuevo identificador.");
+      }catch(error){showToast(error.message);}finally{save.disabled=false;}
+    };
+    panel.append(save);dialog.append(panel);
+  }
+  async function setConflictArchive(scope,entry,archive){
+    const storage=await protectedModule();
+    await storage.protectedTransaction(scope.database,["operationOutbox"],"readwrite",tx=>{
+      const store=tx.objectStore("operationOutbox"),req=store.get(entry.id);
+      req.onsuccess=()=>{
+        const old=req.result;
+        if(!old||old.userId!==scope.userId||old.ownerId!==scope.ownerId||old.resolvedBy)return;
+        if(archive&&["conflict","rejected"].includes(old.state))store.put({...old,archivedFrom:old.state,state:"archived"});
+        else if(!archive&&old.state==="archived"&&["conflict","rejected"].includes(old.archivedFrom))store.put({...old,state:old.archivedFrom});
+      };
+    },()=>assertSyncScope(scope));
+  }
   async function showEventOutbox() {
     try {
       const scope = outboxScope();
@@ -1718,10 +1778,20 @@
         const c = entry.operation.changes;
         item.textContent = `${EVENT_TYPES[c.type] || c.type} · ${c.animalId} · ${c.date} · ${entry.state}${entry.code ? " · " + entry.code : ""}`;
         dialog.append(item);
-        if (["conflict","rejected"].includes(entry.state)) {
+        if (["conflict","rejected","archived"].includes(entry.state)) {
           const details=document.createElement("details"), title=document.createElement("summary"), pre=document.createElement("pre");
           title.textContent="Revisar operación"; pre.style.whiteSpace="pre-wrap"; pre.style.overflowWrap="anywhere";
-          pre.textContent=JSON.stringify(entry.operation,null,2); details.append(title,pre); dialog.append(details);
+          pre.textContent=JSON.stringify({operation:entry.operation,resolvedBy:entry.resolvedBy},null,2); details.append(title,pre); dialog.append(details);
+          if(!entry.resolvedBy){
+            const archive=document.createElement("button");archive.type="button";archive.textContent=entry.state==="archived"?"Recuperar para revisión":"Archivar / conservar servidor";
+            archive.onclick=async()=>{try{await setConflictArchive(scope,entry,entry.state!=="archived");dialog.close();await showEventOutbox();}catch(e){showToast(e.message);}};
+            details.append(archive);
+            if(entry.state!=="archived"&&["animal.update","event.update","config.update"].includes(entry.operation.action)){
+              const review=document.createElement("button");review.type="button";review.textContent="Comparar y resolver";
+              review.onclick=async()=>{review.disabled=true;try{await reviewOperation(scope,entry,dialog);}catch(e){showToast(e.message);review.disabled=false;}};
+              details.append(review);
+            }
+          }
         }
       }
       if (!rows.length) { const p = document.createElement("p"); p.textContent = "No hay operaciones guardadas."; dialog.append(p); }
@@ -1830,6 +1900,7 @@
           continue;
         } else if (localBundle && (!remoteRecord || localChanged)) {
           if (!remoteRecord && metadata) { conflicts++; continue; }
+          if(strictRpcWrites()){await rememberSyncConflict(scope,"animal",animalId,metadata?.fingerprint?JSON.parse(metadata.fingerprint):null,JSON.parse(localFingerprint),remoteRecord?JSON.parse(cloudFingerprint):null,remoteRecord?.modified_at??null);conflicts++;continue;}
           const version = await writeRemoteRecord(animalId, localBundle, remoteRecord, scope);
           if (!version) { pendingChanges++; continue; }
           await saveSyncMeta(animalId, localVersion, version, localFingerprint);
@@ -1843,7 +1914,7 @@
       assertSyncScope(scope);
       await flushEventOutbox(scope);
       const outboxRows = await scopedOutbox(scope);
-      const pendingOperations = outboxRows.filter(p => p.state !== "confirmed").length;
+      const pendingOperations = outboxRows.filter(p => !["confirmed","archived"].includes(p.state)).length;
       // Download RPC-created events on a later pass, never inject them into a stale bundle.
       if (outboxRows.some(p => p.state === "confirmed" && p.receipt && !events.some(e => e.id === p.operation.entityId))) {
         pendingChanges++;
