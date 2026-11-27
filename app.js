@@ -129,7 +129,7 @@
     return `<span class="journey-status ${journey.status}">${icon(iconName)}${escapeHtml(journeyStatus(journey))}</span>`;
   }
   const hasRanchAccess = () => !currentUser || state.legacyAccount || ["owner", "admin", "worker"].includes(state.ranchRole);
-  const state = { animals: [], events: [], photos: [], journeys: [], forecasts: [], photoUrls: new Map(), fieldConfig: null, fieldConfigRecord: null, fieldSettingsDirty: false, mainView: "inventory", sort: "tag", direction: 1, archiveView: false, currentAnimalId: null, detailView: "summary", detailShowEmpty: false, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyWeightWarning: null, journeyUpdating: new Set(), animalFormSnapshot: "", animalFormStep: 0, animalFormMode: "create", animalFormWeightWarning: null, recordFormWeightWarning: null, quickCaptureSeed: null, pendingUndo: null, undoTimer: null, toastAction: null, scannerStream: null, scannerFrame: null, calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, accountIdentities: [], toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
+  const state = { animals: [], events: [], photos: [], photoOperations: [], journeys: [], forecasts: [], photoUrls: new Map(), fieldConfig: null, fieldConfigRecord: null, fieldSettingsDirty: false, mainView: "inventory", sort: "tag", direction: 1, archiveView: false, currentAnimalId: null, detailView: "summary", detailShowEmpty: false, currentJourneyId: null, journeyFilter: "all", journeySearch: "", journeyWeightTargetId: null, journeyWeightWarning: null, journeyUpdating: new Set(), animalFormSnapshot: "", animalFormStep: 0, animalFormMode: "create", animalFormWeightWarning: null, recordFormWeightWarning: null, quickCaptureSeed: null, pendingUndo: null, undoTimer: null, toastAction: null, scannerStream: null, scannerFrame: null, calculatorProjection: null, calculatorMeasuredGain: null, ranchContext: null, ranchReady: false, legacyAccount: false, ranchOwnerId: null, ranchRole: null, accountIdentities: [], toastTimer: null, syncTimer: null, syncing: false, syncRequested: false };
   let db;
   let cloud;
   let currentUser;
@@ -1123,9 +1123,9 @@
     const generation=sessionGeneration, database=db;
     const valid=()=>generation===sessionGeneration&&database===db&&(!currentUser||state.ranchReady&&state.ranchOwnerId&&db.name===localScopeName(state.ranchOwnerId));
     if(!valid())return;
-    const [animals, events, photos, journeys, forecasts, fieldConfigRecord] = await Promise.all([
+    const [animals, events, photos, journeys, forecasts, fieldConfigRecord, operations] = await Promise.all([
       getAll("animals"), getAll("events"), getAll("photos"), getAll("journeys"), getAll("growthForecasts"),
-      getOne("ranchSettings", "animal-fields")
+      getOne("ranchSettings", "animal-fields"), getAll("operationOutbox")
     ]);
     if(!valid())return;
     const assignedIds = await ensureAnimalInternalIds(animals);
@@ -1133,7 +1133,11 @@
     state.animals = animals;
     if (assignedIds) scheduleSync();
     state.events = events;
-    state.photos = photos;
+    const photoSync = await import("./sync/photo-outbox.mjs");
+    if(!valid())return;
+    const photoScope = {userId:currentUser?.id,ownerId:state.ranchOwnerId};
+    state.photoOperations = operations.filter(entry => entry.userId === photoScope.userId && entry.ownerId === photoScope.ownerId && photoSync.blocksPhotoChanges(entry));
+    state.photos = photoSync.projectPhotoOperations(photos, operations, photoScope);
     state.journeys = journeys;
     state.forecasts = forecasts;
     state.fieldConfigRecord = fieldConfigRecord || null;
@@ -1235,7 +1239,7 @@
 
   function bundleFingerprint(bundle) {
     const deletedAt = bundle.deletedAt ? new Date(bundle.deletedAt).toISOString() : null;
-    const photos = bundle.photos.map(photoFingerprint).sort((a, b) => a.id.localeCompare(b.id));
+    const photos = bundle.photos.map(photo => photoFingerprint({...photo, animalId:photo.animalId ?? bundle.animal?.id})).sort((a, b) => a.id.localeCompare(b.id));
     const events = bundle.events.slice().sort((a, b) => a.id.localeCompare(b.id));
     const forecasts = (bundle.forecasts || []).slice().sort((a, b) => a.id.localeCompare(b.id));
     return JSON.stringify(stableValue({
@@ -1415,53 +1419,67 @@
       if (!animal || animal.id !== record.animal_id || !Array.isArray(events) || !Array.isArray(photos) || !Array.isArray(forecasts)) {
         throw new Error(`Los datos sincronizados del animal ${record.animal_id} no son válidos.`);
       }
-      const storedPhotos = await Promise.all(photos.map(async photo => {
-        const { data, error } = await cloud.storage.from("animal-photos").download(photo.storagePath);
-        if (error) throw error;
-        return { ...photo, blob: data };
-      }));
+      const existingPhotos = new Map((await getAllByIndex("photos", "animalId", record.animal_id)).map(photo => [photo.id, photo]));
+      const storedPhotos = [];
+      // Metadata-only changes reuse the encrypted original. New originals are
+      // downloaded sequentially to avoid decoding every large photo at once.
+      for (const photo of photos) {
+        assertSyncScope(scope);
+        const previous = existingPhotos.get(photo.id);
+        const expectedPath = `${scope.ownerId}/${record.animal_id}/${photo.id}`;
+        let blob = previous?.blob;
+        if (!(blob instanceof Blob) || (previous.storagePath || expectedPath) !== photo.storagePath || previous.mime !== photo.mime) {
+          const {data, error} = await cloud.storage.from("animal-photos").download(photo.storagePath);
+          assertSyncScope(scope);
+          if (error) throw error;
+          blob = data;
+        }
+        storedPhotos.push({...photo, animalId: photo.animalId ?? record.animal_id, blob});
+      }
       downloaded = { animal, events, photos: storedPhotos, forecasts };
     }
-    const currentBundle = await getLocalBundle(record.animal_id);
     assertSyncScope(scope);
-    const currentFingerprint = currentBundle ? bundleFingerprint(currentBundle) : null;
-    if (currentFingerprint !== expectedLocalFingerprint) return false;
-    const oldPhotos = state.photos.filter(photo => photo.animalId === record.animal_id);
-    oldPhotos.forEach(photo => {
+    let applied = false;
+    const stores = ["animals", "events", "photos", "growthForecasts", "deletedAnimals"];
+    await transaction(stores, "readwrite", tx => {
+      const snapshot = new Map();
+      for (const name of stores) {
+        const request = tx.objectStore(name).getAll();
+        request.onsuccess = () => {
+          snapshot.set(name, request.result);
+          if (snapshot.size !== stores.length) return;
+          const current = buildLocalBundles(snapshot.get("animals"), snapshot.get("events"), snapshot.get("photos"),
+            snapshot.get("growthForecasts"), snapshot.get("deletedAnimals")).get(record.animal_id);
+          // Compare inside the same protected transaction that installs the
+          // remote record. A late download cannot overwrite another tab's edit.
+          if ((current ? bundleFingerprint(current) : null) !== expectedLocalFingerprint) return;
+          const animalStore = tx.objectStore("animals");
+          const eventStore = tx.objectStore("events");
+          const photoStore = tx.objectStore("photos");
+          const forecastStore = tx.objectStore("growthForecasts");
+          for (const [name, store] of [["events",eventStore],["photos",photoStore],["growthForecasts",forecastStore]]) {
+            for (const child of snapshot.get(name)) if (child.animalId === record.animal_id) store.delete(child.id);
+          }
+          animalStore.delete(record.animal_id);
+          if (deletedAt) {
+            tx.objectStore("deletedAnimals").put({id:record.animal_id, deletedAt});
+          } else {
+            tx.objectStore("deletedAnimals").delete(record.animal_id);
+            animalStore.put(downloaded.animal);
+            downloaded.events.forEach(item => eventStore.put(item));
+            downloaded.photos.forEach(item => photoStore.put(item));
+            downloaded.forecasts.forEach(item => forecastStore.put(item));
+          }
+          applied = true;
+        };
+      }
+    });
+    if (applied) for (const photo of state.photos.filter(photo => photo.animalId === record.animal_id)) {
       const url = state.photoUrls.get(photo.id);
       if (url) URL.revokeObjectURL(url);
       state.photoUrls.delete(photo.id);
-    });
-    await transaction(["animals", "events", "photos", "growthForecasts", "deletedAnimals"], "readwrite", tx => {
-      const animalStore = tx.objectStore("animals");
-      const eventStore = tx.objectStore("events");
-      const photoStore = tx.objectStore("photos");
-      const forecastStore = tx.objectStore("growthForecasts");
-      const deleteChildren = store => {
-        const request = store.index("animalId").openCursor(IDBKeyRange.only(record.animal_id));
-        request.onsuccess = () => {
-          const cursor = request.result;
-          if (cursor) {
-            cursor.delete();
-            cursor.continue();
-          }
-        };
-      };
-      deleteChildren(eventStore);
-      deleteChildren(photoStore);
-      deleteChildren(forecastStore);
-      animalStore.delete(record.animal_id);
-      if (deletedAt) {
-        tx.objectStore("deletedAnimals").put({ id: record.animal_id, deletedAt });
-      } else {
-        tx.objectStore("deletedAnimals").delete(record.animal_id);
-        animalStore.put(downloaded.animal);
-        downloaded.events.forEach(item => eventStore.put(item));
-        downloaded.photos.forEach(item => photoStore.put(item));
-        downloaded.forecasts.forEach(item => forecastStore.put(item));
-      }
-    });
-    return true;
+    }
+    return applied;
   }
 
   async function writeRemoteRecord(animalId, bundle, remoteRecord, scope) {
@@ -1714,6 +1732,7 @@
           ["applied","duplicate"].includes(data.status) && Number.isSafeInteger(data.revision) && data.revision >= 1 &&
           typeof data.serverReceivedAt === "string" && Number.isFinite(Date.parse(data.serverReceivedAt))) {
         await updateOutbox(scope, entry, { state: "confirmed", receipt: data, code: "OK", attempts });
+        if (entry.operation.action.startsWith("photo.")) state.syncRequested = true;
       } else if (!result.error && data?.protocolVersion === 1 && data.operationId === entry.id && ["conflict","rejected"].includes(data.status)) {
         await updateOutbox(scope, entry, { state: data.status, code: String(data.code || "REVIEW_REQUIRED").slice(0,100), attempts });
       } else {
@@ -1792,7 +1811,10 @@
       for (const entry of rows.slice().reverse().slice(0,100)) {
         const item = document.createElement("p");
         const c = entry.operation.changes;
-        item.textContent = `${EVENT_TYPES[c.type] || c.type} · ${c.animalId} · ${c.date} · ${entry.state}${entry.code ? " · " + entry.code : ""}`;
+        const labels = {"photo.crop":"Encuadre de fotografía", "photo.primary":"Fotografía principal", "photo.delete":"Eliminar fotografía"};
+        const statuses = {pending:"Pendiente", confirmed:entry.photoSettled === false ? "Confirmada; actualizando ficha" : "Confirmada", conflict:"Conflicto: requiere revisión", rejected:"Rechazada: requiere revisión", archived:"Archivada"};
+        item.textContent = [labels[entry.operation.action] || EVENT_TYPES[c.type] || entry.operation.action,
+          c.animalId, c.date, statuses[entry.state] || entry.state, entry.code].filter(Boolean).join(" · ");
         dialog.append(item);
         if (["conflict","rejected","archived"].includes(entry.state)) {
           const details=document.createElement("details"), title=document.createElement("summary"), pre=document.createElement("pre");
@@ -1800,7 +1822,7 @@
           pre.textContent=JSON.stringify({operation:entry.operation,resolvedBy:entry.resolvedBy},null,2); details.append(title,pre); dialog.append(details);
           if(!entry.resolvedBy){
             const archive=document.createElement("button");archive.type="button";archive.textContent=entry.state==="archived"?"Recuperar para revisión":"Archivar / conservar servidor";
-            archive.onclick=async()=>{try{await setConflictArchive(scope,entry,entry.state!=="archived");dialog.close();await showEventOutbox();}catch(e){showToast(e.message);}};
+            archive.onclick=async()=>{try{await setConflictArchive(scope,entry,entry.state!=="archived");await refresh();if($("#detail-dialog").open&&state.currentAnimalId)openDetail(state.currentAnimalId,true);dialog.close();await showEventOutbox();}catch(e){showToast(e.message);}};
             details.append(archive);
             if(entry.state!=="archived"&&["animal.update","event.update","config.update"].includes(entry.operation.action)){
               const review=document.createElement("button");review.type="button";review.textContent="Comparar y resolver";
@@ -1934,11 +1956,14 @@
         }
       }
       assertSyncScope(scope);
+      await cachePhotoRevisions(scope);
       await flushEventOutbox(scope);
       const outboxRows = await scopedOutbox(scope);
       const pendingOperations = outboxRows.filter(p => !["confirmed","archived"].includes(p.state)).length;
       // Download RPC-created events on a later pass, never inject them into a stale bundle.
-      if (outboxRows.some(p => p.state === "confirmed" && p.receipt && !events.some(e => e.id === p.operation.entityId))) {
+      if (outboxRows.some(p => p.state === "confirmed" && p.receipt &&
+          (p.operation.action === "event.create" && !events.some(e => e.id === p.operation.entityId) ||
+           p.operation.action.startsWith("photo.") && !p.photoSettled))) {
         pendingChanges++;
       }
       await refresh();
@@ -2035,7 +2060,7 @@
     return state.photoUrls.get(photo.id);
   }
   function photoCrop(photo) {
-    const coordinate = value => Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Number(value))) : 50;
+    const coordinate = value => value != null && Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Number(value))) : 50;
     return { x: coordinate(photo?.cropX), y: coordinate(photo?.cropY), zoom: Math.max(1,Math.min(3,Number(photo?.cropZoom)||1)) };
   }
   function updatePhotoCropControls() {
@@ -2047,11 +2072,15 @@
     const vertical = panel.querySelector('[data-photo-crop="y"]');
     const imageRatio = image.naturalWidth / image.naturalHeight;
     const frameRatio = frame.clientWidth / frame.clientHeight;
-    horizontal.disabled = imageRatio <= frameRatio + 0.01;
-    vertical.disabled = imageRatio >= frameRatio - 0.01;
+    const zoom = Number(panel.querySelector('[data-photo-crop="zoom"]').value);
+    const blocked = Boolean(photoOperationFor(state.currentAnimalId));
+    horizontal.disabled = blocked || zoom <= 1 && imageRatio <= frameRatio + 0.01;
+    vertical.disabled = blocked || zoom <= 1 && imageRatio >= frameRatio - 0.01;
+    panel.querySelector('[data-photo-crop="zoom"]').disabled = blocked;
     const help = panel.querySelector(".detail-crop-help");
-    help.textContent = horizontal.disabled && vertical.disabled
-      ? "La foto se muestra completa; no necesita recorte."
+    help.textContent = blocked ? "Hay un cambio de fotografía pendiente. Sincronízalo o revisa su conflicto antes de otro cambio."
+      : horizontal.disabled && vertical.disabled
+      ? "La foto se muestra completa. Acércala para ajustar ambos ejes."
       : horizontal.disabled
         ? "Esta foto se recorta arriba y abajo. Ajusta la posición vertical."
         : vertical.disabled
@@ -2924,7 +2953,7 @@
       const weight = weights.get(animal.id);
       const primaryPhoto = primaryPhotos.get(animal.id);
       const avatar = primaryPhoto
-        ? `<img src="${photoUrl(primaryPhoto)}" alt="" loading="lazy" decoding="async">`
+        ? `<img src="${photoUrl(primaryPhoto)}" alt="" loading="lazy" decoding="async" style="object-position:${photoCrop(primaryPhoto).x}% ${photoCrop(primaryPhoto).y}%;transform:scale(${photoCrop(primaryPhoto).zoom});transform-origin:${photoCrop(primaryPhoto).x}% ${photoCrop(primaryPhoto).y}%;">`
         : escapeHtml(initials(animal));
       const extraValues = extraTableFields.map(field => {
         const value = animalFieldDisplayValue(field, animal);
@@ -4886,6 +4915,12 @@
     const photos = state.photos.filter(photo => photo.animalId === animalId);
     const heroPhoto = photos.find(photo => photo.primary) || photos[0];
     const heroCrop = photoCrop(heroPhoto);
+    const photoOperation = photoOperationFor(animalId);
+    const photoDisabled = photoOperation ? "disabled" : "";
+    const photoStatus = photoOperation ? (["conflict", "rejected"].includes(photoOperation.state)
+      ? "El cambio de fotografía necesita revisión. Se muestra la versión confirmada."
+      : photoOperation.state === "confirmed" ? "Cambio confirmado; actualizando la ficha."
+      : "Cambio de fotografía guardado en este dispositivo; pendiente de sincronizar.") : "";
     const heroImage = heroPhoto
       ? `<img src="${photoUrl(heroPhoto)}" alt="Fotografía principal de ${escapeHtml(animal.name || animal.tag || "animal")}" data-view-photo="${escapeHtml(heroPhoto.id)}" style="object-position: ${heroCrop.x}% ${heroCrop.y}%; transform: scale(${heroCrop.zoom}); transform-origin: ${heroCrop.x}% ${heroCrop.y}%;">`
       : `<div class="detail-hero-placeholder">${icon("inventory")}</div>`;
@@ -4893,9 +4928,9 @@
     const manager = canManageRanch();
     const worker = isRanchWorker();
     const gallery = photos.map(photo => `<div class="photo-tile">
-      <img src="${photoUrl(photo)}" alt="Fotografía de ${escapeHtml(animal.name || animal.tag || "animal")}" data-view-photo="${escapeHtml(photo.id)}">
-      ${manager ? `<button class="photo-star ${photo.primary ? "primary" : ""}" data-primary-photo="${escapeHtml(photo.id)}" type="button" aria-label="${photo.primary ? "Fotografía principal seleccionada" : `Elegir fotografía de ${escapeHtml(animal.name || animal.tag || "este animal")} como principal`}" aria-pressed="${photo.primary}" title="${photo.primary ? "Fotografía principal seleccionada" : "Elegir como fotografía principal"}">${icon("star")}</button>
-      <button class="photo-remove" data-delete-photo="${escapeHtml(photo.id)}" type="button" aria-label="Eliminar fotografía de ${escapeHtml(animal.name || animal.tag || "este animal")}">${icon("trash")}</button>` : ""}
+      <img src="${photoUrl(photo)}" alt="Fotografía de ${escapeHtml(animal.name || animal.tag || "animal")}" data-view-photo="${escapeHtml(photo.id)}" style="object-position:${photoCrop(photo).x}% ${photoCrop(photo).y}%;transform:scale(${photoCrop(photo).zoom});transform-origin:${photoCrop(photo).x}% ${photoCrop(photo).y}%;">
+      ${manager ? `<button class="photo-star ${photo.primary ? "primary" : ""}" data-primary-photo="${escapeHtml(photo.id)}" type="button" ${photoDisabled} aria-label="${photo.primary ? "Fotografía principal seleccionada" : `Elegir fotografía de ${escapeHtml(animal.name || animal.tag || "este animal")} como principal`}" aria-pressed="${photo.primary}" title="${photo.primary ? "Fotografía principal seleccionada" : "Elegir como fotografía principal"}">${icon("star")}</button>
+      <button class="photo-remove" data-delete-photo="${escapeHtml(photo.id)}" type="button" ${photoDisabled} aria-label="Eliminar fotografía de ${escapeHtml(animal.name || animal.tag || "este animal")}">${icon("trash")}</button>` : ""}
     </div>`).join("");
     const recordButtons = manager
       ? `<button class="button button-outline" type="button" data-add-record="weight">${icon("plus")} Pesaje</button>
@@ -4915,6 +4950,7 @@
           <button class="icon-button" type="button" data-close="detail-dialog" aria-label="Cerrar">${icon("close")}</button>
         </div>
         <div class="detail-hero">${heroImage}<span class="detail-hero-status" data-detail-field="status" data-detail-has-value="true">${statusMarkup(animal.status, "status-display")}</span></div>
+        ${photoStatus ? `<p class="photo-sync-status" role="status">${escapeHtml(photoStatus)} <button type="button" class="add-link" data-review-photo-operations>Revisar sincronización</button></p>` : ""}
         ${heroPhoto && manager ? `<details class="detail-crop" data-detail-view="full" data-detail-has-value="true">
           <summary aria-label="Ajustar encuadre de la foto" title="Ajustar encuadre">${icon("edit")} Ajustar encuadre</summary>
           <div class="detail-crop-panel">
@@ -4922,7 +4958,8 @@
             <label>Vertical <input type="range" min="0" max="100" value="${heroCrop.y}" data-photo-crop="y" data-photo-id="${escapeHtml(heroPhoto.id)}" aria-label="Posición vertical de la foto"></label>
             <label>Acercamiento <input type="range" min="1" max="3" step="0.1" value="${heroCrop.zoom}" data-photo-crop="zoom" data-photo-id="${escapeHtml(heroPhoto.id)}" aria-label="Acercamiento"></label>
             <p class="detail-crop-help" aria-live="polite">Ajusta la posición de la foto en el marco.</p>
-            <button class="detail-crop-reset" type="button" data-reset-photo-crop="${escapeHtml(heroPhoto.id)}">Centrar encuadre</button>
+            <div class="detail-crop-actions"><button class="button button-small" type="button" data-save-photo-crop="${escapeHtml(heroPhoto.id)}" ${photoDisabled}>Guardar encuadre</button>
+            <button class="detail-crop-reset" type="button" data-reset-photo-crop="${escapeHtml(heroPhoto.id)}" ${photoDisabled}>Restablecer encuadre</button></div>
           </div>
         </details>` : ""}
         <div class="detail-identity">
@@ -4969,7 +5006,7 @@
         </section>
         <section class="detail-section" data-detail-view="full" data-detail-has-value="${photos.length > 0}">
           <div class="detail-section-head"><h3>Galería de fotografías <span class="muted">(${photos.length})</span></h3></div>
-          <div class="gallery">${gallery}${manager ? `<label class="photo-add" title="Añadir fotografías" aria-label="Añadir fotografías">${icon("photo")}<input id="photo-input" type="file" accept="image/*" multiple hidden></label>` : ""}</div>
+          <div class="gallery">${gallery}${manager && !photoOperation ? `<label class="photo-add" title="Añadir fotografías" aria-label="Añadir fotografías">${icon("photo")}<input id="photo-input" type="file" accept="image/*" multiple hidden></label>` : ""}</div>
         </section>
         <div class="detail-section animal-management" data-detail-view="full" data-detail-has-value="true">
           ${manager && !isActiveAnimal(animal) ? `<button class="button button-outline button-small" type="button" data-reactivate-animal="${escapeHtml(animal.id)}">${icon("active")} Reactivar animal</button>` : ""}
@@ -5133,12 +5170,13 @@
     }
     const animalId = state.currentAnimalId;
     const images = [...files];
-    if (!images.length || images.some(file => !file.type.startsWith("image/"))) {
-      showToast("Selecciona uno o más archivos de imagen.");
+    if (!images.length || images.some(file => !["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 10 * 1024 * 1024 || file.name.length > 120)) {
+      showToast("Selecciona fotografías JPEG, PNG o WebP de hasta 10 MB y con nombres de hasta 120 caracteres.");
       return;
     }
     const existing = state.photos.filter(photo => photo.animalId === animalId);
     try {
+      if (photoOperationFor(animalId)) throw Error("Sincroniza o revisa el cambio de fotografía pendiente antes de añadir otra.");
       await transaction(["photos"], "readwrite", tx => {
         const store = tx.objectStore("photos");
         images.forEach((file, index) => store.put({
@@ -5155,22 +5193,73 @@
     }
   }
 
-  async function photoPresentationRevision(photo){
-    const scope=outboxScope();
-    const {data,error}=await cloud.rpc("sync_read_entity",{p_owner:scope.ownerId,p_kind:"photo",p_id:photo.id});
+  function photoOperationFor(animalId) {
+    return state.photoOperations.find(entry => entry.userId === currentUser?.id && entry.ownerId === state.ranchOwnerId && entry.operation.changes.animalId === animalId);
+  }
+
+  async function cachePhotoRevisions(scope) {
+    if (!eventOutboxEnabled()) return;
+    const module = await import("./sync/photo-outbox.mjs");
+    const photos = await readDatabaseStore(scope.database, "photos");
+    const caches = new Map((await readDatabaseStore(scope.database, "syncMeta")).map(row => [row.id, row]));
+    const waiting = (await scopedOutbox(scope)).filter(entry => module.isPhotoOperation(entry) && entry.state === "confirmed" && !entry.photoSettled);
+    const candidates = new Map(photos.map(photo => [photo.id, photo]));
+    for (const entry of waiting) if (!candidates.has(entry.operation.entityId)) candidates.set(entry.operation.entityId, null);
+    for (const [id, photo] of candidates) {
+      assertSyncScope(scope);
+      if (photo && module.cachedPhotoRevision(caches.get(module.photoRevisionKey(id)), photo, scope) !== null && !waiting.some(entry => entry.operation.entityId === id)) continue;
+      try {
+        const {data, error} = await cloud.rpc("sync_read_entity", {p_owner:scope.ownerId, p_kind:"photo", p_id:id});
+        assertSyncScope(scope);
+        if (error) continue;
+        await module.rememberPhotoRevision(scope.database, scope, photo, {...data, entityId:id}, () => assertSyncScope(scope));
+      } catch (_) { assertSyncScope(scope); }
+    }
+  }
+
+  async function photoPresentationRevision(photo, scope = outboxScope()) {
+    const module = await import("./sync/photo-outbox.mjs");
+    const cache = await getOne("syncMeta", module.photoRevisionKey(photo.id));
     assertSyncScope(scope);
-    if(error)throw error;
-    if(!Number.isSafeInteger(data?.revision)||data.parentId!==photo.animalId||JSON.stringify(stableValue(photoFingerprint(data.data)))!==JSON.stringify(stableValue(photoFingerprint(photo))))throw Error("La fotografía cambió; actualiza la ficha.");
+    const cached = module.cachedPhotoRevision(cache, photo, scope);
+    if (cached !== null) return cached;
+    if (!navigator.onLine) throw Error("Sincroniza esta fotografía una vez para poder editarla sin conexión.");
+    const {data, error} = await cloud.rpc("sync_read_entity", {p_owner:scope.ownerId, p_kind:"photo", p_id:photo.id});
+    assertSyncScope(scope);
+    if (error) throw error;
+    if (!await module.rememberPhotoRevision(scope.database, scope, photo, data, () => assertSyncScope(scope))) throw Error("La fotografía cambió o aún no se publicó; sincroniza antes de editarla.");
     return data.revision;
   }
+
+  async function queuePhotoChange(action, photo, changes) {
+    const scope = outboxScope();
+    if (!canManageRanch()) throw Error("No tienes permiso para modificar fotografías.");
+    const module = await import("./sync/photo-outbox.mjs");
+    if ((await scopedOutbox(scope)).some(entry => module.blocksPhotoChanges(entry) && entry.operation.changes.animalId === photo.animalId)) {
+      throw Error("Este animal tiene un cambio de fotografía pendiente. Sincronízalo o revisa su conflicto antes de otro cambio.");
+    }
+    const revision = await photoPresentationRevision(photo, scope);
+    const operation = {protocolVersion:1, operationId:newId(), action, entityId:photo.id, ownerId:scope.ownerId,
+      deviceId:outboxDeviceId(), baseRevision:revision, capturedAt:new Date().toISOString(), changes};
+    await module.enqueuePhotoOperation(scope.database, scope, operation, photo, () => {
+      assertSyncScope(scope);
+      if (!canManageRanch()) throw Error("Los permisos cambiaron.");
+    }, isActiveAnimal);
+    await refresh();
+    assertSyncScope(scope);
+    openDetail(photo.animalId, true);
+    scheduleSync();
+  }
+
   async function choosePrimary(photoId) {
     if (!canManageRanch()) return;
     const photo = state.photos.find(item => item.id === photoId);
     if (!photo) return;
     const related = state.photos.filter(item => item.animalId === photo.animalId);
+    if (photo.primary) return;
     try {
       if(eventOutboxEnabled()){
-        await queueForecastOperation("photo.primary",photo.id,{animalId:photo.animalId,previousPrimaryId:related.find(p=>p.primary)?.id??null},await photoPresentationRevision(photo));showToast("Fotografía principal en cola.");return;
+        await queuePhotoChange("photo.primary", photo, {animalId:photo.animalId, previousPrimaryId:related.find(p=>p.primary)?.id??null});showToast("Fotografía principal guardada; pendiente de sincronizar.");return;
       }
       await transaction(["photos"], "readwrite", tx => {
         const store = tx.objectStore("photos");
@@ -5191,7 +5280,7 @@
     try {
       if(![x,y,zoom].every(Number.isFinite)||x<0||x>100||y<0||y>100||zoom<1||zoom>3)throw Error("Encuadre inválido.");
       if(eventOutboxEnabled()){
-        await queueForecastOperation("photo.crop",photo.id,{animalId:photo.animalId,cropX:x,cropY:y,cropZoom:zoom},await photoPresentationRevision(photo));showToast("Encuadre en cola.");return;
+        await queuePhotoChange("photo.crop", photo, {animalId:photo.animalId,cropX:x,cropY:y,cropZoom:zoom});showToast("Encuadre guardado; pendiente de sincronizar.");return;
       }
       await put("photos", { ...photo, cropX: x, cropY: y,cropZoom:zoom });
       await touchAnimal(photo.animalId);
@@ -5209,7 +5298,7 @@
     const photo = state.photos.find(item => item.id === photoId);
     if (!photo || !confirm("¿Está seguro de que desea eliminar esta fotografía?")) return;
     try {
-      if(eventOutboxEnabled()){await queueForecastOperation("photo.delete",photo.id,{animalId:photo.animalId},await photoPresentationRevision(photo));showToast("Eliminación en cola.");return;}
+      if(eventOutboxEnabled()){await queuePhotoChange("photo.delete", photo, {animalId:photo.animalId});showToast("Eliminación guardada; pendiente de sincronizar.");return;}
       await remove("photos", photoId);
       const remaining = state.photos.filter(item => item.animalId === photo.animalId && item.id !== photoId);
       if (photo.primary && remaining.length) await put("photos", { ...remaining[0], primary: true });
@@ -6119,11 +6208,21 @@
       if (target.dataset.addRecord) { openRecordForm(target.dataset.addRecord); return; }
       if (target.dataset.deletePhoto) { deletePhoto(target.dataset.deletePhoto); return; }
       if (target.dataset.primaryPhoto) { choosePrimary(target.dataset.primaryPhoto); return; }
+      if (target.hasAttribute("data-review-photo-operations")) { showEventOutbox(); return; }
+      if (target.dataset.savePhotoCrop) {
+        const panel = target.closest(".detail-crop-panel");
+        target.disabled = true;
+        savePhotoCrop(target.dataset.savePhotoCrop,
+          Number(panel.querySelector('[data-photo-crop="x"]').value),
+          Number(panel.querySelector('[data-photo-crop="y"]').value),
+          Number(panel.querySelector('[data-photo-crop="zoom"]').value)
+        ).finally(() => { if (target.isConnected) target.disabled = Boolean(photoOperationFor(state.currentAnimalId)); });
+        return;
+      }
       if (target.dataset.resetPhotoCrop) {
         const cropControls = $$(".detail-crop-panel input[data-photo-crop]");
         cropControls.forEach(input => { input.value = input.dataset.photoCrop === "zoom" ? "1" : "50"; });
-        const photoId = target.dataset.resetPhotoCrop;
-        savePhotoCrop(photoId, 50, 50);
+        cropControls[0]?.dispatchEvent(new Event("input", {bubbles:true}));
         return;
       }
       if (target.dataset.viewPhoto) {
@@ -6148,6 +6247,7 @@
       const y = Number(panel.querySelector('[data-photo-crop="y"]').value);
       const image = $(".detail-hero img");
       if (image) { image.style.objectPosition = `${x}% ${y}%`; image.style.transformOrigin = `${x}% ${y}%`; image.style.transform = `scale(${Number(panel.querySelector('[data-photo-crop="zoom"]').value)})`; }
+      updatePhotoCropControls();
     });
     document.addEventListener("change", event => {
       if (event.target.matches("[data-show-detail-empty]")) {
@@ -6178,15 +6278,6 @@
         return;
       }
       if (event.target.id === "photo-input") addPhotos(event.target.files);
-      if (event.target.dataset.photoCrop) {
-        const panel = event.target.closest(".detail-crop-panel");
-        savePhotoCrop(
-          event.target.dataset.photoId,
-          Number(panel.querySelector('[data-photo-crop="x"]').value),
-          Number(panel.querySelector('[data-photo-crop="y"]').value),
-          Number(panel.querySelector('[data-photo-crop="zoom"]').value)
-        );
-      }
       if (event.target.id === "animal-tag") event.target.setCustomValidity("");
     });
     document.addEventListener("keydown", event => {

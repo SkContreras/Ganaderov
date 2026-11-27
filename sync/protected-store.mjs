@@ -59,7 +59,8 @@ export async function protectedTransaction(db,names,mode,operation,verify=()=>{}
    const put=value=>{if(mode!=="readwrite")throw Error("Solo lectura");if(typeof value?.id!=="string"||!value.id)throw Error("ID inválido");const copy=structuredClone(value);map.set(copy.id,copy);changes.set(copy.id,copy);};
    const remove=id=>{if(mode!=="readwrite")throw Error("Solo lectura");map.delete(id);changes.set(id,null);};
    const get=id=>{const req={result:undefined,onsuccess:null};jobs.push(()=>{req.result=map.get(id);req.onsuccess?.();});return req;};
-   return {put,add(value){if(map.has(value.id))throw Error("ID duplicado");put(value);},delete:remove,get,clear(){for(const id of map.keys())remove(id);},index(field){
+   const getAll=()=>{const req={result:undefined,onsuccess:null};jobs.push(()=>{req.result=[...map.values()];req.onsuccess?.();});return req;};
+   return {put,add(value){if(map.has(value.id))throw Error("ID duplicado");put(value);},delete:remove,get,getAll,clear(){for(const id of map.keys())remove(id);},index(field){
     return {openCursor(range){
      const req={result:null,onsuccess:null};
      // Snapshot matching keys at cursor creation, so later puts are not deleted.

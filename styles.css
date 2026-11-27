@@ -1222,3 +1222,5 @@ body{background-color:var(--canvas);background-image:radial-gradient(ellipse at 
 .inventory-pager button{min-height:44px}
 .animal-avatar img{object-fit:cover}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+
+.detail-header .photo-sync-status{padding:10px 12px;border-radius:8px;background:#fff6d9;color:#68531c;font-size:12px;line-height:1.5}.detail-crop-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.photo-star:disabled,.photo-remove:disabled{opacity:.45;cursor:wait}

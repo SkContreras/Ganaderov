@@ -10,7 +10,10 @@ returns void language plpgsql set search_path='' as $$
 declare parent text:=c->>'animalId'; items jsonb; primary_id text; primary_count integer;
 begin
  if not public.ganaderov_animal_status_active(o,body->'animal'->>'status') then raise exception 'ANIMAL_INACTIVE' using errcode='P1001'; end if;
- if not exists(select 1 from jsonb_array_elements(body->'photos') e where e->>'id'=id and e->>'animalId'=parent) then raise exception 'PHOTO_NOT_AVAILABLE' using errcode='P1001'; end if;
+ -- Legacy child objects may omit animalId; their locked bundle and versioned
+ -- parent already establish ownership. Match the projection's identity rules.
+ if not exists(select 1 from jsonb_array_elements(body->'photos') e where e->>'id'=id
+   and (not e ? 'animalId' or e->>'animalId'=parent)) then raise exception 'PHOTO_NOT_AVAILABLE' using errcode='P1001'; end if;
  if action='photo.primary' then
   select count(*),min(e->>'id') into primary_count,primary_id from jsonb_array_elements(body->'photos') e where e->'primary'='true'::jsonb;
   if primary_count>1 or primary_id is distinct from c->>'previousPrimaryId' then raise exception 'PRIMARY_CHANGED' using errcode='P1002'; end if;
