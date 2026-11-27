@@ -154,6 +154,7 @@ async function main(){
   });
   online=false;await context.setOffline(true);
   const callCount=rpcCalls.length;
+  await page.evaluate(()=>window.__d4.holdOldRefresh());
   await test('Offline framing queues without network and keeps source bytes',async()=>{
     for(const [axis,value] of [['zoom','2.2'],['x','17'],['y','81']])await page.locator(`[data-photo-crop="${axis}"]`).evaluate((el,value)=>{el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));},value);
     await page.locator('[data-save-photo-crop]').click();
@@ -167,6 +168,14 @@ async function main(){
     assert.equal(inspect.photos.find(p=>p.id===P1).cropX,50,'unconfirmed crop leaked into confirmed legacy photo');
     assert.deepEqual(inspect.photos.find(p=>p.id===P1).blob.bytes,bytes);
     return {operationId:pending[0].id};
+  });
+  await test('A slower old refresh cannot replace the newly queued photo overlay',async()=>{
+    await page.evaluate(()=>window.__d4.finishOldRefresh());
+    const inspect=await page.evaluate(()=>window.__d4.inspect());
+    assert.equal(inspect.display.find(p=>p.id===P1).cropX,17);
+    assert.equal(inspect.display.find(p=>p.id===P1).cropZoom,2.2);
+    assert.equal(inspect.outbox.filter(r=>r.state==='pending').length,1);
+    assert.equal(await page.locator(`[data-primary-photo="${P2}"]`).isDisabled(),true);
   });
   // Real offline navigation is fulfilled by the production service worker's
   // CacheStorage strategy. Its SDK URL alone points to our local synthetic SDK.

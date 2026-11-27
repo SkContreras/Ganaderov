@@ -44,9 +44,12 @@ jobs:
 
   protocol:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - uses: supabase/setup-cli@v1
         with:
           version: 2.75.0
@@ -66,6 +69,8 @@ jobs:
           while IFS= read -r sql; do
             psql -X -v ON_ERROR_STOP=1 -f "$sql"
           done < "$RUNNER_TEMP/backend-sql-paths.txt"
+          psql -X -v ON_ERROR_STOP=1 -c "NOTIFY pgrst, 'reload schema';"
+          psql -X -qAt -v ON_ERROR_STOP=1 -f scripts/supabase-audit.sql > "$RUNNER_TEMP/backend-audit.json"
           for sql in tests/sql/{event_rpc_audit,universal_operations,incremental_retention,security_hardening,photo_operations_d4}.sql; do
             psql -X -v ON_ERROR_STOP=1 -f "$sql"
           done
@@ -85,11 +90,31 @@ jobs:
           umask 077
           supabase status -o json > "$GANADEROV_SUPABASE_STATUS"
           python tests/integration/http_e2e.py --keep-fixtures --output "$RUNNER_TEMP/d234"
+      - name: Install tools for real browser integration
+        run: |
+          npm install --prefix "$RUNNER_TEMP/d234-browser" --no-save --package-lock=false playwright@1.62.1
+          "$RUNNER_TEMP/d234-browser/node_modules/.bin/playwright" install --with-deps chromium
+          curl --fail --silent --show-error --location --retry 3 \
+            'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8/dist/umd/supabase.min.js' \
+            --output "$RUNNER_TEMP/supabase-2.49.8.js"
+          printf '%s  %s\n' 'cf78f9ba72300e729e517e0f6b974a3bd282b600ba57fd59de448d50b1aab46f' "$RUNNER_TEMP/supabase-2.49.8.js" | sha256sum --check
+      - name: Web UI with real Auth, RPC and Storage while offline and reconnecting
+        env:
+          GANADEROV_DISPOSABLE_HTTP: 'YES'
+          GANADEROV_FIXTURES: ${{ runner.temp }}/d234/fixtures.private.json
+          GANADEROV_WEB_ROOT: ${{ github.workspace }}
+          GANADEROV_BROWSER_ARTIFACTS: ${{ runner.temp }}/d234/browser-artifacts
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/d234-browser/node_modules/playwright
+          SUPABASE_JS_UMD: ${{ runner.temp }}/supabase-2.49.8.js
+        run: node tests/integration/browser/run.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: supabase-http-results
-          path: ${{ runner.temp }}/d234/http-report.json
+          name: supabase-integration-results
+          path: |
+            ${{ runner.temp }}/d234/http-report.json
+            ${{ runner.temp }}/d234/browser-artifacts
+            ${{ runner.temp }}/backend-audit.json
           if-no-files-found: ignore
       - name: Remove temporary credentials and discard test services
         if: always()

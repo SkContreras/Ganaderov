@@ -104,5 +104,20 @@ window.__d4 = {
     });
     await ready;
   },
+  async holdOldRefresh(){
+    const original=ensureAnimalInternalIds;
+    let reached,held=false;
+    const ready=new Promise(resolve=>{reached=resolve;});
+    ensureAnimalInternalIds=async(...args)=>{
+      if(!held){
+        held=true;reached();
+        await new Promise(resolve=>{this.releaseOldRefresh=resolve;});
+      }
+      return original(...args);
+    };
+    this.oldRefresh=refresh().finally(()=>{ensureAnimalInternalIds=original;});
+    await ready;
+  },
+  async finishOldRefresh(){this.releaseOldRefresh?.();await this.oldRefresh;},
   async unblockWrites(){this.releaseWrites?.();await this.writeBarrier;}
 };

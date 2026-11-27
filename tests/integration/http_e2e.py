@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import struct
 import time
@@ -48,15 +49,21 @@ def target_config():
     client = os.environ.get("SUPABASE_ANON_KEY", status.get("ANON_KEY", status.get("PUBLISHABLE_KEY", "")))
     admin = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", status.get("SERVICE_ROLE_KEY", status.get("SECRET_KEY", "")))
     parsed = urllib.parse.urlsplit(url)
-    check(parsed.scheme in ("http", "https") and parsed.hostname and not parsed.username and not parsed.query and not parsed.path,
+    check(parsed.scheme in ("http", "https") and parsed.hostname and not parsed.username and not parsed.password
+          and not parsed.query and not parsed.path and not parsed.fragment,
           "Use the exact Supabase API origin")
-    check(PRODUCTION_REF not in url, "Known production project is forbidden")
+    check(PRODUCTION_REF not in parsed.hostname.lower(), "Known production project is forbidden")
     local = parsed.hostname in ("127.0.0.1", "localhost", "::1")
     allowed = os.environ.get("GANADEROV_ALLOWED_STAGING_HOST", "")
     check(local or parsed.scheme == "https" and parsed.hostname == allowed and allowed,
           "Nonlocal targets require an explicitly selected GANADEROV_ALLOWED_STAGING_HOST")
     check(client and admin and client != admin, "Separate client and admin keys are required")
-    return {"url": url, "client": client, "admin": admin, "local": local}
+    project_ref = None
+    if not local:
+        match = re.fullmatch(r"([a-z0-9]{20})\.supabase\.co", parsed.hostname)
+        check(match is not None, "Hosted APK profiles require an exact Supabase project origin")
+        project_ref = match.group(1)
+    return {"url": url, "client": client, "admin": admin, "local": local, "projectRef": project_ref}
 
 
 class Api:
@@ -157,14 +164,14 @@ class Suite:
         request_id = next(row["id"] for row in context["requests"] if row["requester_id"] == worker["id"])
         self.api.rpc(owner, "review_ranch_access_request", {"p_request_id": request_id, "p_approve": True})
         check(self.api.rpc(worker, "get_my_ranch_context", {})["role"] == "worker", "Worker membership was not granted")
-        for role, names in (("ownerA", ("forecast", "journeyA", "journeyB", "journeyC", "photos", "browser")), ("ownerB", ("isolated",))):
+        for role, names in (("ownerA", ("forecast", "journeyA", "journeyB", "journeyC", "photos", "browser", "mobile")), ("ownerB", ("isolated",))):
             actor = self.accounts[role]
             animals = {}
             for name in names:
                 animal = str(uuid.uuid4()); animals[name] = animal
                 self.send(actor, "animal.create", animal, {"fields": {"tag": f"{name}-{self.run_id}", "name": f"D234 {name} {self.run_id}", "sex": "Hembra"}}, owner=actor["id"])
-            self.entities[role] = {"ownerId": actor["id"], "animals": animals, "photos": [], "browserPhotos": []}
-        for purpose, field in (("photos", "photos"), ("browser", "browserPhotos")):
+            self.entities[role] = {"ownerId": actor["id"], "animals": animals, "photos": [], "browserPhotos": [], "mobilePhotos": []}
+        for purpose, field in (("photos", "photos"), ("browser", "browserPhotos"), ("mobile", "mobilePhotos")):
             animal = self.entities["ownerA"]["animals"][purpose]
             for index in range(3):
                 photo = str(uuid.uuid4()); path = f"{owner['id']}/{animal}/{photo}"
@@ -294,8 +301,11 @@ class Suite:
     def save_fixtures(self):
         accounts = {role: {k: v for k, v in user.items() if k != "token"} for role, user in self.accounts.items()}
         private_json(self.out / "fixtures.private.json", {"disposable": True, "runId": self.run_id, "apiUrl": self.config["url"], "clientKey": self.config["client"], "accounts": accounts, "entities": self.entities})
-        private_json(self.out / "client-config.json", {"profile": "local" if self.config["local"] else "staging", "url": self.config["url"],
-                     "publishableKey": self.config["client"], "backendReady": any(r["case"].startswith("D4") and r["status"] == "passed" for r in self.results)})
+        client_config = {"profile": "local" if self.config["local"] else "hosted", "url": self.config["url"],
+                         "publishableKey": self.config["client"], "backendReady": any(r["case"].startswith("D4") and r["status"] == "passed" for r in self.results)}
+        if not self.config["local"]:
+            client_config["projectRef"] = self.config["projectRef"]
+        private_json(self.out / "client-config.json", client_config)
 
     def cleanup(self):
         # Actual Storage API, never SQL deletion or disabled protection. Only this run's paths.

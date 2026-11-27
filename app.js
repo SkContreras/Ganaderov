@@ -251,6 +251,7 @@
 
   const OFFLINE_CONTEXT_TTL = 24 * 60 * 60 * 1000;
   let sessionGeneration = 0;
+  let refreshGeneration = 0;
   function clearPrivateView() {
     for (const url of state.photoUrls.values()) URL.revokeObjectURL(url);
     state.photoUrls.clear();
@@ -1120,8 +1121,8 @@
   }
 
   async function refresh() {
-    const generation=sessionGeneration, database=db;
-    const valid=()=>generation===sessionGeneration&&database===db&&(!currentUser||state.ranchReady&&state.ranchOwnerId&&db.name===localScopeName(state.ranchOwnerId));
+    const refreshId=++refreshGeneration, generation=sessionGeneration, database=db;
+    const valid=()=>refreshId===refreshGeneration&&generation===sessionGeneration&&database===db&&(!currentUser||state.ranchReady&&state.ranchOwnerId&&db.name===localScopeName(state.ranchOwnerId));
     if(!valid())return;
     const [animals, events, photos, journeys, forecasts, fieldConfigRecord, operations] = await Promise.all([
       getAll("animals"), getAll("events"), getAll("photos"), getAll("journeys"), getAll("growthForecasts"),
@@ -1130,11 +1131,12 @@
     if(!valid())return;
     const assignedIds = await ensureAnimalInternalIds(animals);
     if(!valid())return;
+    const photoSync = await import("./sync/photo-outbox.mjs");
+    if(!valid())return;
+    // A slower earlier refresh must not replace a newer pending photo overlay.
     state.animals = animals;
     if (assignedIds) scheduleSync();
     state.events = events;
-    const photoSync = await import("./sync/photo-outbox.mjs");
-    if(!valid())return;
     const photoScope = {userId:currentUser?.id,ownerId:state.ranchOwnerId};
     state.photoOperations = operations.filter(entry => entry.userId === photoScope.userId && entry.ownerId === photoScope.ownerId && photoSync.blocksPhotoChanges(entry));
     state.photos = photoSync.projectPhotoOperations(photos, operations, photoScope);
