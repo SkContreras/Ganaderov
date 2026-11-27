@@ -122,7 +122,9 @@ begin
     pg_temp.bg_op('photo.create',bad_path,null,op->'changes'),128,repeat('a',64));
    raise exception 'Noncanonical photo path authorized: %',bad_path;
   exception when sqlstate 'PT400' then
-   if sqlerrm<>'BACKGROUND_INVALID_UPLOAD' then raise; end if;
+   -- pg_jsonschema versions may reject the non-UUID entity before the explicit
+   -- segment guard. Either validation must stop the privileged upload.
+   if sqlerrm not in ('BACKGROUND_INVALID_UPLOAD','BACKGROUND_INVALID_OPERATION') then raise; end if;
   end;
  end loop;
 end; $$;

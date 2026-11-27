@@ -207,7 +207,12 @@
     const userId=currentUser?.id;
     if(!userId)throw Error("Sesión requerida.");
     const scopedName=localScopeName(ownerId,userId);
-    if(db.name===scopedName)return false;
+    if(db.name===scopedName){
+      // A concurrent permission check can invalidate an in-flight refresh.
+      // Restore the view even when the verified account uses the same database.
+      await refresh();
+      return false;
+    }
     await (await import("./sync/background-universal.mjs")).disableBackgroundDelivery();
     const previous=db,generation=sessionGeneration;
     const target=await openDatabase(scopedName);
@@ -272,6 +277,9 @@
     state.calculatorProjection=null; state.calculatorMeasuredGain=null;
     state.quickCaptureSeed=null; state.pendingUndo=null; state.toastAction=null;
     state.fieldConfigRecord=null; state.fieldConfig=normalizeAnimalFieldConfig(null);
+    state.configPending=false; state.configFormBase=null;
+    state.animalFormConfigBase=null; state.animalFormDisplayedConfig=null;
+    state.editingRecord=null;
     clearTimeout(state.undoTimer); clearTimeout(state.syncTimer);
     for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
     renderDashboard(); renderJourneys(); renderCalculatorAnimalOptions();
@@ -1443,7 +1451,10 @@
   }
   async function clearSyncConflict(scope, kind, id) {
     assertSyncScope(scope);
-    await remove("syncMeta",`conflict:${kind}:${id}`);
+    await (await protectedModule()).protectedTransaction(scope.database,["syncMeta"],"readwrite",tx=>{
+      const store=tx.objectStore("syncMeta"),request=store.get(`conflict:${kind}:${id}`);
+      request.onsuccess=()=>{if(!request.result?.recoveryBackupId)store.delete(`conflict:${kind}:${id}`);};
+    },()=>assertSyncScope(scope));
   }
 
   async function syncJourneys(localJourneys, scope, downloaded) {
@@ -1494,7 +1505,7 @@
     return pending;
   }
 
-  async function applyRemoteRecord(record, expectedLocalFingerprint, scope) {
+  async function applyRemoteRecord(record, expectedLocalFingerprint, scope, afterInstall = null) {
     assertSyncScope(scope);
     const deletedAt = record.deleted_at;
     let downloaded = null;
@@ -1526,7 +1537,7 @@
     assertSyncScope(scope);
     let applied = false;
     const stores = ["animals", "events", "photos", "growthForecasts", "deletedAnimals"];
-    await transaction(stores, "readwrite", tx => {
+    await transaction(afterInstall ? [...stores,"syncMeta"] : stores, "readwrite", tx => {
       const snapshot = new Map();
       for (const name of stores) {
         const request = tx.objectStore(name).getAll();
@@ -1555,6 +1566,7 @@
             downloaded.photos.forEach(item => photoStore.put(item));
             downloaded.forecasts.forEach(item => forecastStore.put(item));
           }
+          if (afterInstall) afterInstall(tx);
           applied = true;
         };
       }
@@ -2011,6 +2023,144 @@
       };
     },()=>assertSyncScope(scope));
   }
+  async function legacyConflictKey(snapshot) {
+    return (await (await import("./sync/legacy-recovery.mjs")).conflictRecoveryBackupId(snapshot)).slice("legacy-conflict:".length);
+  }
+  async function readRecoveryBundle(scope,id) {
+    assertRemoteSyncScope(scope);
+    const {data,error} = await cloud.from("animal_sync_records").select("animal_id, modified_at, deleted_at, payload")
+      .eq("owner_id",scope.ownerId).eq("animal_id",id).maybeSingle();
+    assertRemoteSyncScope(scope);if(error)throw error;return data;
+  }
+  async function prepareLegacyConflict(scope,snapshot) {
+    assertRemoteSyncScope(scope);
+    if(!canManageRanch() || snapshot.ownerId!==scope.ownerId)throw Error("El conflicto no pertenece a este rancho.");
+    const backupId="legacy-conflict:"+await legacyConflictKey(snapshot),storage=await protectedModule();
+    const existing=await storage.readProtectedRecord(scope.database,"legacyRecovery",backupId);assertRemoteSyncScope(scope);
+    if(existing) {
+      if(existing.userId!==scope.userId || existing.ownerId!==scope.ownerId)throw Error("El respaldo pertenece a otra sesión.");
+      return backupId;
+    }
+    const same=(a,b)=>JSON.stringify(stableValue(a??null))===JSON.stringify(stableValue(b??null));
+    const version=row=>Object.fromEntries(["kind","entityId","base","local","remote","version"].map(key=>[key,row?.[key]]));
+    const names=snapshot.kind==="animal" ? ["animals","events","photos","growthForecasts","deletedAnimals"]
+      : snapshot.kind==="config" ? ["ranchSettings"] : snapshot.kind==="journey" ? ["journeys"] : [];
+    if(!names.length)throw Error("Tipo de conflicto anterior no disponible.");
+    const photoIds=(snapshot.local?.photos||[]).map(photo=>backupId+":photo:"+photo.id);
+    await storage.protectedTransaction(scope.database,[...names,"legacyRecovery","syncMeta"],"readwrite",tx=>{
+      const currentSource=tx.objectStore("syncMeta").get(snapshot.id);
+      currentSource.onsuccess=()=>{
+        if(!same(version(currentSource.result),version(snapshot)))throw Error("La copia del conflicto cambió. Vuelve a revisarla.");
+      };
+      const rows=new Map();
+      for(const name of names){const read=tx.objectStore(name).getAll();read.onsuccess=()=>{
+        rows.set(name,read.result);if(rows.size!==names.length)return;
+        let current;
+        if(snapshot.kind==="animal") {
+          current=buildLocalBundles(rows.get("animals"),rows.get("events"),rows.get("photos"),rows.get("growthForecasts"),rows.get("deletedAnimals")).get(snapshot.entityId);
+          if(!current || bundleFingerprint(current)!==JSON.stringify(stableValue(snapshot.local)))throw Error("La ficha local cambió. Vuelve a revisar el conflicto.");
+        } else {
+          current=rows.get(names[0]).find(row=>row.id===(snapshot.kind==="config"?"animal-fields":snapshot.entityId));
+          if(!same(snapshot.kind==="config"?current?.config:current,snapshot.local))throw Error("El registro local cambió. Vuelve a revisarlo.");
+        }
+        const backups=tx.objectStore("legacyRecovery");
+        const metadata=snapshot.kind==="animal"?{...current,photos:current.photos.map(({blob,...photo})=>photo)}:current;
+        backups.put({id:backupId,userId:scope.userId,ownerId:scope.ownerId,source:snapshot,metadata});
+        for(const photo of snapshot.kind==="animal"?current.photos:[])backups.put({id:backupId+":photo:"+photo.id,
+          userId:scope.userId,ownerId:scope.ownerId,photo:Object.fromEntries(Object.entries(photo).filter(([key])=>key!=="blob")),blob:photo.blob});
+        // This link is visible before enqueue. Concurrent pulls cannot discard
+        // unselected fields or the original while an operation is delivered.
+        tx.objectStore("syncMeta").put({...snapshot,recoveryBackupId:backupId});
+      };}
+    },()=>assertRemoteSyncScope(scope),{legacyRecovery:[backupId,...photoIds]});
+    return backupId;
+  }
+  async function reconcileLegacyConflict(scope,snapshot,operationIds=[]) {
+    assertRemoteSyncScope(scope);
+    if(!canManageRanch() || snapshot.ownerId!==scope.ownerId)throw Error("El conflicto no pertenece a este rancho.");
+    const hash=await legacyConflictKey(snapshot),backupId="legacy-conflict:"+hash,markerId="legacy-reconciled:"+hash;
+    const storage=await protectedModule();assertRemoteSyncScope(scope);
+    if(await storage.readProtectedRecord(scope.database,"syncMeta",markerId)){assertRemoteSyncScope(scope);return;}
+    const backup=await storage.readProtectedRecord(scope.database,"legacyRecovery",backupId);assertRemoteSyncScope(scope);
+    if(!backup || backup.userId!==scope.userId || backup.ownerId!==scope.ownerId)throw Error("Falta el respaldo previo de esta recuperación.");
+    const same=(a,b)=>JSON.stringify(stableValue(a??null))===JSON.stringify(stableValue(b??null));
+    const mark=tx=>{
+      tx.objectStore("syncMeta").put({id:markerId,userId:scope.userId,ownerId:scope.ownerId,backupId,operationIds,createdAt:new Date().toISOString()});
+      const request=tx.objectStore("syncMeta").get(snapshot.id);request.onsuccess=()=>{
+        // A newer conflict may share the entity ID. Its own source is preserved.
+        if(request.result && same(request.result.local,snapshot.local) && same(request.result.version,snapshot.version))tx.objectStore("syncMeta").put({...request.result,recoveryBackupId:backupId});
+      };
+    };
+    if(snapshot.kind==="animal") {
+      const current=await getLocalBundle(snapshot.entityId);assertRemoteSyncScope(scope);
+      const expected=current?bundleFingerprint(current):null,original=JSON.stringify(stableValue(snapshot.local));
+      const remote=await readRecoveryBundle(scope,snapshot.entityId);
+      const meta=await storage.readProtectedRecord(scope.database,"syncMeta","animal:"+snapshot.entityId);assertRemoteSyncScope(scope);
+      if(expected!==original && expected!==(remote?remoteFingerprint(remote):null) && meta?.fingerprint!==expected) {
+        throw Error("La ficha local cambió después del respaldo. La copia y la operación se conservaron para revisión.");
+      }
+      if(remote) {
+        const installed=await applyRemoteRecord(remote,expected,scope,tx=>{
+          mark(tx);
+          tx.objectStore("syncMeta").put({id:"animal:"+snapshot.entityId,localVersion:remoteVersion(remote),remoteVersion:remote.modified_at,fingerprint:remoteFingerprint(remote)});
+        });
+        if(!installed)throw Error("La ficha cambió durante la recuperación. Se conservaron la copia y la operación.");
+      } else {
+        const names=["animals","events","photos","growthForecasts","deletedAnimals"];
+        await storage.protectedTransaction(scope.database,[...names,"syncMeta"],"readwrite",tx=>{
+          const rows=new Map();
+          for(const name of names){const request=tx.objectStore(name).getAll();request.onsuccess=()=>{
+            rows.set(name,request.result);if(rows.size!==names.length)return;
+            const actual=buildLocalBundles(rows.get("animals"),rows.get("events"),rows.get("photos"),rows.get("growthForecasts"),rows.get("deletedAnimals")).get(snapshot.entityId);
+            if((actual?bundleFingerprint(actual):null)!==expected)throw Error("La ficha cambió durante la recuperación.");
+            tx.objectStore("animals").delete(snapshot.entityId);tx.objectStore("deletedAnimals").delete(snapshot.entityId);
+            for(const child of ["events","photos","growthForecasts"])for(const row of rows.get(child))if(row.animalId===snapshot.entityId)tx.objectStore(child).delete(row.id);
+            tx.objectStore("syncMeta").delete("animal:"+snapshot.entityId);mark(tx);
+          };}
+        },()=>assertRemoteSyncScope(scope));
+      }
+    } else if(snapshot.kind==="journey" || snapshot.kind==="config") {
+      const kind=snapshot.kind,isConfig=kind==="config",name=isConfig?"ranchSettings":"journeys",key=isConfig?"animal-fields":snapshot.entityId;
+      const query=isConfig
+        ? cloud.from("ranch_animal_configs").select("owner_id, config, revision, updated_at").eq("owner_id",scope.ownerId)
+        : cloud.from("journey_sync_records").select("journey_id, updated_at, payload").eq("owner_id",scope.ownerId).eq("journey_id",snapshot.entityId);
+      const {data:remote,error}=await query.maybeSingle();assertRemoteSyncScope(scope);if(error)throw error;
+      const downloaded=isConfig?remote?.config:remote?.payload;
+      await storage.protectedTransaction(scope.database,[name,"syncMeta"],"readwrite",tx=>{
+        const record=tx.objectStore(name).get(key);record.onsuccess=()=>{
+          const current=record.result,value=isConfig?current?.config:current;
+          if(!same(value,snapshot.local) && !same(value,downloaded))throw Error("El registro local cambió durante la recuperación.");
+          if(!remote)tx.objectStore(name).delete(key);
+          else if(isConfig)tx.objectStore(name).put({id:key,ownerId:scope.ownerId,config:remote.config,revision:remote.revision,baseRevision:remote.revision,dirty:false,updatedAt:remote.updated_at});
+          else tx.objectStore(name).put(remote.payload);
+          if(!isConfig) {
+            if(remote)tx.objectStore("syncMeta").put({id:"journey:"+key,fingerprint:JSON.stringify(stableValue(remote.payload)),remoteVersion:remote.updated_at});
+            else tx.objectStore("syncMeta").delete("journey:"+key);
+          }
+          mark(tx);
+        };
+      },()=>assertRemoteSyncScope(scope));
+    } else throw Error("Tipo de conflicto anterior no disponible.");
+  }
+  async function mountLegacyReview(container,scope,source) {
+    const module=await import("./sync/legacy-recovery.mjs");assertSyncScope(scope);
+    return module.mountLegacyRecovery(container,{scope:{...scope,deviceId:outboxDeviceId()},projectUrl:window.GANADERO_CONFIG.supabaseUrl,
+      managerAllowed:canManageRanch(),source,verify:()=>{assertRemoteSyncScope(scope);if(!universalWritesEnabled())throw Error("La recuperación requiere activar la sincronización universal.");if(!canManageRanch())throw Error("Los permisos cambiaron.");},
+      readEntity:async(kind,id)=>{assertRemoteSyncScope(scope);const {data,error}=await cloud.rpc("sync_read_entity",{p_owner:scope.ownerId,p_kind:kind,p_id:id});assertRemoteSyncScope(scope);if(error)throw error;return data;},
+      readPhotos:async id=>(await readRecoveryBundle(scope,id))?.payload?.photos??[],
+      animalFields:animalFieldsForOperation,isActiveAnimal,configPayload:config=>ranchAnimalFieldConfigPayload(normalizeAnimalFieldConfig(config)),
+      prepareConflict:snapshot=>prepareLegacyConflict(scope,snapshot),
+      reconcileConflict:(snapshot,ids)=>reconcileLegacyConflict(scope,snapshot,ids),
+      onQueued:async()=>{assertSyncScope(scope);await refresh();scheduleSync();}});
+  }
+  async function reviewBackupImport(payload,fileName) {
+    const scope=outboxScope(),module=await import("./sync/legacy-recovery.mjs");assertSyncScope(scope);
+    if(!navigator.onLine || state.ranchContextOffline)throw Error("Conéctate para comparar la copia con el rancho antes de recuperarla.");
+    const dialog=document.createElement("dialog"),heading=document.createElement("h2"),content=document.createElement("div"),close=document.createElement("button");
+    heading.textContent="Revisar copia antes de recuperar";close.type="button";close.textContent="Cerrar";close.onclick=()=>dialog.close();
+    dialog.append(heading,content,close);dialog.addEventListener("close",()=>dialog.remove(),{once:true});document.body.append(dialog);dialog.showModal();
+    await mountLegacyReview(content,scope,module.backupRecoverySource(payload,fileName));
+  }
   async function showEventOutbox() {
     try {
       const scope = outboxScope();
@@ -2074,6 +2224,10 @@
           pre.textContent=JSON.stringify({conflicts:comparison.conflicts,changes:comparison.changes,base:s.base,local:s.local,remote:s.remote,proposed:comparison.merged},null,2);
           section.append(pre); dialog.append(section);
         }
+      }
+      if(universalWritesEnabled() && canManageRanch()) {
+        if(navigator.onLine && !state.ranchContextOffline)await mountLegacyReview(dialog,scope);
+        else {const hint=document.createElement("p");hint.textContent="Conéctate para revisar y recuperar capturas de versiones anteriores.";dialog.append(hint);}
       }
       const close = document.createElement("button"); close.type = "button"; close.textContent = "Cerrar"; close.onclick = () => dialog.close();
       dialog.append(close); dialog.addEventListener("close", () => dialog.remove(), {once:true});
@@ -5882,6 +6036,7 @@
       if (payload.animalSettings !== undefined && !isValidAnimalFieldConfig(payload.animalSettings)) {
         throw new Error("La copia contiene una configuración de campos inválida.");
       }
+      if (universalWritesEnabled()) { await reviewBackupImport(payload,file.name);return; }
       if (!confirm("Importar esta copia reemplazará todos los datos guardados actualmente en este dispositivo. ¿Continuar?")) return;
       if (payload.animalSettings && !canManageRanch()) {
         throw new Error("Solo el propietario o administrador puede restaurar la configuración del rancho.");

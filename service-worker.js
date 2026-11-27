@@ -16,6 +16,7 @@ const APP_FILES = [
   "./sync/photo-outbox.mjs",
   "./sync/universal-outbox.mjs",
   "./sync/background-universal.mjs",
+  "./sync/legacy-recovery.mjs",
   "./sync/conflict-resolution.mjs",
   "./login-scene.js",
   "./confirmar-correo.html",

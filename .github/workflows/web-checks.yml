@@ -39,9 +39,11 @@ jobs:
         run: |
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/d4-browser/node_modules/playwright" node tests/browser/universal-completion.cjs
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/d4-browser/node_modules/playwright" node tests/browser/background-universal.cjs
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/d4-browser/node_modules/playwright" node tests/browser/legacy-recovery.cjs
         env:
           UNIVERSAL_BROWSER_ARTIFACTS: ${{ runner.temp }}/universal-browser-results
           BACKGROUND_BROWSER_ARTIFACTS: ${{ runner.temp }}/background-browser-results
+          LEGACY_BROWSER_ARTIFACTS: ${{ runner.temp }}/legacy-browser-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -50,6 +52,7 @@ jobs:
             ${{ runner.temp }}/d4-browser-results
             ${{ runner.temp }}/universal-browser-results
             ${{ runner.temp }}/background-browser-results
+            ${{ runner.temp }}/legacy-browser-results
           if-no-files-found: ignore
 
   protocol:
@@ -138,7 +141,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: SkContreras/Ganaderov-Mobile
-          ref: b566d7c11d5620f4411a2e7ea1da428706e8ccbd
+          ref: ad70614426e5fe8705fad18d41915af927fd1b03
           path: integration-mobile
           persist-credentials: false
       - name: Install Flutter for the real Mobile repository integration
